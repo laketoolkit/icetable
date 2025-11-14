@@ -1,0 +1,36 @@
+rules:
+  - name: "Minimum 100 rows required"
+    type:
+      kind: "min_rows"
+      value: 100
+    severity: "error"
+    enabled: true
+
+  - name: "Must have timestamp column"
+    type:
+      kind: "required_columns"
+      columns: ["id", "timestamp", "data"]
+    severity: "error"
+    enabled: true
+
+  - name: "Name column should not have nulls"
+    type:
+      kind: "max_null_percent"
+      column: "name"
+      max_percent: 5.0
+    severity: "warning"
+    enabled: true
+
+  - name: "ZSTD compression recommended"
+    type:
+      kind: "compression_required"
+      allowed: ["ZSTD"]
+    severity: "warning"
+    enabled: true
+
+  - name: "Column names must be snake_case"
+    type:
+      kind: "column_name_pattern"
+      pattern: "^[a-z][a-z0-9_]*$"
+    severity: "info"
+    enabled: true

@@ -1,0 +1,51 @@
+# Reglas MIXTAS - algunas pasan, otras fallan
+rules:
+  - name: "Dataset tiene al menos 100 filas"
+    type:
+      kind: "min_rows"
+      value: 100
+    severity: "error"
+    enabled: true
+
+  - name: "Dataset debería tener más de 200 filas"
+    type:
+      kind: "min_rows"
+      value: 200
+    severity: "warning"
+    enabled: true
+
+  - name: "Tiene columnas básicas de Iris"
+    type:
+      kind: "required_columns"
+      columns: ["variety", "sepal.length"]
+    severity: "error"
+    enabled: true
+
+  - name: "Falta columna de timestamp"
+    type:
+      kind: "required_columns"
+      columns: ["variety", "timestamp", "source"]
+    severity: "warning"
+    enabled: true
+
+  - name: "Nombres deberían ser snake_case"
+    type:
+      kind: "column_name_pattern"
+      pattern: "^[a-z][a-z0-9_]*$"
+    severity: "info"
+    enabled: true
+
+  - name: "Columna variety debe existir"
+    type:
+      kind: "column_type"
+      column: "variety"
+      expected_type: "Utf8"
+    severity: "error"
+    enabled: true
+
+  - name: "Compresión ZSTD recomendada"
+    type:
+      kind: "compression_required"
+      allowed: ["ZSTD"]
+    severity: "info"
+    enabled: true

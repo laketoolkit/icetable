@@ -399,9 +399,8 @@ impl FormatHandler for ParquetHandler {
         // If not quick mode, try to read all data
         if !quick {
             match self.read_batches(&ReadOptions::default()).await {
-                Ok(batches) => {
-                    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                    report.add_recommendation(format!("Successfully read {} rows", total_rows));
+                Ok(_batches) => {
+                    // Successfully read all batches - no action needed
                 }
                 Err(e) => {
                     report.errors.push(format!("Failed to read data: {}", e));

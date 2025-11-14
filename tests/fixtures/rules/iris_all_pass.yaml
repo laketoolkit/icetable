@@ -1,0 +1,46 @@
+# Reglas que TODAS PASAN para iris dataset
+rules:
+  - name: "Dataset tiene datos suficientes"
+    type:
+      kind: "min_rows"
+      value: 100
+    severity: "error"
+    enabled: true
+
+  - name: "Dataset no es demasiado grande"
+    type:
+      kind: "max_rows"
+      value: 200
+    severity: "warning"
+    enabled: true
+
+  - name: "Contiene columnas obligatorias de Iris"
+    type:
+      kind: "required_columns"
+      columns: ["sepal.length", "sepal.width", "variety"]
+    severity: "error"
+    enabled: true
+
+  - name: "Columna variety es string"
+    type:
+      kind: "column_type"
+      column: "variety"
+      expected_type: "Utf8"
+    severity: "error"
+    enabled: true
+
+  - name: "Columna sepal.length es numérica"
+    type:
+      kind: "column_type"
+      column: "sepal.length"
+      expected_type: "Float64"
+    severity: "error"
+    enabled: true
+
+  - name: "Archivo tiene tamaño razonable"
+    type:
+      kind: "file_size"
+      min_bytes: 1000
+      max_bytes: 10485760
+    severity: "info"
+    enabled: true

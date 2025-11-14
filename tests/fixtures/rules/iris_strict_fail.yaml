@@ -1,0 +1,43 @@
+# Reglas ESTRICTAS - diseñadas para fallar
+rules:
+  - name: "Requiere al menos 1000 registros"
+    type:
+      kind: "min_rows"
+      value: 1000
+    severity: "error"
+    enabled: true
+
+  - name: "Dataset demasiado pequeño"
+    type:
+      kind: "max_rows"
+      value: 50
+    severity: "error"
+    enabled: true
+
+  - name: "Faltan columnas de auditoría"
+    type:
+      kind: "required_columns"
+      columns: ["created_at", "updated_at", "user_id", "version"]
+    severity: "error"
+    enabled: true
+
+  - name: "Compresión ZSTD obligatoria"
+    type:
+      kind: "compression_required"
+      allowed: ["ZSTD"]
+    severity: "error"
+    enabled: true
+
+  - name: "Archivo muy pequeño"
+    type:
+      kind: "file_size"
+      min_bytes: 10485760
+    severity: "warning"
+    enabled: true
+
+  - name: "Nombres deben ser camelCase"
+    type:
+      kind: "column_name_pattern"
+      pattern: "^[a-z][a-zA-Z0-9]*$"
+    severity: "error"
+    enabled: true

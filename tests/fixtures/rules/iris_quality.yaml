@@ -1,0 +1,54 @@
+# Reglas de CALIDAD DE DATOS para Iris
+rules:
+  - name: "Sin valores nulos en variety"
+    type:
+      kind: "max_null_percent"
+      column: "variety"
+      max_percent: 0.0
+    severity: "error"
+    enabled: true
+
+  - name: "Máximo 5% nulls en sepal.length"
+    type:
+      kind: "max_null_percent"
+      column: "sepal.length"
+      max_percent: 5.0
+    severity: "warning"
+    enabled: true
+
+  - name: "Máximo 10% nulls en petal.width"
+    type:
+      kind: "max_null_percent"
+      column: "petal.width"
+      max_percent: 10.0
+    severity: "warning"
+    enabled: true
+
+  - name: "Verificar tipos de medidas"
+    type:
+      kind: "column_type"
+      column: "petal.length"
+      expected_type: "Float64"
+    severity: "error"
+    enabled: true
+
+  - name: "Dataset completo (150 registros estándar)"
+    type:
+      kind: "min_rows"
+      value: 150
+    severity: "warning"
+    enabled: true
+
+  - name: "No más de 150 registros (dataset estándar)"
+    type:
+      kind: "max_rows"
+      value: 150
+    severity: "info"
+    enabled: true
+
+  - name: "Todas las mediciones numéricas presentes"
+    type:
+      kind: "required_columns"
+      columns: ["sepal.length", "sepal.width", "petal.length", "petal.width", "variety"]
+    severity: "error"
+    enabled: true

@@ -6,6 +6,7 @@
 pub mod formats;
 pub mod operations;
 pub mod storage;
+pub mod validation;
 
 // Re-export commonly used types
 pub use formats::{FormatHandler, FormatHandlerFactory};

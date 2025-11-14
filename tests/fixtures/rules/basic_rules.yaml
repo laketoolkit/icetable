@@ -1,0 +1,44 @@
+rules:
+  - name: "Minimum row count"
+    type:
+      kind: "min_rows"
+      value: 1
+    severity: "error"
+    enabled: true
+
+  - name: "Maximum row count"
+    type:
+      kind: "max_rows"
+      value: 1000
+    severity: "warning"
+    enabled: true
+
+  - name: "Compression required"
+    type:
+      kind: "compression_required"
+      allowed: ["SNAPPY", "ZSTD", "GZIP"]
+    severity: "warning"
+    enabled: true
+
+  - name: "Required columns check"
+    type:
+      kind: "required_columns"
+      columns: ["id"]
+    severity: "error"
+    enabled: true
+
+  - name: "Column type check"
+    type:
+      kind: "column_type"
+      column: "id"
+      expected_type: "Int32"
+    severity: "error"
+    enabled: true
+
+  - name: "File size limits"
+    type:
+      kind: "file_size"
+      min_bytes: 100
+      max_bytes: 10485760
+    severity: "warning"
+    enabled: true

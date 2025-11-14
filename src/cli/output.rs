@@ -4,9 +4,234 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, Color, ContentArrangement, Table, presets, modifiers::UTF8_ROUND_CORNERS};
+use unicode_width::UnicodeWidthStr;
 
 use crate::core::formats::{ColumnStats, FileMetadata};
 use crate::core::operations::inspect::InspectResult;
+
+/// Status icons for overall status (valid/invalid/warning)
+#[derive(Debug, Clone, Copy)]
+pub enum StatusIcon {
+    /// Success/Valid (green tick)
+    Success,
+    /// Warning (yellow warning sign)
+    Warning,
+    /// Error/Failed (red cross)
+    Error,
+}
+
+impl StatusIcon {
+    /// Get the colored icon as a string
+    pub fn as_str(&self) -> String {
+        match self {
+            StatusIcon::Success => "✓".green().to_string(),
+            StatusIcon::Warning => "⚠".yellow().to_string(),
+            StatusIcon::Error => "✗".red().to_string(),
+        }
+    }
+
+    /// Get just the icon without color
+    pub fn icon(&self) -> &'static str {
+        match self {
+            StatusIcon::Success => "✓",
+            StatusIcon::Warning => "⚠",
+            StatusIcon::Error => "✗",
+        }
+    }
+}
+
+impl std::fmt::Display for StatusIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Severity icons for individual messages (same shape, different colors)
+#[derive(Debug, Clone, Copy)]
+pub enum SeverityIcon {
+    /// Error message (red)
+    Error,
+    /// Warning message (yellow)
+    Warning,
+    /// Info message (cyan)
+    Info,
+}
+
+impl SeverityIcon {
+    /// Get the colored icon as a string
+    pub fn as_str(&self) -> String {
+        match self {
+            SeverityIcon::Error => "🛈".red().to_string(),
+            SeverityIcon::Warning => "🛈".yellow().to_string(),
+            SeverityIcon::Info => "🛈".cyan().to_string(),
+        }
+    }
+
+    /// Get just the icon without color
+    pub fn icon(&self) -> &'static str {
+        "🛈"
+    }
+}
+
+impl std::fmt::Display for SeverityIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Strip ANSI escape codes from a string
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1B' {
+            // ESC character - start of escape sequence
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Skip until we hit a letter (the command character)
+                while let Some(&next_ch) = chars.peek() {
+                    chars.next();
+                    if next_ch.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Get the visual width of a string (after stripping ANSI codes)
+fn visual_width(s: &str) -> usize {
+    let stripped = strip_ansi_codes(s);
+    UnicodeWidthStr::width(stripped.as_str())
+}
+
+/// Wrap a line into multiple lines respecting visual width
+/// For lines with colored icons, preserve the first line and only wrap the content
+fn wrap_line(line: &str, max_width: usize) -> Vec<String> {
+    let stripped = strip_ansi_codes(line);
+    let width = UnicodeWidthStr::width(stripped.as_str());
+
+    if width <= max_width {
+        return vec![line.to_string()];
+    }
+
+    // Detect if this line has a colored icon (contains ANSI codes + emoji)
+    let has_colored_icon = line.contains("\x1B[") && line.contains("🛈");
+
+    // Detect leading whitespace/indentation
+    let leading_spaces = stripped.chars().take_while(|c| c.is_whitespace()).count();
+    let continuation_indent = "     "; // 5 spaces for continuation lines
+
+    if has_colored_icon {
+        // Special handling for colored icon lines
+        // Split at the dash after the icon to separate rule name from message
+        if let Some(dash_pos) = stripped.find(" - ") {
+            let before_dash = &stripped[..dash_pos + 3]; // Include " - "
+            let after_dash = &stripped[dash_pos + 3..];
+
+            let before_width = UnicodeWidthStr::width(before_dash);
+
+            if before_width <= max_width {
+                // First line: preserve original up to dash (with colors)
+                let original_before = if let Some(orig_dash) = line.find(" - ") {
+                    &line[..orig_dash + 3]
+                } else {
+                    line
+                };
+
+                let mut result = vec![original_before.to_string()];
+
+                // Wrap the rest
+                let words: Vec<&str> = after_dash.split_whitespace().collect();
+                let mut current_line = String::new();
+                let mut current_width = 0;
+
+                for word in words {
+                    let word_width = UnicodeWidthStr::width(word);
+                    let space_needed = if current_line.is_empty() { 0 } else { 1 };
+                    let available_width = max_width.saturating_sub(continuation_indent.len());
+
+                    if current_width + space_needed + word_width <= available_width {
+                        if !current_line.is_empty() {
+                            current_line.push(' ');
+                            current_width += 1;
+                        }
+                        current_line.push_str(word);
+                        current_width += word_width;
+                    } else {
+                        if !current_line.is_empty() {
+                            result.push(format!("{}{}", continuation_indent, current_line));
+                        }
+                        current_line = word.to_string();
+                        current_width = word_width;
+                    }
+                }
+
+                if !current_line.is_empty() {
+                    result.push(format!("{}{}", continuation_indent, current_line));
+                }
+
+                return result;
+            }
+        }
+    }
+
+    // Standard wrapping for non-icon lines
+    let words: Vec<&str> = stripped.split_whitespace().collect();
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0;
+    let mut is_first_line = true;
+
+    for word in words {
+        let word_width = UnicodeWidthStr::width(word);
+        let space_needed = if current_line.is_empty() { 0 } else { 1 };
+        let line_indent = if is_first_line { 0 } else { continuation_indent.len() };
+        let available_width = max_width.saturating_sub(line_indent);
+
+        if current_width + space_needed + word_width <= available_width {
+            if !current_line.is_empty() {
+                current_line.push(' ');
+                current_width += 1;
+            }
+            current_line.push_str(word);
+            current_width += word_width;
+        } else {
+            if !current_line.is_empty() {
+                let final_line = if is_first_line {
+                    format!("{}{}", " ".repeat(leading_spaces), current_line.trim_start())
+                } else {
+                    format!("{}{}", continuation_indent, current_line)
+                };
+                lines.push(final_line);
+                is_first_line = false;
+            }
+            current_line = word.to_string();
+            current_width = word_width;
+        }
+    }
+
+    if !current_line.is_empty() {
+        let final_line = if is_first_line {
+            format!("{}{}", " ".repeat(leading_spaces), current_line.trim_start())
+        } else {
+            format!("{}{}", continuation_indent, current_line)
+        };
+        lines.push(final_line);
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
 
 /// Output formatter for different formats
 pub struct OutputFormatter;
@@ -37,22 +262,93 @@ impl OutputFormatter {
 
     /// Format a success message
     pub fn success(message: &str) -> String {
-        format!("{} {}", "✓".green(), message)
+        format!("{} {}", StatusIcon::Success, message)
     }
 
     /// Format an error message
     pub fn error(message: &str) -> String {
-        format!("{} {}", "✗".red(), message)
+        format!("{}  {}", SeverityIcon::Error, message)
     }
 
     /// Format a warning message
     pub fn warning(message: &str) -> String {
-        format!("{} {}", "⚠".yellow(), message)
+        format!("{}  {}", SeverityIcon::Warning, message)
     }
 
     /// Format an info message
     pub fn info(message: &str) -> String {
-        format!("{} {}", "ℹ".blue(), message)
+        format!("{}  {}", SeverityIcon::Info, message)
+    }
+
+    /// Create a framed box with title and content lines
+    ///
+    /// # Arguments
+    /// * `title` - Optional title to display centered in the top border
+    /// * `lines` - Vector of content lines to display in the box
+    /// * `width` - Fixed width of the box (default 80)
+    ///
+    /// # Returns
+    /// A formatted string with the framed content
+    pub fn framed_box(
+        title: Option<&str>,
+        lines: Vec<String>,
+        width: Option<usize>,
+    ) -> String {
+        let box_width = width.unwrap_or(80);
+        let content_width = box_width - 2; // -2 for left and right borders
+
+        let mut output = Vec::new();
+
+        // Top border with optional centered title
+        if let Some(t) = title {
+            let title_width = UnicodeWidthStr::width(t);
+            let padding_total = content_width.saturating_sub(title_width);
+            let padding_left = padding_total / 2;
+            let padding_right = padding_total - padding_left;
+            output.push(format!(
+                "┌{}{}{}┐",
+                "─".repeat(padding_left),
+                t,
+                "─".repeat(padding_right)
+            ));
+        } else {
+            output.push(format!("┌{}┐", "─".repeat(content_width)));
+        }
+
+        // Empty line after title
+        output.push(format!("│{:width$}│", "", width = content_width));
+
+        // Content lines
+        for line in lines {
+            if line.is_empty() {
+                // Empty line
+                output.push(format!("│{:width$}│", "", width = content_width));
+            } else {
+                let line_width = visual_width(&line);
+
+                if line_width <= content_width {
+                    // Line fits, pad it
+                    let padding = content_width - line_width;
+                    output.push(format!("│{}{:width$}│", line, "", width = padding));
+                } else {
+                    // Line too long, wrap it
+                    let wrapped = wrap_line(&line, content_width);
+                    for wrapped_line in wrapped {
+                        let wrapped_width = visual_width(&wrapped_line);
+                        let padding = content_width.saturating_sub(wrapped_width);
+                        output.push(format!("│{}{:width$}│", wrapped_line, "", width = padding));
+                    }
+                }
+            }
+        }
+
+        // Empty line before bottom
+        output.push(format!("│{:width$}│", "", width = content_width));
+
+        // Bottom border
+        output.push(format!("└{}┘", "─".repeat(content_width)));
+
+        output.join("\n")
     }
 
     /// Format an InspectResult for display
@@ -277,10 +573,17 @@ impl OutputFormatter {
         for row_idx in 0..batch.num_rows() {
             let mut row_data = Vec::new();
 
-            for col in batch.columns() {
-                let value = arrow::util::display::array_value_to_string(col, row_idx)
-                    .unwrap_or_else(|_| "Error".to_string());
-                row_data.push(value);
+            for (col_idx, col) in batch.columns().iter().enumerate() {
+                // Check if value is null
+                if col.is_null(row_idx) {
+                    // Create a red colored "null" cell for visibility
+                    let cell = Cell::new("null").fg(Color::Red);
+                    row_data.push(cell);
+                } else {
+                    let value = arrow::util::display::array_value_to_string(col, row_idx)
+                        .unwrap_or_else(|_| "Error".to_string());
+                    row_data.push(Cell::new(value));
+                }
             }
 
             table.add_row(row_data);

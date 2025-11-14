@@ -112,10 +112,14 @@ pub struct ValidateArgs {
     pub quick: bool,
 
     /// Strict mode (warnings as errors)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "relax")]
     pub strict: bool,
 
-    /// Output format (text, json)
+    /// Relax mode (never fail, always exit 0)
+    #[arg(long, conflicts_with = "strict")]
+    pub relax: bool,
+
+    /// Output format (text, json, quiet)
     #[arg(short, long, default_value = "text")]
     pub output: String,
 

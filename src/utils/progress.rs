@@ -2,29 +2,92 @@
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+/// Display mode for progress indication
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// Show animated spinner (for indeterminate operations)
+    Spinner,
+    /// Show progress bar with percentage (for operations with known total)
+    Bar,
+    /// Show progress bar with rows/sec throughput
+    BarWithThroughput,
+    /// Silent mode - no visual feedback
+    Silent,
+}
+
 /// Progress tracker for operations
 pub struct ProgressTracker {
     bar: Option<ProgressBar>,
+    mode: DisplayMode,
 }
 
 impl ProgressTracker {
-    /// Create a new progress tracker
-    pub fn new(total: u64) -> Self {
-        let bar = ProgressBar::new(total);
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("[{bar:40}] {percent}% ({eta})")
-                .expect("Invalid progress bar template"),
-        );
+    /// Create a new progress tracker with specified display mode
+    pub fn with_mode(mode: DisplayMode, message: &str, total: Option<u64>) -> Self {
+        match mode {
+            DisplayMode::Silent => Self {
+                bar: None,
+                mode,
+            },
+            DisplayMode::Spinner => {
+                let bar = ProgressBar::new_spinner();
+                bar.set_style(
+                    ProgressStyle::default_spinner()
+                        .template("{spinner:.cyan} {msg}")
+                        .expect("Invalid spinner template")
+                        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+                );
+                bar.set_message(message.to_string());
+                bar.enable_steady_tick(std::time::Duration::from_millis(80));
+                Self {
+                    bar: Some(bar),
+                    mode,
+                }
+            }
+            DisplayMode::Bar => {
+                let bar = ProgressBar::new(total.unwrap_or(0));
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("[{bar:40.cyan/blue}] {percent}% ({eta})")
+                        .expect("Invalid progress bar template")
+                        .progress_chars("█▓▒░ "),
+                );
+                bar.set_message(message.to_string());
+                Self {
+                    bar: Some(bar),
+                    mode,
+                }
+            }
+            DisplayMode::BarWithThroughput => {
+                let bar = ProgressBar::new(total.unwrap_or(0));
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("[{bar:40.cyan/blue}] {human_pos}/{human_len} ({per_sec}) {eta}")
+                        .expect("Invalid progress bar template")
+                        .progress_chars("█▓▒░ "),
+                );
+                bar.set_message(message.to_string());
+                Self {
+                    bar: Some(bar),
+                    mode,
+                }
+            }
+        }
+    }
 
-        Self { bar: Some(bar) }
+    /// Create a new progress bar with known total
+    pub fn new(total: u64) -> Self {
+        Self::with_mode(DisplayMode::Bar, "", Some(total))
     }
 
     /// Create a spinner for indeterminate progress
     pub fn spinner(message: &str) -> Self {
-        let bar = ProgressBar::new_spinner();
-        bar.set_message(message.to_string());
-        Self { bar: Some(bar) }
+        Self::with_mode(DisplayMode::Spinner, message, None)
+    }
+
+    /// Create a silent tracker (no output)
+    pub fn silent() -> Self {
+        Self::with_mode(DisplayMode::Silent, "", None)
     }
 
     /// Update progress
@@ -46,6 +109,11 @@ impl ProgressTracker {
         if let Some(bar) = &self.bar {
             bar.finish_and_clear();
         }
+    }
+
+    /// Finish and clear progress bar (alias for finish)
+    pub fn finish_and_clear(&self) {
+        self.finish();
     }
 
     /// Finish with message
