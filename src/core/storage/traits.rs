@@ -196,7 +196,8 @@ impl StorageBackendFactory {
                 #[cfg(not(feature = "aws"))]
                 {
                     Err(crate::error::Error::UnsupportedFeature {
-                        feature: "S3 support not compiled in. Rebuild with --features aws".to_string(),
+                        feature: "S3 support not compiled in. Rebuild with --features aws"
+                            .to_string(),
                     })
                 }
             }
@@ -209,7 +210,8 @@ impl StorageBackendFactory {
                 #[cfg(not(feature = "gcp"))]
                 {
                     Err(crate::error::Error::UnsupportedFeature {
-                        feature: "GCS support not compiled in. Rebuild with --features gcp".to_string(),
+                        feature: "GCS support not compiled in. Rebuild with --features gcp"
+                            .to_string(),
                     })
                 }
             }
@@ -222,7 +224,8 @@ impl StorageBackendFactory {
                 #[cfg(not(feature = "azure"))]
                 {
                     Err(crate::error::Error::UnsupportedFeature {
-                        feature: "Azure support not compiled in. Rebuild with --features azure".to_string(),
+                        feature: "Azure support not compiled in. Rebuild with --features azure"
+                            .to_string(),
                     })
                 }
             }

@@ -3,9 +3,9 @@
 //! This module handles command-line argument parsing, output formatting,
 //! and user interaction.
 
-pub mod parser;
 pub mod commands;
 pub mod output;
+pub mod parser;
 
-pub use parser::{Cli, Commands};
 pub use output::OutputFormatter;
+pub use parser::{Cli, Commands};

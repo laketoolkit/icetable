@@ -4,17 +4,17 @@
 //! diff, convert, and statistics. These operations use the FormatHandler and
 //! StorageBackend abstractions to work with any supported format and storage.
 
-pub mod inspect;
-pub mod validate;
-pub mod diff;
 pub mod convert;
-pub mod stats;
+pub mod diff;
+pub mod inspect;
 pub mod query;
+pub mod stats;
+pub mod validate;
 
 // Re-export operation types
-pub use inspect::InspectOperation;
-pub use validate::ValidateOperation;
-pub use diff::DiffOperation;
 pub use convert::ConvertOperation;
-pub use stats::StatsOperation;
+pub use diff::DiffOperation;
+pub use inspect::InspectOperation;
 pub use query::QueryOperation;
+pub use stats::StatsOperation;
+pub use validate::ValidateOperation;

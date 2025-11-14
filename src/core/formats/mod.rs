@@ -6,8 +6,8 @@
 pub mod traits;
 
 // Format implementations - these will be implemented by Rust-Developer
-pub mod parquet;
 pub mod arrow;
+pub mod parquet;
 
 #[cfg(feature = "delta")]
 pub mod delta;
@@ -17,8 +17,8 @@ pub mod iceberg;
 
 // Re-export core types
 pub use traits::{
-    ColumnStats, FileMetadata, FormatHandler, FormatHandlerFactory, ReadOptions,
-    ValidationReport, WriteOptions,
+    ColumnStats, FileMetadata, FormatHandler, FormatHandlerFactory, ReadOptions, ValidationReport,
+    WriteOptions,
 };
 
 // Re-export format handlers

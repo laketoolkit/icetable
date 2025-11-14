@@ -4,8 +4,8 @@
 //! with tabular data across different formats and storage systems.
 
 pub mod formats;
-pub mod storage;
 pub mod operations;
+pub mod storage;
 
 // Re-export commonly used types
 pub use formats::{FormatHandler, FormatHandlerFactory};

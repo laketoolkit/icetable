@@ -40,11 +40,11 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod error;
-pub mod core;
 pub mod cli;
+pub mod core;
+pub mod error;
 pub mod utils;
 
 // Re-export commonly used types
-pub use error::{Error, Result};
 pub use core::{FormatHandler, FormatHandlerFactory, StorageBackend, StorageBackendFactory};
+pub use error::{Error, Result};

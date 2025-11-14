@@ -6,10 +6,10 @@
 pub mod traits;
 
 // Storage implementations - these will be implemented by Rust-Developer
+pub mod azure;
+pub mod gcs;
 pub mod local;
 pub mod s3;
-pub mod gcs;
-pub mod azure;
 
 // Re-export core types
 pub use traits::{
@@ -18,7 +18,7 @@ pub use traits::{
 };
 
 // Re-export storage backends
+pub use azure::AzureBackend;
+pub use gcs::GcsBackend;
 pub use local::LocalBackend;
 pub use s3::S3Backend;
-pub use gcs::GcsBackend;
-pub use azure::AzureBackend;

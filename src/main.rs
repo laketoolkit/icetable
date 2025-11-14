@@ -4,8 +4,8 @@ use clap::Parser;
 use colored::Colorize;
 use std::process;
 
-use tabletools::cli::parser::{Cli, Commands};
 use tabletools::cli::commands::*;
+use tabletools::cli::parser::{Cli, Commands};
 
 #[tokio::main]
 async fn main() {
@@ -23,8 +23,8 @@ async fn main() {
         Commands::Convert(args) => ConvertCommand::execute(args).await,
         Commands::Stats(args) => StatsCommand::execute(args).await,
         Commands::Query(args) => QueryCommand::execute(args).await,
-        #[cfg(feature = "serve")]
-        Commands::Serve(args) => ServeCommand::execute(args).await,
+        #[cfg(feature = "tui")]
+        Commands::Tui(args) => TuiCommand::execute(args).await,
     };
 
     // Handle errors with user-friendly messages
@@ -40,4 +40,3 @@ async fn main() {
         process::exit(1);
     }
 }
-

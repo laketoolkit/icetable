@@ -24,7 +24,10 @@ pub enum Error {
 
     /// Errors parsing or reading table formats
     #[error("Parse error: {message}")]
-    Parse { message: String, source: Option<Box<dyn std::error::Error + Send + Sync>> },
+    Parse {
+        message: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 
     /// Corrupted file errors
     #[error("Corrupted file: {path} - {reason}")]
@@ -56,7 +59,10 @@ pub enum Error {
 
     /// Cloud storage network errors
     #[error("Network error: {message}")]
-    Network { message: String, source: Option<Box<dyn std::error::Error + Send + Sync>> },
+    Network {
+        message: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 
     /// Timeout errors
     #[error("Operation timed out after {seconds}s: {operation}")]
@@ -202,10 +208,7 @@ impl Error {
 
     /// Check if this is a recoverable error
     pub fn is_recoverable(&self) -> bool {
-        matches!(
-            self,
-            Error::Network { .. } | Error::Timeout { .. }
-        )
+        matches!(self, Error::Network { .. } | Error::Timeout { .. })
     }
 }
 

@@ -49,9 +49,9 @@ pub enum Commands {
     /// Execute SQL queries
     Query(QueryArgs),
 
-    /// Start web UI server
-    #[cfg(feature = "serve")]
-    Serve(ServeArgs),
+    /// Interactive Terminal UI
+    #[cfg(feature = "tui")]
+    Tui(TuiArgs),
 }
 
 /// Arguments for inspect command
@@ -247,26 +247,18 @@ pub struct QueryArgs {
     pub limit: Option<usize>,
 }
 
-/// Arguments for serve command
-#[cfg(feature = "serve")]
+/// Arguments for tui command
+#[cfg(feature = "tui")]
 #[derive(Parser, Debug)]
-pub struct ServeArgs {
+pub struct TuiArgs {
     /// Path to table file or directory
     pub path: String,
-
-    /// Server port
-    #[arg(short, long, default_value = "8080")]
-    pub port: u16,
-
-    /// Server host
-    #[arg(long, default_value = "localhost")]
-    pub host: String,
 
     /// Read-only mode
     #[arg(long)]
     pub readonly: bool,
 
-    /// Basic authentication (user:pass)
-    #[arg(long)]
-    pub auth: Option<String>,
+    /// Refresh interval in seconds
+    #[arg(short, long, default_value = "5")]
+    pub refresh: u64,
 }

@@ -183,10 +183,7 @@ pub trait FormatHandler: Send + Sync {
     ///
     /// This is more efficient for large files as it doesn't load everything
     /// into memory at once.
-    async fn read_batches(
-        &self,
-        options: &ReadOptions,
-    ) -> Result<Vec<RecordBatch>>;
+    async fn read_batches(&self, options: &ReadOptions) -> Result<Vec<RecordBatch>>;
 
     /// Get statistics for all columns
     ///
