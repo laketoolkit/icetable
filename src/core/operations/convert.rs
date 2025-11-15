@@ -5,12 +5,14 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::core::formats::{FormatHandler, ReadOptions, WriteOptions};
+use crate::core::operations::transform::{TransformConfig, apply_transforms};
 use crate::error::Result;
 
 /// Operation for converting between formats
 pub struct ConvertOperation {
     source_handler: Arc<dyn FormatHandler>,
     target_handler: Arc<dyn FormatHandler>,
+    transform_config: TransformConfig,
 }
 
 impl ConvertOperation {
@@ -22,6 +24,20 @@ impl ConvertOperation {
         Self {
             source_handler,
             target_handler,
+            transform_config: TransformConfig::default(),
+        }
+    }
+
+    /// Create a convert operation with transformations
+    pub fn with_transforms(
+        source_handler: Arc<dyn FormatHandler>,
+        target_handler: Arc<dyn FormatHandler>,
+        transform_config: TransformConfig,
+    ) -> Self {
+        Self {
+            source_handler,
+            target_handler,
+            transform_config,
         }
     }
 
@@ -38,11 +54,24 @@ impl ConvertOperation {
         let read_options = ReadOptions::default();
         let batches = self.source_handler.read_batches(&read_options).await?;
 
-        // Count total rows
-        let rows_converted = batches.iter().map(|b| b.num_rows() as i64).sum();
+        // Apply transformations to each batch
+        let transformed_batches: Result<Vec<_>> = batches
+            .into_iter()
+            .map(|batch| apply_transforms(batch, &self.transform_config))
+            .collect();
+
+        let transformed_batches = transformed_batches?;
+
+        // Count total rows after transformation
+        let rows_converted = transformed_batches
+            .iter()
+            .map(|b| b.num_rows() as i64)
+            .sum();
 
         // Write to target format
-        self.target_handler.write(batches, options).await?;
+        self.target_handler
+            .write(transformed_batches, options)
+            .await?;
 
         // Get target metadata
         let target_metadata = self.target_handler.read_metadata().await?;

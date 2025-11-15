@@ -1,12 +1,15 @@
 //! Format handlers for different table formats
 //!
 //! This module contains implementations of the FormatHandler trait for various
-//! table formats including Parquet, Arrow IPC, Delta Lake, and Iceberg.
+//! table formats including Parquet, Arrow IPC, CSV, JSON, Delta Lake, and Iceberg.
 
+pub mod registry;
 pub mod traits;
 
-// Format implementations - these will be implemented by Rust-Developer
+// Format implementations
 pub mod arrow;
+pub mod csv;
+pub mod json;
 pub mod parquet;
 
 #[cfg(feature = "delta")]
@@ -16,13 +19,16 @@ pub mod delta;
 pub mod iceberg;
 
 // Re-export core types
+pub use registry::FormatHandlerRegistry;
 pub use traits::{
-    ColumnStats, FileMetadata, FormatHandler, FormatHandlerFactory, ReadOptions, ValidationReport,
-    WriteOptions,
+    ColumnStats, FileMetadata, FormatHandler, FormatHandlerFactory, ReadOptions,
+    ReadOptionsBuilder, ValidationReport, WriteOptions, WriteOptionsBuilder,
 };
 
 // Re-export format handlers
 pub use arrow::ArrowHandler;
+pub use csv::CsvHandler;
+pub use json::JsonHandler;
 pub use parquet::ParquetHandler;
 
 #[cfg(feature = "delta")]

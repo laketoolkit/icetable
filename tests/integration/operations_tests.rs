@@ -77,7 +77,10 @@ async fn test_validate_nonexistent_file() {
 
     assert!(!result.is_valid, "File should be marked as invalid");
     assert!(!result.errors.is_empty(), "Should have error messages");
-    assert!(result.errors[0].contains("File not found"), "Should report file not found");
+    assert!(
+        result.errors[0].contains("File not found"),
+        "Should report file not found"
+    );
 }
 
 // ========== ConvertOperation Tests ==========
@@ -87,8 +90,9 @@ async fn test_convert_parquet_to_arrow() {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());
 
     // Source: Parquet
-    let source_handler = ParquetHandler::new(Path::new("tests/fixtures/sample.parquet"), storage.clone())
-        .expect("Failed to create source handler");
+    let source_handler =
+        ParquetHandler::new(Path::new("tests/fixtures/sample.parquet"), storage.clone())
+            .expect("Failed to create source handler");
 
     // Target: Arrow
     let target_path = "tests/fixtures/test_convert_p2a.arrow";
@@ -122,8 +126,9 @@ async fn test_convert_arrow_to_parquet() {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());
 
     // Source: Arrow
-    let source_handler = ArrowHandler::new(Path::new("tests/fixtures/sample.arrow"), storage.clone())
-        .expect("Failed to create source handler");
+    let source_handler =
+        ArrowHandler::new(Path::new("tests/fixtures/sample.arrow"), storage.clone())
+            .expect("Failed to create source handler");
 
     // Target: Parquet
     let target_path = "tests/fixtures/test_convert_a2p.parquet";
@@ -158,8 +163,8 @@ async fn test_convert_preserves_data() {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());
 
     // Convert from Parquet to Arrow
-    let source = ParquetHandler::new(Path::new("tests/fixtures/types.parquet"), storage.clone())
-        .unwrap();
+    let source =
+        ParquetHandler::new(Path::new("tests/fixtures/types.parquet"), storage.clone()).unwrap();
     let target_path = "tests/fixtures/test_convert_types.arrow";
     let target = ArrowHandler::new(Path::new(target_path), storage.clone()).unwrap();
 
@@ -168,16 +173,23 @@ async fn test_convert_preserves_data() {
     assert!(result.is_ok());
 
     // Read both files and compare
-    let original = ParquetHandler::new(Path::new("tests/fixtures/types.parquet"), storage.clone())
-        .unwrap();
+    let original =
+        ParquetHandler::new(Path::new("tests/fixtures/types.parquet"), storage.clone()).unwrap();
     let converted = ArrowHandler::new(Path::new(target_path), storage.clone()).unwrap();
 
     let original_schema = original.read_schema().await.unwrap();
     let converted_schema = converted.read_schema().await.unwrap();
 
     // Schemas should match
-    assert_eq!(original_schema.fields().len(), converted_schema.fields().len());
-    for (orig_field, conv_field) in original_schema.fields().iter().zip(converted_schema.fields().iter()) {
+    assert_eq!(
+        original_schema.fields().len(),
+        converted_schema.fields().len()
+    );
+    for (orig_field, conv_field) in original_schema
+        .fields()
+        .iter()
+        .zip(converted_schema.fields().iter())
+    {
         assert_eq!(orig_field.name(), conv_field.name());
         assert_eq!(orig_field.data_type(), conv_field.data_type());
     }
@@ -190,8 +202,8 @@ async fn test_convert_preserves_data() {
 async fn test_convert_larger_file() {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());
 
-    let source = ParquetHandler::new(Path::new("tests/fixtures/larger.parquet"), storage.clone())
-        .unwrap();
+    let source =
+        ParquetHandler::new(Path::new("tests/fixtures/larger.parquet"), storage.clone()).unwrap();
     let target_path = "tests/fixtures/test_convert_larger.arrow";
     let target = ArrowHandler::new(Path::new(target_path), storage.clone()).unwrap();
 
@@ -214,7 +226,8 @@ async fn test_convert_roundtrip() {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());
 
     // Parquet -> Arrow -> Parquet
-    let step1_source = ParquetHandler::new(Path::new("tests/fixtures/sample.parquet"), storage.clone()).unwrap();
+    let step1_source =
+        ParquetHandler::new(Path::new("tests/fixtures/sample.parquet"), storage.clone()).unwrap();
     let step1_target_path = "tests/fixtures/test_roundtrip_step1.arrow";
     let step1_target = ArrowHandler::new(Path::new(step1_target_path), storage.clone()).unwrap();
 

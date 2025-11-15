@@ -3,6 +3,7 @@
 //! This module contains the core abstractions and implementations for working
 //! with tabular data across different formats and storage systems.
 
+pub mod arrow_compat;
 pub mod formats;
 pub mod operations;
 pub mod storage;

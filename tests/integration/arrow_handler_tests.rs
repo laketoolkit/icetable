@@ -32,10 +32,7 @@ async fn test_format_name() {
 #[tokio::test]
 async fn test_read_schema_sample() {
     let handler = create_arrow_handler("tests/fixtures/sample.arrow").await;
-    let schema = handler
-        .read_schema()
-        .await
-        .expect("Failed to read schema");
+    let schema = handler.read_schema().await.expect("Failed to read schema");
 
     // Verify schema has expected fields
     assert_eq!(schema.fields().len(), 5);
@@ -63,10 +60,7 @@ async fn test_read_schema_sample() {
 #[tokio::test]
 async fn test_read_schema_types() {
     let handler = create_arrow_handler("tests/fixtures/types.arrow").await;
-    let schema = handler
-        .read_schema()
-        .await
-        .expect("Failed to read schema");
+    let schema = handler.read_schema().await.expect("Failed to read schema");
 
     assert_eq!(schema.fields().len(), 6);
 
@@ -221,10 +215,7 @@ async fn test_read_statistics() {
 #[tokio::test]
 async fn test_validate_quick() {
     let handler = create_arrow_handler("tests/fixtures/sample.arrow").await;
-    let report = handler
-        .validate(true)
-        .await
-        .expect("Failed to validate");
+    let report = handler.validate(true).await.expect("Failed to validate");
 
     assert!(report.is_valid, "Valid file should pass validation");
     assert!(report.errors.is_empty());
@@ -233,10 +224,7 @@ async fn test_validate_quick() {
 #[tokio::test]
 async fn test_validate_full() {
     let handler = create_arrow_handler("tests/fixtures/sample.arrow").await;
-    let report = handler
-        .validate(false)
-        .await
-        .expect("Failed to validate");
+    let report = handler.validate(false).await.expect("Failed to validate");
 
     assert!(report.is_valid, "Valid file should pass full validation");
     assert!(report.errors.is_empty());
@@ -278,11 +266,8 @@ async fn test_write_and_read_roundtrip() {
     ]));
 
     let id_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-    let name_array = Arc::new(StringArray::from(vec![
-        Some("Alice"),
-        Some("Bob"),
-        None,
-    ])) as ArrayRef;
+    let name_array =
+        Arc::new(StringArray::from(vec![Some("Alice"), Some("Bob"), None])) as ArrayRef;
 
     let batch = RecordBatch::try_new(schema.clone(), vec![id_array, name_array]).unwrap();
 

@@ -21,9 +21,7 @@ async fn test_exists_file() {
 #[tokio::test]
 async fn test_exists_nonexistent_file() {
     let backend = create_backend();
-    let result = backend
-        .exists("tests/fixtures/nonexistent.parquet")
-        .await;
+    let result = backend.exists("tests/fixtures/nonexistent.parquet").await;
 
     assert!(result.is_ok());
     assert!(!result.unwrap(), "File should not exist");
@@ -33,9 +31,7 @@ async fn test_exists_nonexistent_file() {
 async fn test_get_file() {
     let backend = create_backend();
     let options = GetOptions::default();
-    let result = backend
-        .get("tests/fixtures/sample.parquet", &options)
-        .await;
+    let result = backend.get("tests/fixtures/sample.parquet", &options).await;
 
     assert!(result.is_ok(), "Should read existing file");
     let data = result.unwrap();
@@ -163,7 +159,9 @@ async fn test_put_and_get_roundtrip() {
     let put_options = PutOptions::default();
 
     // Write data
-    let put_result = backend.put(test_path, test_data.clone(), &put_options).await;
+    let put_result = backend
+        .put(test_path, test_data.clone(), &put_options)
+        .await;
     assert!(put_result.is_ok(), "Should write file");
 
     // Read it back
@@ -271,11 +269,7 @@ async fn test_concurrent_reads() {
         .map(|_| {
             let backend = create_backend();
             let opts = get_options.clone();
-            tokio::spawn(async move {
-                backend
-                    .get("tests/fixtures/sample.parquet", &opts)
-                    .await
-            })
+            tokio::spawn(async move { backend.get("tests/fixtures/sample.parquet", &opts).await })
         })
         .collect();
 
@@ -291,10 +285,7 @@ async fn test_file_size_accuracy() {
     let backend = create_backend();
 
     // Get file size via head
-    let metadata = backend
-        .head("tests/fixtures/sample.parquet")
-        .await
-        .unwrap();
+    let metadata = backend.head("tests/fixtures/sample.parquet").await.unwrap();
     let head_size = metadata.size;
 
     // Get actual file content

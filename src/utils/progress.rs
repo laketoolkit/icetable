@@ -25,10 +25,7 @@ impl ProgressTracker {
     /// Create a new progress tracker with specified display mode
     pub fn with_mode(mode: DisplayMode, message: &str, total: Option<u64>) -> Self {
         match mode {
-            DisplayMode::Silent => Self {
-                bar: None,
-                mode,
-            },
+            DisplayMode::Silent => Self { bar: None, mode },
             DisplayMode::Spinner => {
                 let bar = ProgressBar::new_spinner();
                 bar.set_style(

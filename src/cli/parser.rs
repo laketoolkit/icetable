@@ -76,6 +76,10 @@ pub struct InspectArgs {
     #[arg(long)]
     pub stats: bool,
 
+    /// Show data preview
+    #[arg(short, long)]
+    pub data: bool,
+
     /// Force specific format
     #[arg(long)]
     pub format: Option<String>,
@@ -137,33 +141,13 @@ pub struct DiffArgs {
     /// Second table path
     pub right: String,
 
-    /// Only compare schemas
-    #[arg(long)]
-    pub schema_only: bool,
+    /// Show detailed column statistics
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
 
-    /// Only compare data
-    #[arg(long)]
-    pub data_only: bool,
-
-    /// Sample N rows for comparison
-    #[arg(long)]
-    pub sample: Option<usize>,
-
-    /// Ignore row order
-    #[arg(long)]
-    pub ignore_order: bool,
-
-    /// Ignore specific columns
-    #[arg(long, value_delimiter = ',')]
-    pub ignore_columns: Option<Vec<String>>,
-
-    /// Report if more than N differences
-    #[arg(long, default_value = "100")]
-    pub threshold: usize,
-
-    /// Output format (text, json, html)
-    #[arg(short, long, default_value = "text")]
-    pub output: String,
+    /// Output format (text, json)
+    #[arg(long, default_value = "text")]
+    pub format: String,
 }
 
 /// Arguments for convert command
@@ -180,6 +164,22 @@ pub struct ConvertArgs {
     #[arg(short, long)]
     pub format: Option<String>,
 
+    /// Select specific columns (comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    pub columns: Option<Vec<String>>,
+
+    /// Filter rows with SQL-like WHERE clause (e.g., "age > 18 AND city = 'NYC'")
+    #[arg(long = "where")]
+    pub where_clause: Option<String>,
+
+    /// Rename columns (format: old_name:new_name, comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    pub rename: Option<Vec<String>>,
+
+    /// Cast column types (format: column:type, comma-separated, e.g., "age:Int64,price:Float64")
+    #[arg(long, value_delimiter = ',')]
+    pub cast: Option<Vec<String>>,
+
     /// Compression algorithm (none, snappy, gzip, zstd, lz4)
     #[arg(long)]
     pub compression: Option<String>,
@@ -188,7 +188,7 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub row_group_size: Option<usize>,
 
-    /// Partition by columns
+    /// Partition by columns (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 

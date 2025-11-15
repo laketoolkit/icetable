@@ -9,6 +9,7 @@ pub mod diff;
 pub mod inspect;
 pub mod query;
 pub mod stats;
+pub mod transform;
 pub mod validate;
 
 // Re-export operation types
@@ -17,4 +18,5 @@ pub use diff::DiffOperation;
 pub use inspect::InspectOperation;
 pub use query::QueryOperation;
 pub use stats::StatsOperation;
+pub use transform::{TransformConfig, apply_transforms};
 pub use validate::ValidateOperation;

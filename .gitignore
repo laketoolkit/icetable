@@ -33,3 +33,4 @@ benches/results/
 # Data
 **/*.arrow
 **/*.parquet
+**/data

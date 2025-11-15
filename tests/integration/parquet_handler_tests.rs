@@ -32,10 +32,7 @@ async fn test_format_name() {
 #[tokio::test]
 async fn test_read_schema_sample() {
     let handler = create_parquet_handler("tests/fixtures/sample.parquet").await;
-    let schema = handler
-        .read_schema()
-        .await
-        .expect("Failed to read schema");
+    let schema = handler.read_schema().await.expect("Failed to read schema");
 
     // Verify schema has expected fields
     assert_eq!(schema.fields().len(), 5);
@@ -63,10 +60,7 @@ async fn test_read_schema_sample() {
 #[tokio::test]
 async fn test_read_schema_types() {
     let handler = create_parquet_handler("tests/fixtures/types.parquet").await;
-    let schema = handler
-        .read_schema()
-        .await
-        .expect("Failed to read schema");
+    let schema = handler.read_schema().await.expect("Failed to read schema");
 
     assert_eq!(schema.fields().len(), 6);
 
@@ -109,11 +103,13 @@ async fn test_read_metadata() {
     assert!(metadata.format_version.is_some());
 
     // Compression should be SNAPPY (as set in generate_fixtures)
-    assert!(metadata
-        .compression
-        .unwrap()
-        .to_uppercase()
-        .contains("SNAPPY"));
+    assert!(
+        metadata
+            .compression
+            .unwrap()
+            .to_uppercase()
+            .contains("SNAPPY")
+    );
 }
 
 #[tokio::test]
@@ -228,10 +224,7 @@ async fn test_read_statistics() {
 #[tokio::test]
 async fn test_validate_quick() {
     let handler = create_parquet_handler("tests/fixtures/sample.parquet").await;
-    let report = handler
-        .validate(true)
-        .await
-        .expect("Failed to validate");
+    let report = handler.validate(true).await.expect("Failed to validate");
 
     assert!(report.is_valid, "Valid file should pass validation");
     assert!(report.errors.is_empty());
@@ -240,10 +233,7 @@ async fn test_validate_quick() {
 #[tokio::test]
 async fn test_validate_full() {
     let handler = create_parquet_handler("tests/fixtures/sample.parquet").await;
-    let report = handler
-        .validate(false)
-        .await
-        .expect("Failed to validate");
+    let report = handler.validate(false).await.expect("Failed to validate");
 
     assert!(report.is_valid, "Valid file should pass full validation");
     assert!(report.errors.is_empty());

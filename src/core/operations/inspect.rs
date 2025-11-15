@@ -12,14 +12,20 @@ use crate::error::Result;
 /// Options for inspect operation
 #[derive(Debug, Clone)]
 pub struct InspectOptions {
-    /// Show only schema (no data)
+    /// Show only schema (no data) - deprecated, use show_data instead
     pub schema_only: bool,
+
+    /// Show schema
+    pub show_schema: bool,
 
     /// Show metadata
     pub show_metadata: bool,
 
     /// Show statistics
     pub show_stats: bool,
+
+    /// Show data preview
+    pub show_data: bool,
 
     /// Number of rows to sample
     pub num_rows: usize,
@@ -35,8 +41,10 @@ impl Default for InspectOptions {
     fn default() -> Self {
         Self {
             schema_only: false,
+            show_schema: true,
             show_metadata: true,
             show_stats: false,
+            show_data: true,
             num_rows: 10,
             columns: None,
             sample: false,
@@ -74,15 +82,18 @@ impl InspectOperation {
             None
         };
 
-        // Read sample data unless schema-only mode
-        let sample_data = if !options.schema_only {
-            let read_opts = ReadOptions {
-                columns: options.columns.clone(),
-                offset: None,
-                limit: Some(options.num_rows),
-                sample: options.sample,
-                batch_size: Some(1024),
-            };
+        // Read sample data if requested
+        let sample_data = if options.show_data && !options.schema_only {
+            let mut read_opts_builder = ReadOptions::builder()
+                .limit(options.num_rows)
+                .sample(options.sample)
+                .batch_size(1024);
+
+            if let Some(cols) = options.columns.clone() {
+                read_opts_builder = read_opts_builder.columns(cols);
+            }
+
+            let read_opts = read_opts_builder.build();
 
             Some(self.handler.read_batch(&read_opts).await?)
         } else {

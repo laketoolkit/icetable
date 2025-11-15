@@ -4,12 +4,12 @@ use std::path::Path;
 
 use crate::cli::output::{OutputFormatter, SeverityIcon, StatusIcon};
 use crate::cli::parser::ValidateArgs;
-use crate::utils::progress::ProgressTracker;
-use crate::core::formats::{FormatHandler, FormatHandlerFactory};
+use crate::core::formats::{FormatHandler, FormatHandlerRegistry};
 use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::validation::{Severity, ValidationEngine};
 use crate::error::Result;
+use crate::utils::progress::ProgressTracker;
 
 /// Handler for validate command
 pub struct ValidateCommand;
@@ -22,7 +22,9 @@ impl ValidateCommand {
 
         // 2. Create format handler
         let path = Path::new(&args.path);
-        let handler = FormatHandlerFactory::create_handler(path, storage).await?;
+        let handler = FormatHandlerRegistry::global()
+            .create_handler(path, storage)
+            .await?;
 
         // 3. Execute basic validation
         let show_progress = args.output != "quiet" && args.output != "json";
@@ -42,14 +44,18 @@ impl ValidateCommand {
         // 4. Execute custom rules if provided
         let rules_results = if let Some(rules_path) = &args.rules {
             let progress = if show_progress {
-                Some(ProgressTracker::spinner("Running custom validation rules..."))
+                Some(ProgressTracker::spinner(
+                    "Running custom validation rules...",
+                ))
             } else {
                 None
             };
 
             // Need to recreate handler for rules engine
             let storage2 = StorageBackendFactory::create_backend(&args.path).await?;
-            let handler2 = FormatHandlerFactory::create_handler(Path::new(&args.path), storage2).await?;
+            let handler2 = FormatHandlerRegistry::global()
+                .create_handler(Path::new(&args.path), storage2)
+                .await?;
 
             let rules = ValidationEngine::load_rules(rules_path.to_str().unwrap()).await?;
             let engine = ValidationEngine::new(handler2.into(), rules);
@@ -69,14 +75,15 @@ impl ValidateCommand {
 
         if let Some(rules_res) = &rules_results {
             // Check if any error-level rules failed
-            let has_error_failures = rules_res.iter().any(|r| {
-                !r.passed && r.severity == Severity::Error
-            });
+            let has_error_failures = rules_res
+                .iter()
+                .any(|r| !r.passed && r.severity == Severity::Error);
 
             // In strict mode, warnings also fail validation
-            let has_warning_failures = args.strict && rules_res.iter().any(|r| {
-                !r.passed && r.severity == Severity::Warning
-            });
+            let has_warning_failures = args.strict
+                && rules_res
+                    .iter()
+                    .any(|r| !r.passed && r.severity == Severity::Warning);
 
             overall_valid = overall_valid && !has_error_failures && !has_warning_failures;
         }
@@ -135,23 +142,38 @@ impl ValidateCommand {
                     format_lines.push("(Quick validation mode - structure only)".to_string());
                 }
 
-                println!("{}\n", OutputFormatter::framed_box(None, format_lines, None));
+                println!(
+                    "{}\n",
+                    OutputFormatter::framed_box(None, format_lines, None)
+                );
 
                 // Get additional metadata for more informative output
                 let storage = StorageBackendFactory::create_backend(&args.path).await?;
                 let path = Path::new(&args.path);
-                let handler = FormatHandlerFactory::create_handler(path, storage).await?;
+                let handler = FormatHandlerRegistry::global()
+                    .create_handler(path, storage)
+                    .await?;
 
                 if let Ok(schema) = handler.read_schema().await {
                     // Schema box
-                    let mut schema_lines = vec![
-                        format!("{} fields", schema.fields().len()),
-                    ];
+                    let mut schema_lines = vec![format!("{} fields", schema.fields().len())];
                     for field in schema.fields() {
-                        let nullable = if field.is_nullable() { " (nullable)" } else { "" };
-                        schema_lines.push(format!("  • {} → {:?}{}", field.name(), field.data_type(), nullable));
+                        let nullable = if field.is_nullable() {
+                            " (nullable)"
+                        } else {
+                            ""
+                        };
+                        schema_lines.push(format!(
+                            "  • {} → {:?}{}",
+                            field.name(),
+                            field.data_type(),
+                            nullable
+                        ));
                     }
-                    println!("{}\n", OutputFormatter::framed_box(Some("Schema"), schema_lines, None));
+                    println!(
+                        "{}\n",
+                        OutputFormatter::framed_box(Some("Schema"), schema_lines, None)
+                    );
                 }
 
                 if let Ok(metadata) = handler.read_metadata().await {
@@ -162,7 +184,11 @@ impl ValidateCommand {
                         metadata_lines.push(format!("Rows: {}", rows));
                     }
                     if let Some(size) = metadata.compressed_size {
-                        metadata_lines.push(format!("File size: {} bytes ({:.2} KB)", size, size as f64 / 1024.0));
+                        metadata_lines.push(format!(
+                            "File size: {} bytes ({:.2} KB)",
+                            size,
+                            size as f64 / 1024.0
+                        ));
                     }
                     if let Some(uncompressed) = metadata.uncompressed_size {
                         if let Some(compressed) = metadata.compressed_size {
@@ -177,7 +203,10 @@ impl ValidateCommand {
                         metadata_lines.push(format!("Format version: {}", version));
                     }
                     if let Some(created_at) = metadata.created_at {
-                        metadata_lines.push(format!("Created at: {}", created_at.format("%Y-%m-%d %H:%M:%S UTC")));
+                        metadata_lines.push(format!(
+                            "Created at: {}",
+                            created_at.format("%Y-%m-%d %H:%M:%S UTC")
+                        ));
                     }
 
                     // Show format-specific metadata if available
@@ -189,7 +218,10 @@ impl ValidateCommand {
                         }
                     }
 
-                    println!("{}\n", OutputFormatter::framed_box(Some("Metadata"), metadata_lines, None));
+                    println!(
+                        "{}\n",
+                        OutputFormatter::framed_box(Some("Metadata"), metadata_lines, None)
+                    );
                 }
 
                 if !result.errors.is_empty() {
@@ -240,10 +272,18 @@ impl ValidateCommand {
                     // Summary with bullet points
                     rules_lines.push(format!("  • Passed: {} {}", StatusIcon::Success, passed));
                     if failed_errors > 0 {
-                        rules_lines.push(format!("  • Errors: {} {}", StatusIcon::Error, failed_errors));
+                        rules_lines.push(format!(
+                            "  • Errors: {} {}",
+                            StatusIcon::Error,
+                            failed_errors
+                        ));
                     }
                     if failed_warnings > 0 {
-                        rules_lines.push(format!("  • Warnings: {} {}", StatusIcon::Warning, failed_warnings));
+                        rules_lines.push(format!(
+                            "  • Warnings: {} {}",
+                            StatusIcon::Warning,
+                            failed_warnings
+                        ));
                     }
                     rules_lines.push(String::new());
 
@@ -252,7 +292,12 @@ impl ValidateCommand {
                     if !failed_errors.is_empty() {
                         rules_lines.push("Errors:".to_string());
                         for r in &failed_errors {
-                            rules_lines.push(format!("   {}  {} - {}", SeverityIcon::Error, r.rule_name, r.message));
+                            rules_lines.push(format!(
+                                "   {}  {} - {}",
+                                SeverityIcon::Error,
+                                r.rule_name,
+                                r.message
+                            ));
                             if let Some(details) = &r.details {
                                 rules_lines.push(format!("      {}", details));
                             }
@@ -264,7 +309,12 @@ impl ValidateCommand {
                     if !failed_warnings.is_empty() {
                         rules_lines.push("Warnings:".to_string());
                         for r in &failed_warnings {
-                            rules_lines.push(format!("   {}  {} - {}", SeverityIcon::Warning, r.rule_name, r.message));
+                            rules_lines.push(format!(
+                                "   {}  {} - {}",
+                                SeverityIcon::Warning,
+                                r.rule_name,
+                                r.message
+                            ));
                             if let Some(details) = &r.details {
                                 rules_lines.push(format!("      {}", details));
                             }
@@ -276,11 +326,23 @@ impl ValidateCommand {
                     if !failed_infos.is_empty() && args.output != "quiet" {
                         rules_lines.push("Info:".to_string());
                         for r in &failed_infos {
-                            rules_lines.push(format!("   {}  {} - {}", SeverityIcon::Info, r.rule_name, r.message));
+                            rules_lines.push(format!(
+                                "   {}  {} - {}",
+                                SeverityIcon::Info,
+                                r.rule_name,
+                                r.message
+                            ));
                         }
                     }
 
-                    println!("{}", OutputFormatter::framed_box(Some("Custom Validation Rules"), rules_lines, None));
+                    println!(
+                        "{}",
+                        OutputFormatter::framed_box(
+                            Some("Custom Validation Rules"),
+                            rules_lines,
+                            None
+                        )
+                    );
                 }
             }
         }

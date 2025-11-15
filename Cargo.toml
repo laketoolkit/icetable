@@ -11,9 +11,15 @@ categories = ["command-line-utilities", "database"]
 
 [dependencies]
 # Apache Arrow ecosystem - core data processing
-arrow = { version = "53", features = ["prettyprint"] }
-parquet = { version = "53", features = ["async"] }
-datafusion = { version = "43", features = ["parquet"] }
+arrow = { version = "54", features = ["prettyprint"] }
+arrow-array = "54"
+arrow-csv = "54"
+arrow-json = "54"
+arrow-schema = "54"
+arrow-ipc = "54"
+arrow-row = "54"
+parquet = { version = "54", features = ["async"] }
+datafusion = { version = "44", features = ["parquet"] }
 
 # Table formats
 deltalake = { version = "0.22", features = ["s3", "gcs", "azure"], optional = true }
@@ -54,6 +60,8 @@ url = "2.5"
 regex = "1.11"
 log = "0.4"
 env_logger = "0.11"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+strip-ansi-escapes = "0.2"
 
 # Terminal UI (for tui command)
 ratatui = { version = "0.29", optional = true }

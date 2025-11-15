@@ -24,10 +24,9 @@ impl ValidationEngine {
 
     /// Load rules from a YAML file
     pub async fn load_rules(path: &str) -> Result<ValidationRules> {
-        let content =
-            tokio::fs::read_to_string(path)
-                .await
-                .map_err(|e| Error::General(format!("Failed to read rules file: {}", e)))?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| Error::General(format!("Failed to read rules file: {}", e)))?;
 
         serde_yaml::from_str(&content)
             .map_err(|e| Error::General(format!("Failed to parse rules file: {}", e)))
@@ -215,7 +214,14 @@ impl ValidationEngine {
             Ok(RuleResult::fail(
                 rule.name.clone(),
                 rule.severity,
-                format!("Missing required columns: {}", missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
+                format!(
+                    "Missing required columns: {}",
+                    missing
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             ))
         }
     }
@@ -291,16 +297,17 @@ impl ValidationEngine {
                 Ok(RuleResult::pass(
                     rule.name.clone(),
                     rule.severity,
-                    format!(
-                        "All columns have <= {:.2}% nulls",
-                        max_percent
-                    ),
+                    format!("All columns have <= {:.2}% nulls", max_percent),
                 ))
             } else {
                 Ok(RuleResult::fail(
                     rule.name.clone(),
                     rule.severity,
-                    format!("Columns with > {:.2}% nulls: {}", max_percent, violations.join(", ")),
+                    format!(
+                        "Columns with > {:.2}% nulls: {}",
+                        max_percent,
+                        violations.join(", ")
+                    ),
                 ))
             }
         }

@@ -63,41 +63,216 @@ pub struct ColumnStats {
 }
 
 /// Options for reading data
+///
+/// Use `ReadOptions::builder()` to construct instances.
+///
+/// # Example
+///
+/// ```ignore
+/// let options = ReadOptions::builder()
+///     .columns(vec!["col1".to_string(), "col2".to_string()])
+///     .limit(100)
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct ReadOptions {
-    /// Columns to read (None = all columns)
-    pub columns: Option<Vec<String>>,
+    columns: Option<Vec<String>>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    sample: bool,
+    batch_size: Option<usize>,
+}
 
-    /// Row offset to start reading from
-    pub offset: Option<usize>,
+impl ReadOptions {
+    /// Create a new builder for ReadOptions
+    pub fn builder() -> ReadOptionsBuilder {
+        ReadOptionsBuilder::default()
+    }
 
-    /// Maximum number of rows to read
-    pub limit: Option<usize>,
+    /// Get columns to read
+    pub fn columns(&self) -> Option<&Vec<String>> {
+        self.columns.as_ref()
+    }
 
-    /// Use sampling instead of sequential reading
-    pub sample: bool,
+    /// Get row offset
+    pub fn offset(&self) -> Option<usize> {
+        self.offset
+    }
 
-    /// Batch size for reading
-    pub batch_size: Option<usize>,
+    /// Get row limit
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
+    /// Check if sampling is enabled
+    pub fn sample(&self) -> bool {
+        self.sample
+    }
+
+    /// Get batch size
+    pub fn batch_size(&self) -> Option<usize> {
+        self.batch_size
+    }
+}
+
+/// Builder for ReadOptions
+#[derive(Debug, Default)]
+pub struct ReadOptionsBuilder {
+    columns: Option<Vec<String>>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    sample: bool,
+    batch_size: Option<usize>,
+}
+
+impl ReadOptionsBuilder {
+    /// Set columns to read
+    pub fn columns(mut self, columns: Vec<String>) -> Self {
+        self.columns = Some(columns);
+        self
+    }
+
+    /// Set row offset
+    pub fn offset(mut self, offset: usize) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    /// Set row limit
+    pub fn limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Enable sampling
+    pub fn sample(mut self, sample: bool) -> Self {
+        self.sample = sample;
+        self
+    }
+
+    /// Set batch size
+    pub fn batch_size(mut self, size: usize) -> Self {
+        self.batch_size = Some(size);
+        self
+    }
+
+    /// Build the ReadOptions
+    pub fn build(self) -> ReadOptions {
+        ReadOptions {
+            columns: self.columns,
+            offset: self.offset,
+            limit: self.limit,
+            sample: self.sample,
+            batch_size: self.batch_size,
+        }
+    }
 }
 
 /// Options for writing data
+///
+/// Use `WriteOptions::builder()` to construct instances.
+///
+/// # Example
+///
+/// ```ignore
+/// let options = WriteOptions::builder()
+///     .compression("snappy".to_string())
+///     .enable_dictionary(true)
+///     .overwrite(true)
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct WriteOptions {
-    /// Compression codec to use
-    pub compression: Option<String>,
+    compression: Option<String>,
+    row_group_size: Option<usize>,
+    enable_dictionary: bool,
+    enable_statistics: bool,
+    overwrite: bool,
+}
 
-    /// Row group size for Parquet
-    pub row_group_size: Option<usize>,
+impl WriteOptions {
+    /// Create a new builder for WriteOptions
+    pub fn builder() -> WriteOptionsBuilder {
+        WriteOptionsBuilder::default()
+    }
 
-    /// Dictionary encoding configuration
-    pub enable_dictionary: bool,
+    /// Get compression codec
+    pub fn compression(&self) -> Option<&String> {
+        self.compression.as_ref()
+    }
 
-    /// Statistics generation
-    pub enable_statistics: bool,
+    /// Get row group size
+    pub fn row_group_size(&self) -> Option<usize> {
+        self.row_group_size
+    }
 
-    /// Overwrite existing file
-    pub overwrite: bool,
+    /// Check if dictionary encoding is enabled
+    pub fn enable_dictionary(&self) -> bool {
+        self.enable_dictionary
+    }
+
+    /// Check if statistics generation is enabled
+    pub fn enable_statistics(&self) -> bool {
+        self.enable_statistics
+    }
+
+    /// Check if overwrite is enabled
+    pub fn overwrite(&self) -> bool {
+        self.overwrite
+    }
+}
+
+/// Builder for WriteOptions
+#[derive(Debug, Default)]
+pub struct WriteOptionsBuilder {
+    compression: Option<String>,
+    row_group_size: Option<usize>,
+    enable_dictionary: bool,
+    enable_statistics: bool,
+    overwrite: bool,
+}
+
+impl WriteOptionsBuilder {
+    /// Set compression codec
+    pub fn compression(mut self, compression: String) -> Self {
+        self.compression = Some(compression);
+        self
+    }
+
+    /// Set row group size
+    pub fn row_group_size(mut self, size: usize) -> Self {
+        self.row_group_size = Some(size);
+        self
+    }
+
+    /// Enable dictionary encoding
+    pub fn enable_dictionary(mut self, enable: bool) -> Self {
+        self.enable_dictionary = enable;
+        self
+    }
+
+    /// Enable statistics generation
+    pub fn enable_statistics(mut self, enable: bool) -> Self {
+        self.enable_statistics = enable;
+        self
+    }
+
+    /// Enable overwrite
+    pub fn overwrite(mut self, overwrite: bool) -> Self {
+        self.overwrite = overwrite;
+        self
+    }
+
+    /// Build the WriteOptions
+    pub fn build(self) -> WriteOptions {
+        WriteOptions {
+            compression: self.compression,
+            row_group_size: self.row_group_size,
+            enable_dictionary: self.enable_dictionary,
+            enable_statistics: self.enable_statistics,
+            overwrite: self.overwrite,
+        }
+    }
 }
 
 /// Validation report for a file
@@ -235,7 +410,7 @@ impl FormatHandlerFactory {
         path: &Path,
         storage: Arc<dyn crate::core::storage::StorageBackend>,
     ) -> Result<Box<dyn FormatHandler>> {
-        // Try Parquet first (most common)
+        // Try Parquet first (most common in data engineering)
         let parquet_handler = crate::core::formats::ParquetHandler::new(path, storage.clone())?;
         if parquet_handler.can_handle(path).await? {
             return Ok(Box::new(parquet_handler));
@@ -245,6 +420,18 @@ impl FormatHandlerFactory {
         let arrow_handler = crate::core::formats::ArrowHandler::new(path, storage.clone())?;
         if arrow_handler.can_handle(path).await? {
             return Ok(Box::new(arrow_handler));
+        }
+
+        // Try CSV
+        let csv_handler = crate::core::formats::CsvHandler::new(path, storage.clone())?;
+        if csv_handler.can_handle(path).await? {
+            return Ok(Box::new(csv_handler));
+        }
+
+        // Try JSON/NDJSON
+        let json_handler = crate::core::formats::JsonHandler::new(path, storage.clone())?;
+        if json_handler.can_handle(path).await? {
+            return Ok(Box::new(json_handler));
         }
 
         // Try table formats (Delta, Iceberg) - these check for metadata directories

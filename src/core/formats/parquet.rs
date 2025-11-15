@@ -12,9 +12,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::basic::Type as PhysicalType;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::basic::Type as PhysicalType;
 
 use crate::core::formats::traits::*;
 use crate::core::storage::StorageBackend;
@@ -43,7 +43,11 @@ impl ParquetHandler {
     }
 
     /// Helper function to convert Parquet statistics bytes to readable strings
-    fn format_stat_value(bytes: &[u8], physical_type: PhysicalType, _data_type: &DataType) -> String {
+    fn format_stat_value(
+        bytes: &[u8],
+        physical_type: PhysicalType,
+        _data_type: &DataType,
+    ) -> String {
         match physical_type {
             PhysicalType::INT32 => {
                 if bytes.len() >= 4 {
@@ -56,8 +60,8 @@ impl ParquetHandler {
             PhysicalType::INT64 => {
                 if bytes.len() >= 8 {
                     let value = i64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3],
-                        bytes[4], bytes[5], bytes[6], bytes[7],
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
                     ]);
                     value.to_string()
                 } else {
@@ -75,8 +79,8 @@ impl ParquetHandler {
             PhysicalType::DOUBLE => {
                 if bytes.len() >= 8 {
                     let value = f64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3],
-                        bytes[4], bytes[5], bytes[6], bytes[7],
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
                     ]);
                     value.to_string()
                 } else {
@@ -229,7 +233,7 @@ impl FormatHandler for ParquetHandler {
         })?;
 
         // Extract column indices if specified
-        let projection_indices: Option<Vec<usize>> = if let Some(cols) = &options.columns {
+        let projection_indices: Option<Vec<usize>> = if let Some(cols) = options.columns() {
             let schema = builder.schema();
             let mut indices = Vec::new();
             for col_name in cols {
@@ -259,15 +263,15 @@ impl FormatHandler for ParquetHandler {
         };
 
         // Set batch size
-        let batch_size = options.batch_size.unwrap_or(1024);
+        let batch_size = options.batch_size().unwrap_or(1024);
         let builder = builder.with_batch_size(batch_size);
 
         let reader = builder.build().map_err(|e| Error::Parquet(e))?;
 
         let mut batches = Vec::new();
         let mut total_rows = 0usize;
-        let offset = options.offset.unwrap_or(0);
-        let limit = options.limit.unwrap_or(usize::MAX);
+        let offset = options.offset().unwrap_or(0);
+        let limit = options.limit().unwrap_or(usize::MAX);
 
         for batch_result in reader {
             let batch = batch_result.map_err(|e| Error::Arrow(e))?;
@@ -356,13 +360,24 @@ impl FormatHandler for ParquetHandler {
                         if let Some(existing) = stats_map.get_mut(col_name) {
                             // Aggregate null count - check if null_count is available
                             if let Some(null_count) = existing.null_count {
-                                existing.null_count = Some(null_count + stats.null_count_opt().unwrap_or(0) as i64);
+                                existing.null_count =
+                                    Some(null_count + stats.null_count_opt().unwrap_or(0) as i64);
                             }
 
                             // Update min/max values if available
-                            if let (Some(min_bytes), Some(max_bytes)) = (stats.min_bytes_opt(), stats.max_bytes_opt()) {
-                                let min_str = Self::format_stat_value(min_bytes, physical_type, field.data_type());
-                                let max_str = Self::format_stat_value(max_bytes, physical_type, field.data_type());
+                            if let (Some(min_bytes), Some(max_bytes)) =
+                                (stats.min_bytes_opt(), stats.max_bytes_opt())
+                            {
+                                let min_str = Self::format_stat_value(
+                                    min_bytes,
+                                    physical_type,
+                                    field.data_type(),
+                                );
+                                let max_str = Self::format_stat_value(
+                                    max_bytes,
+                                    physical_type,
+                                    field.data_type(),
+                                );
 
                                 if existing.min_value.is_none() {
                                     existing.min_value = Some(min_str.clone());
@@ -425,7 +440,7 @@ impl FormatHandler for ParquetHandler {
         // Configure writer properties
         let mut props_builder = WriterProperties::builder();
 
-        if let Some(compression) = &options.compression {
+        if let Some(compression) = options.compression() {
             let codec = match compression.to_lowercase().as_str() {
                 "snappy" => parquet::basic::Compression::SNAPPY,
                 "gzip" => parquet::basic::Compression::GZIP(Default::default()),
@@ -437,11 +452,11 @@ impl FormatHandler for ParquetHandler {
             props_builder = props_builder.set_compression(codec);
         }
 
-        if options.enable_dictionary {
+        if options.enable_dictionary() {
             props_builder = props_builder.set_dictionary_enabled(true);
         }
 
-        if options.enable_statistics {
+        if options.enable_statistics() {
             props_builder = props_builder
                 .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page);
         }

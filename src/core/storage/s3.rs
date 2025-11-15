@@ -107,9 +107,6 @@ mod tests {
         // All operations should return UnsupportedFeature error
         assert!(backend.exists("test").await.is_err());
         assert!(backend.head("test").await.is_err());
-        assert!(backend
-            .get("test", &GetOptions::default())
-            .await
-            .is_err());
+        assert!(backend.get("test", &GetOptions::default()).await.is_err());
     }
 }

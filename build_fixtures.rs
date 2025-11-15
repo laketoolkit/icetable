@@ -221,9 +221,8 @@ fn generate_simple_arrow() -> Result<(), Box<dyn std::error::Error>> {
         Some(72000.0),
         Some(88000.0),
     ])) as ArrayRef;
-    let active_array = Arc::new(BooleanArray::from(vec![
-        true, true, false, true, true,
-    ])) as ArrayRef;
+    let active_array =
+        Arc::new(BooleanArray::from(vec![true, true, false, true, true])) as ArrayRef;
 
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -255,26 +254,12 @@ fn generate_types_arrow() -> Result<(), Box<dyn std::error::Error>> {
     ]));
 
     let int32_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-    let int64_array = Arc::new(Int64Array::from(vec![
-        Some(100),
-        Some(200),
-        None,
-    ])) as ArrayRef;
-    let float_array = Arc::new(Float64Array::from(vec![
-        Some(1.1),
-        Some(2.2),
-        Some(3.3),
-    ])) as ArrayRef;
-    let string_array = Arc::new(StringArray::from(vec![
-        Some("foo"),
-        None,
-        Some("bar"),
-    ])) as ArrayRef;
-    let bool_array = Arc::new(BooleanArray::from(vec![
-        Some(true),
-        Some(false),
-        None,
-    ])) as ArrayRef;
+    let int64_array = Arc::new(Int64Array::from(vec![Some(100), Some(200), None])) as ArrayRef;
+    let float_array =
+        Arc::new(Float64Array::from(vec![Some(1.1), Some(2.2), Some(3.3)])) as ArrayRef;
+    let string_array =
+        Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")])) as ArrayRef;
+    let bool_array = Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])) as ArrayRef;
     let timestamp_array = Arc::new(TimestampMillisecondArray::from(vec![
         Some(1609459200000), // 2021-01-01
         Some(1640995200000), // 2022-01-01

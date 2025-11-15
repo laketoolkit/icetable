@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::cli::output::OutputFormatter;
 use crate::cli::parser::InspectArgs;
-use crate::core::formats::FormatHandlerFactory;
+use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
 use crate::error::Result;
@@ -20,13 +20,21 @@ impl InspectCommand {
 
         // 2. Create format handler
         let path = Path::new(&args.path);
-        let handler = FormatHandlerFactory::create_handler(path, storage).await?;
+        let handler = FormatHandlerRegistry::global()
+            .create_handler(path, storage)
+            .await?;
 
         // 3. Build inspect options
+        // Logic: If NO specific flags are set, show everything
+        // If ANY flag is set, show only what's requested (combinable)
+        let any_flag_set = args.schema || args.metadata || args.stats || args.data;
+
         let options = InspectOptions {
-            schema_only: args.schema,
-            show_metadata: args.metadata,
-            show_stats: args.stats,
+            schema_only: args.schema && !args.metadata && !args.stats && !args.data,
+            show_schema: if any_flag_set { args.schema } else { true },
+            show_metadata: if any_flag_set { args.metadata } else { true },
+            show_stats: if any_flag_set { args.stats } else { false },
+            show_data: if any_flag_set { args.data } else { true },
             num_rows: args.rows,
             columns: args.columns,
             sample: args.sample,
@@ -89,7 +97,7 @@ impl InspectCommand {
             }
             _ => {
                 // Default table format
-                let output = OutputFormatter::format_inspect_result(&result);
+                let output = OutputFormatter::format_inspect_result(&result, &options);
                 println!("{}", output);
             }
         }
