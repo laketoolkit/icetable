@@ -7,7 +7,7 @@ use crate::cli::output::OutputFormatter;
 use crate::cli::parser::StatsArgs;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::operations::stats::{StatsOperation, StatsOptions};
-use crate::core::storage::LocalBackend;
+use crate::core::storage::StorageBackendFactory;
 use crate::error::{Error, Result};
 
 /// Handler for stats command
@@ -18,14 +18,8 @@ impl StatsCommand {
     pub async fn execute(args: StatsArgs) -> Result<()> {
         let path = Path::new(&args.path);
 
-        if !path.exists() {
-            return Err(Error::FileNotFound {
-                path: path.to_path_buf(),
-            });
-        }
-
-        // Create storage backend
-        let storage = Arc::new(LocalBackend::new()?);
+        // Create storage backend (supports local and cloud)
+        let storage = StorageBackendFactory::create_backend(&args.path).await?;
 
         // Get format handler
         let handler = FormatHandlerFactory::create_handler(path, storage).await?;

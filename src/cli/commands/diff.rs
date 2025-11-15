@@ -7,7 +7,7 @@ use crate::cli::output::OutputFormatter;
 use crate::cli::parser::DiffArgs;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::operations::diff::{DiffOperation, DiffOptions};
-use crate::core::storage::LocalBackend;
+use crate::core::storage::StorageBackendFactory;
 use crate::error::{Error, Result};
 
 /// Handler for diff command
@@ -19,24 +19,13 @@ impl DiffCommand {
         let left_path = Path::new(&args.left);
         let right_path = Path::new(&args.right);
 
-        if !left_path.exists() {
-            return Err(Error::FileNotFound {
-                path: left_path.to_path_buf(),
-            });
-        }
-
-        if !right_path.exists() {
-            return Err(Error::FileNotFound {
-                path: right_path.to_path_buf(),
-            });
-        }
-
-        // Create storage backend
-        let storage = Arc::new(LocalBackend::new()?);
+        // Create storage backends for each file (supports local and cloud)
+        let left_storage = StorageBackendFactory::create_backend(&args.left).await?;
+        let right_storage = StorageBackendFactory::create_backend(&args.right).await?;
 
         // Get format handlers
-        let left_handler = FormatHandlerFactory::create_handler(left_path, storage.clone()).await?;
-        let right_handler = FormatHandlerFactory::create_handler(right_path, storage).await?;
+        let left_handler = FormatHandlerFactory::create_handler(left_path, left_storage).await?;
+        let right_handler = FormatHandlerFactory::create_handler(right_path, right_storage).await?;
 
         // Convert to Arc for DiffOperation
         let left_arc = Arc::from(left_handler);
