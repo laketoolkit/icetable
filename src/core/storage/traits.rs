@@ -188,46 +188,16 @@ impl StorageBackendFactory {
                 Ok(std::sync::Arc::new(backend))
             }
             "s3" => {
-                #[cfg(feature = "aws")]
-                {
-                    let backend = crate::core::storage::S3Backend::new().await?;
-                    Ok(std::sync::Arc::new(backend))
-                }
-                #[cfg(not(feature = "aws"))]
-                {
-                    Err(crate::error::Error::UnsupportedFeature {
-                        feature: "S3 support not compiled in. Rebuild with --features aws"
-                            .to_string(),
-                    })
-                }
+                let backend = crate::core::storage::S3Backend::new().await?;
+                Ok(std::sync::Arc::new(backend))
             }
             "gcs" => {
-                #[cfg(feature = "gcp")]
-                {
-                    let backend = crate::core::storage::GcsBackend::new().await?;
-                    Ok(std::sync::Arc::new(backend))
-                }
-                #[cfg(not(feature = "gcp"))]
-                {
-                    Err(crate::error::Error::UnsupportedFeature {
-                        feature: "GCS support not compiled in. Rebuild with --features gcp"
-                            .to_string(),
-                    })
-                }
+                let backend = crate::core::storage::GcsBackend::new().await?;
+                Ok(std::sync::Arc::new(backend))
             }
             "azure" => {
-                #[cfg(feature = "azure")]
-                {
-                    let backend = crate::core::storage::AzureBackend::new().await?;
-                    Ok(std::sync::Arc::new(backend))
-                }
-                #[cfg(not(feature = "azure"))]
-                {
-                    Err(crate::error::Error::UnsupportedFeature {
-                        feature: "Azure support not compiled in. Rebuild with --features azure"
-                            .to_string(),
-                    })
-                }
+                let backend = crate::core::storage::AzureBackend::new().await?;
+                Ok(std::sync::Arc::new(backend))
             }
             _ => Err(crate::error::Error::Configuration {
                 message: format!("Unknown storage type: {}", storage_type),

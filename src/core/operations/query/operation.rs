@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::sql_parser::SqlPathExtractor;
 use super::table_registry::QueryTableRegistry;
@@ -195,7 +195,6 @@ impl QueryOperation {
 
 /// Convert DataFusion schema to Arrow schema
 fn convert_datafusion_schema_to_arrow(df_schema: &datafusion::arrow::datatypes::Schema) -> Schema {
-    use crate::error::Error;
     Schema::new(
         df_schema
             .fields()
@@ -252,7 +251,6 @@ fn convert_datafusion_datatype_to_arrow(
 fn convert_datafusion_batch_to_arrow(
     df_batch: datafusion::arrow::record_batch::RecordBatch,
 ) -> Result<RecordBatch> {
-    use crate::error::Error;
     use datafusion::arrow::ipc::reader::StreamReader;
     use datafusion::arrow::ipc::writer::StreamWriter as DFStreamWriter;
     use std::io::Cursor;
