@@ -84,7 +84,11 @@ impl BoxRenderer {
     /// Renderiza una caja como iterador de líneas
     /// Para TUI - permite consumir línea por línea
     pub fn render_iter(&self, boxed: Box) -> impl Iterator<Item = String> {
-        self.render(boxed).lines().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+        self.render(boxed)
+            .lines()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     /// Renderiza borde superior con título centrado
@@ -112,7 +116,10 @@ impl BoxRenderer {
         format!(
             "{}{}{}",
             chars.top_left,
-            chars.horizontal.to_string().repeat(self.layout.content_width()),
+            chars
+                .horizontal
+                .to_string()
+                .repeat(self.layout.content_width()),
             chars.top_right
         )
     }
@@ -122,7 +129,10 @@ impl BoxRenderer {
         format!(
             "{}{}{}",
             chars.bottom_left,
-            chars.horizontal.to_string().repeat(self.layout.content_width()),
+            chars
+                .horizontal
+                .to_string()
+                .repeat(self.layout.content_width()),
             chars.bottom_right
         )
     }
@@ -132,7 +142,10 @@ impl BoxRenderer {
         format!(
             "{}{}{}",
             chars.left_t,
-            chars.horizontal.to_string().repeat(self.layout.content_width()),
+            chars
+                .horizontal
+                .to_string()
+                .repeat(self.layout.content_width()),
             chars.right_t
         )
     }

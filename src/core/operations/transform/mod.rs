@@ -1,6 +1,6 @@
 //! Data transformation utilities for convert operations
 
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::error::Result;
 

@@ -78,10 +78,10 @@ pub struct InspectArgs {
 
     /// Show data preview
     #[arg(short, long)]
-    pub data: bool,
+    pub preview: bool,
 
     /// Force specific format
-    #[arg(long)]
+    #[arg(short, long)]
     pub format: Option<String>,
 
     /// Output format (table, json, yaml)
@@ -103,6 +103,10 @@ pub struct ValidateArgs {
     /// Path to table file or directory
     pub path: String,
 
+    /// Force specific format (arrow, parquet, csv, json)
+    #[arg(short, long)]
+    pub format: Option<String>,
+
     /// Validate against schema file
     #[arg(long)]
     pub schema: Option<PathBuf>,
@@ -123,7 +127,11 @@ pub struct ValidateArgs {
     #[arg(long, conflicts_with = "strict")]
     pub relax: bool,
 
-    /// Output format (text, json, quiet)
+    /// Quiet mode (no output, just exit code)
+    #[arg(short, long)]
+    pub quiet: bool,
+
+    /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
 
@@ -146,8 +154,8 @@ pub struct DiffArgs {
     pub verbose: bool,
 
     /// Output format (text, json)
-    #[arg(long, default_value = "text")]
-    pub format: String,
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
 }
 
 /// Arguments for convert command
@@ -157,8 +165,8 @@ pub struct ConvertArgs {
     pub input: String,
 
     /// Output file path
-    #[arg(short, long)]
-    pub output: String,
+    #[arg(short = 'F', long)]
+    pub file: String,
 
     /// Output format (parquet, arrow, csv, json)
     #[arg(short, long)]
@@ -231,22 +239,22 @@ pub struct StatsArgs {
 /// Arguments for query command
 #[derive(Parser, Debug)]
 pub struct QueryArgs {
-    /// SQL query to execute
+    /// SQL query to execute (file paths in query should be quoted, e.g., "SELECT * FROM 'data.parquet'")
     pub sql: String,
 
-    /// Data source path
-    #[arg(long)]
-    pub data: Option<String>,
+    /// Output file path (requires --format to be specified)
+    #[arg(short = 'F', long, requires = "format")]
+    pub file: Option<PathBuf>,
 
-    /// Output file path
+    /// Output format when saving to file (parquet, arrow, csv, json)
     #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    pub format: Option<String>,
 
-    /// Output format (table, csv, json, parquet)
-    #[arg(long, default_value = "table")]
-    pub format: String,
+    /// Display format for stdout (table, json)
+    #[arg(short, long, default_value = "table")]
+    pub output: String,
 
-    /// Limit number of result rows
+    /// Limit number of result rows to display or save
     #[arg(long)]
     pub limit: Option<usize>,
 }

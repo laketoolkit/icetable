@@ -25,16 +25,17 @@ impl InspectCommand {
             .await?;
 
         // 3. Build inspect options
-        // Logic: If NO specific flags are set, show everything
-        // If ANY flag is set, show only what's requested (combinable)
-        let any_flag_set = args.schema || args.metadata || args.stats || args.data;
+        // Logic: Default shows file info, metadata, schema, and stats
+        // --preview adds data preview to the default view
+        // Individual flags (-s, -m, --stats) show only what's requested
+        let any_flag_set = args.schema || args.metadata || args.stats;
 
         let options = InspectOptions {
-            schema_only: args.schema && !args.metadata && !args.stats && !args.data,
+            schema_only: args.schema && !args.metadata && !args.stats && !args.preview,
             show_schema: if any_flag_set { args.schema } else { true },
             show_metadata: if any_flag_set { args.metadata } else { true },
-            show_stats: if any_flag_set { args.stats } else { false },
-            show_data: if any_flag_set { args.data } else { true },
+            show_stats: if any_flag_set { args.stats } else { true },
+            show_data: args.preview,
             num_rows: args.rows,
             columns: args.columns,
             sample: args.sample,

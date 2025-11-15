@@ -107,11 +107,7 @@ mod tests {
 
     #[test]
     fn test_create_box_frame_no_title() {
-        let frame = create_box_frame(
-            None,
-            vec!["hello".to_string()],
-            Some(10)
-        );
+        let frame = create_box_frame(None, vec!["hello".to_string()], Some(10));
 
         let lines: Vec<&str> = frame.lines().collect();
         assert_eq!(lines.len(), 3); // top, content, bottom
@@ -127,11 +123,7 @@ mod tests {
 
     #[test]
     fn test_create_box_frame_with_title() {
-        let frame = create_box_frame(
-            Some("Test"),
-            vec!["content".to_string()],
-            Some(20)
-        );
+        let frame = create_box_frame(Some("Test"), vec!["content".to_string()], Some(20));
 
         let lines: Vec<&str> = frame.lines().collect();
 

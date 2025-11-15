@@ -1,6 +1,6 @@
 //! Configuration for data transformations
 
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 use std::collections::HashMap;
 
 /// Configuration for data transformations

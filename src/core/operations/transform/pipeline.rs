@@ -3,7 +3,7 @@
 //! Provides a flexible pipeline system where transformations can be added,
 //! reordered, and custom steps can be injected.
 
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 
 use crate::error::Result;
@@ -186,11 +186,11 @@ impl TransformStep for RenameStep {
 
 /// Cast column types
 pub struct CastStep {
-    casts: HashMap<String, arrow::datatypes::DataType>,
+    casts: HashMap<String, datafusion::arrow::datatypes::DataType>,
 }
 
 impl CastStep {
-    pub fn new(casts: HashMap<String, arrow::datatypes::DataType>) -> Self {
+    pub fn new(casts: HashMap<String, datafusion::arrow::datatypes::DataType>) -> Self {
         Self { casts }
     }
 }

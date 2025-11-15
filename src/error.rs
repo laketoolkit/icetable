@@ -78,11 +78,11 @@ pub enum Error {
 
     /// Arrow-specific errors
     #[error("Arrow error: {0}")]
-    Arrow(#[from] arrow::error::ArrowError),
+    Arrow(#[from] datafusion::arrow::error::ArrowError),
 
     /// Parquet-specific errors
     #[error("Parquet error: {0}")]
-    Parquet(#[from] parquet::errors::ParquetError),
+    Parquet(#[from] datafusion::parquet::errors::ParquetError),
 
     /// DataFusion SQL errors
     #[error("SQL error: {0}")]

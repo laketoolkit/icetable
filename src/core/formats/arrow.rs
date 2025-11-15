@@ -6,11 +6,11 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::array::Array;
-use arrow::datatypes::Schema;
-use arrow::ipc::reader::FileReader as ArrowFileReader;
-use arrow::ipc::writer::FileWriter as ArrowFileWriter;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::ipc::reader::FileReader as ArrowFileReader;
+use datafusion::arrow::ipc::writer::FileWriter as ArrowFileWriter;
+use datafusion::arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use bytes::Bytes;
 
@@ -157,7 +157,7 @@ impl FormatHandler for ArrowHandler {
         } else {
             // Concatenate multiple batches
             let schema = batches[0].schema();
-            arrow::compute::concat_batches(&schema, &batches).map_err(|e| Error::Arrow(e))
+            datafusion::arrow::compute::concat_batches(&schema, &batches).map_err(|e| Error::Arrow(e))
         }
     }
 

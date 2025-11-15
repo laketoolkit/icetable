@@ -35,11 +35,7 @@ impl BoxItem {
     }
 
     /// Crea un item key-value con ancho de clave específico para alineación
-    pub fn kv_aligned(
-        key: impl Into<String>,
-        value: impl Into<String>,
-        key_width: usize,
-    ) -> Self {
+    pub fn kv_aligned(key: impl Into<String>, value: impl Into<String>, key_width: usize) -> Self {
         BoxItem::KeyValue {
             key: key.into(),
             value: value.into(),

@@ -11,6 +11,9 @@ pub mod gcs;
 pub mod local;
 pub mod s3;
 
+// ObjectStore adapter for DataFusion integration
+pub mod object_store_adapter;
+
 // Re-export core types
 pub use traits::{
     GetOptions, ListOptions, ListResult, ObjectMetadata, PutOptions, StorageBackend,
@@ -22,3 +25,6 @@ pub use azure::AzureBackend;
 pub use gcs::GcsBackend;
 pub use local::LocalBackend;
 pub use s3::S3Backend;
+
+// Re-export adapter
+pub use object_store_adapter::ObjectStoreAdapter;

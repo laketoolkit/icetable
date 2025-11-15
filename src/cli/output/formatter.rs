@@ -1,14 +1,13 @@
 //! Output formatting utilities
 
-use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::formats::{ColumnStats, FileMetadata};
 use crate::core::operations::inspect::InspectResult;
-
 
 /// Status icons for overall status (valid/invalid/warning)
 #[derive(Debug, Clone, Copy)]
@@ -367,29 +366,67 @@ impl OutputFormatter {
     ) -> String {
         let mut output = Vec::new();
 
-        // Header
-        output.push(format!("\n{}: {}\n", "Format".bold(), result.format_name));
+        // File information box
+        let mut file_content = vec![format!("Format: {}", result.format_name)];
+
+        // Add basic info from metadata if available
+        if let Some(metadata) = &result.metadata {
+            if let Some(rows) = metadata.num_rows {
+                file_content.push(format!("Rows:   {}", Self::format_number(rows)));
+            }
+            if let Some(compressed) = metadata.compressed_size {
+                if let Some(uncompressed) = metadata.uncompressed_size {
+                    file_content.push(format!(
+                        "Size:   {} (compressed), {} (uncompressed)",
+                        Self::format_bytes(compressed),
+                        Self::format_bytes(uncompressed)
+                    ));
+                } else {
+                    file_content.push(format!("Size:   {}", Self::format_bytes(compressed)));
+                }
+            }
+        }
+
+        let file_box = crate::utils::create_box_frame(
+            Some(&"FILE INFORMATION".bold().to_string()),
+            file_content,
+            Some(72),
+        );
+        output.push(file_box);
+        output.push(String::new());
 
         // Metadata (if requested and available)
         if options.show_metadata {
             if let Some(metadata) = &result.metadata {
-                output.push(format!("{}", "Metadata".bold()));
-                output.push(Self::format_metadata(metadata));
-                output.push(String::new());
+                let metadata_content = Self::format_metadata_content(metadata);
+                if !metadata_content.is_empty() {
+                    let metadata_box = crate::utils::create_box_frame(
+                        Some(&"METADATA".bold().to_string()),
+                        metadata_content,
+                        Some(72),
+                    );
+                    output.push(metadata_box);
+                    output.push(String::new());
+                }
             }
         }
 
         // Schema (if requested)
         if options.show_schema {
-            output.push(format!("{}", "Schema".bold()));
-            output.push(Self::format_schema(&result.schema));
+            let schema_content = Self::format_schema_content(&result.schema);
+            let schema_box = crate::utils::create_box_frame(
+                Some(&"SCHEMA".bold().to_string()),
+                schema_content,
+                Some(72),
+            );
+            output.push(schema_box);
             output.push(String::new());
         }
 
         // Statistics (if requested and available)
         if options.show_stats {
             if let Some(stats) = &result.statistics {
-                output.push(format!("{}", "Statistics".bold()));
+                output.push(format!("{}", "STATISTICS".bold()));
                 output.push(Self::format_statistics(stats));
                 output.push(String::new());
             }
@@ -398,7 +435,7 @@ impl OutputFormatter {
         // Sample Data (if requested and available)
         if options.show_data {
             if let Some(batch) = &result.sample_data {
-                output.push(format!("{}", "Data".bold()));
+                output.push("DATA PREVIEW".bold().to_string());
                 output.push(Self::format_record_batch(batch));
             }
         }
@@ -406,8 +443,8 @@ impl OutputFormatter {
         output.join("\n")
     }
 
-    /// Format schema with tree structure
-    pub fn format_schema(schema: &Schema) -> String {
+    /// Format schema content as vector of lines
+    fn format_schema_content(schema: &Schema) -> Vec<String> {
         let mut output = Vec::new();
 
         for (i, field) in schema.fields().iter().enumerate() {
@@ -422,7 +459,7 @@ impl OutputFormatter {
             let type_str = Self::format_data_type(field.data_type());
 
             output.push(format!(
-                "  {} {}: {}{}",
+                "{} {}: {}{}",
                 prefix.bright_black(),
                 field.name().white().bold(),
                 type_str.cyan(),
@@ -430,7 +467,16 @@ impl OutputFormatter {
             ));
         }
 
-        output.join("\n")
+        output
+    }
+
+    /// Format schema with tree structure (legacy)
+    pub fn format_schema(schema: &Schema) -> String {
+        Self::format_schema_content(schema)
+            .iter()
+            .map(|line| format!("  {}", line))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Format DataType to readable string
@@ -474,7 +520,35 @@ impl OutputFormatter {
         }
     }
 
-    /// Format metadata
+    /// Format metadata content as vector of lines (without row/size info shown in FILE INFORMATION)
+    fn format_metadata_content(metadata: &FileMetadata) -> Vec<String> {
+        let mut output = Vec::new();
+
+        // Compression info with ratio
+        if let Some(compression) = &metadata.compression {
+            if let (Some(compressed), Some(uncompressed)) =
+                (metadata.compressed_size, metadata.uncompressed_size)
+            {
+                let ratio = (compressed as f64 / uncompressed as f64) * 100.0;
+                output.push(format!("Compression:    {} ({:.1}%)", compression, ratio));
+            } else {
+                output.push(format!("Compression:    {}", compression));
+            }
+        }
+
+        if let Some(version) = &metadata.format_version {
+            output.push(format!("Format Version: {}", version));
+        }
+
+        // Custom metadata
+        for (key, value) in &metadata.metadata {
+            output.push(format!("{}: {}", key, value));
+        }
+
+        output
+    }
+
+    /// Format metadata (legacy)
     pub fn format_metadata(metadata: &FileMetadata) -> String {
         let mut output = Vec::new();
 
@@ -604,7 +678,7 @@ impl OutputFormatter {
                     let cell = Cell::new("null").fg(Color::Red);
                     row_data.push(cell);
                 } else {
-                    let value = arrow::util::display::array_value_to_string(col, row_idx)
+                    let value = datafusion::arrow::util::display::array_value_to_string(col, row_idx)
                         .unwrap_or_else(|_| "Error".to_string());
                     row_data.push(Cell::new(value));
                 }
@@ -623,140 +697,155 @@ impl OutputFormatter {
     ) -> String {
         let mut output = Vec::new();
 
-        output.push(format!(
-            "\n{}: {}\n",
-            "Total Rows".bold(),
-            result.total_rows.to_string().bright_white()
-        ));
+        // Dataset overview box
+        let overview_content = vec![
+            format!(
+                "Total Rows:    {}",
+                Self::format_number(result.total_rows as i64)
+            ),
+            format!("Total Columns: {}", result.column_stats.len()),
+        ];
 
+        let overview_box = crate::utils::create_box_frame(
+            Some(&"DATASET OVERVIEW".bold().to_string()),
+            overview_content,
+            Some(72),
+        );
+        output.push(overview_box);
+        output.push(String::new());
+
+        // Column statistics boxes
         for col_stat in &result.column_stats {
-            output.push(format!(
-                "{}",
-                format!("Column: {}", col_stat.name).bold().underline()
+            let mut col_content = Vec::new();
+
+            // Null/Non-null counts with percentages
+            let total = col_stat.null_count + col_stat.non_null_count;
+            let null_pct = if total > 0 {
+                (col_stat.null_count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            let non_null_pct = if total > 0 {
+                (col_stat.non_null_count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            col_content.push(format!(
+                "Null Count:     {} ({:.1}%)",
+                Self::format_number(col_stat.null_count as i64).dimmed(),
+                null_pct
             ));
-            output.push(format!(
-                "  Null Count: {}",
-                col_stat.null_count.to_string().bright_white()
-            ));
-            output.push(format!(
-                "  Non-Null Count: {}",
-                col_stat.non_null_count.to_string().bright_white()
+            col_content.push(format!(
+                "Non-Null Count: {} ({:.1}%)",
+                Self::format_number(col_stat.non_null_count as i64),
+                non_null_pct
             ));
 
             // Numeric stats
             if let Some(ref num_stats) = col_stat.numeric_stats {
-                output.push(format!("  {}", "Numeric Statistics:".cyan()));
+                col_content.push(String::new());
+                col_content.push("Numeric Statistics:".cyan().to_string());
 
                 if let Some(min) = num_stats.min {
-                    output.push(format!("    Min: {}", format!("{:.6}", min).bright_white()));
+                    col_content.push(format!("  Min:     {}", format!("{:.2}", min)));
                 }
                 if let Some(max) = num_stats.max {
-                    output.push(format!("    Max: {}", format!("{:.6}", max).bright_white()));
+                    col_content.push(format!("  Max:     {}", format!("{:.2}", max)));
                 }
                 if let Some(mean) = num_stats.mean {
-                    output.push(format!(
-                        "    Mean: {}",
-                        format!("{:.6}", mean).bright_white()
-                    ));
+                    col_content.push(format!("  Mean:    {}", format!("{:.2}", mean)));
                 }
                 if let Some(median) = num_stats.median {
-                    output.push(format!(
-                        "    Median: {}",
-                        format!("{:.6}", median).bright_white()
-                    ));
+                    col_content.push(format!("  Median:  {}", format!("{:.2}", median)));
                 }
                 if let Some(std_dev) = num_stats.std_dev {
-                    output.push(format!(
-                        "    Std Dev: {}",
-                        format!("{:.6}", std_dev).bright_white()
-                    ));
+                    col_content.push(format!("  Std Dev: {}", format!("{:.2}", std_dev)));
                 }
 
                 if let Some(ref percentiles) = num_stats.percentiles {
-                    output.push(format!("    {}", "Percentiles:".cyan()));
+                    col_content.push(String::new());
+                    col_content.push("  Percentiles:".cyan().to_string());
                     let mut sorted_percentiles: Vec<_> = percentiles.iter().collect();
                     sorted_percentiles.sort_by_key(|(k, _)| *k);
                     for (name, value) in sorted_percentiles {
-                        output.push(format!(
-                            "      {}: {}",
-                            name,
-                            format!("{:.6}", value).bright_white()
-                        ));
+                        col_content.push(format!("    {}: {}", name, format!("{:.2}", value)));
                     }
                 }
             }
 
             // String stats
             if let Some(ref str_stats) = col_stat.string_stats {
-                output.push(format!("  {}", "String Statistics:".cyan()));
+                col_content.push(String::new());
+                col_content.push("String Statistics:".cyan().to_string());
 
                 if let Some(min_len) = str_stats.min_length {
-                    output.push(format!(
-                        "    Min Length: {}",
-                        min_len.to_string().bright_white()
-                    ));
+                    col_content.push(format!("  Min Length: {}", min_len));
                 }
                 if let Some(max_len) = str_stats.max_length {
-                    output.push(format!(
-                        "    Max Length: {}",
-                        max_len.to_string().bright_white()
-                    ));
+                    col_content.push(format!("  Max Length: {}", max_len));
                 }
                 if let Some(avg_len) = str_stats.avg_length {
-                    output.push(format!(
-                        "    Avg Length: {}",
-                        format!("{:.2}", avg_len).bright_white()
-                    ));
+                    col_content.push(format!("  Avg Length: {:.1}", avg_len));
                 }
                 if let Some(distinct) = str_stats.distinct_count {
-                    output.push(format!(
-                        "    Distinct Values: {}",
-                        distinct.to_string().bright_white()
-                    ));
+                    col_content.push(format!("  Distinct:   {}", distinct));
                 }
 
                 if let Some(ref most_common) = str_stats.most_common {
-                    output.push(format!("    {}", "Most Common Values:".cyan()));
-                    for (value, count) in most_common {
-                        let display_value = if value.len() > 50 {
-                            format!("{}...", &value[..47])
+                    col_content.push(String::new());
+                    col_content.push("  Most Common:".cyan().to_string());
+                    for (value, count) in most_common.iter().take(5) {
+                        let display_value = if value.len() > 40 {
+                            format!("{}...", &value[..37])
                         } else {
                             value.clone()
                         };
-                        output.push(format!("      \"{}\" ({})", display_value, count));
+                        col_content.push(format!("    \"{}\" ({})", display_value, count));
                     }
                 }
             }
 
             // Boolean stats
             if let Some(ref bool_stats) = col_stat.boolean_stats {
-                output.push(format!("  {}", "Boolean Statistics:".cyan()));
-                output.push(format!(
-                    "    True Count: {}",
-                    bool_stats.true_count.to_string().bright_white()
+                col_content.push(String::new());
+                col_content.push("Boolean Statistics:".cyan().to_string());
+                col_content.push(format!(
+                    "  True:  {} ({:.1}%)",
+                    Self::format_number(bool_stats.true_count as i64),
+                    bool_stats.true_percentage
                 ));
-                output.push(format!(
-                    "    False Count: {}",
-                    bool_stats.false_count.to_string().bright_white()
-                ));
-                output.push(format!(
-                    "    True %: {}",
-                    format!("{:.2}%", bool_stats.true_percentage).bright_white()
+                col_content.push(format!(
+                    "  False: {} ({:.1}%)",
+                    Self::format_number(bool_stats.false_count as i64),
+                    100.0 - bool_stats.true_percentage
                 ));
             }
 
             // Temporal stats
             if let Some(ref temp_stats) = col_stat.temporal_stats {
-                output.push(format!("  {}", "Temporal Statistics:".cyan()));
+                col_content.push(String::new());
+                col_content.push("Temporal Statistics:".cyan().to_string());
                 if let Some(ref min) = temp_stats.min {
-                    output.push(format!("    Min: {}", min.bright_white()));
+                    col_content.push(format!("  Min: {}", min));
                 }
                 if let Some(ref max) = temp_stats.max {
-                    output.push(format!("    Max: {}", max.bright_white()));
+                    col_content.push(format!("  Max: {}", max));
                 }
             }
 
-            output.push(String::new()); // Empty line between columns
+            // Create box for this column
+            let col_box = crate::utils::create_box_frame(
+                Some(
+                    &format!("{} ({})", col_stat.name, col_stat.data_type)
+                        .bold()
+                        .to_string(),
+                ),
+                col_content,
+                Some(72),
+            );
+            output.push(col_box);
+            output.push(String::new());
         }
 
         output.join("\n")
@@ -798,7 +887,8 @@ impl OutputFormatter {
         let padding_needed = box_width.saturating_sub(visual_len);
         let left_pad = padding_needed / 2;
         let right_pad = padding_needed - left_pad;
-        let centered_paths = format!("{}{}{}",
+        let centered_paths = format!(
+            "{}{}{}",
             " ".repeat(left_pad),
             file_paths,
             " ".repeat(right_pad)
@@ -808,27 +898,52 @@ impl OutputFormatter {
         let header_box = crate::utils::create_box_frame(
             Some(format_name),
             vec![centered_paths],
-            Some(box_width)
+            Some(box_width),
         );
 
         output.push(String::new());
         output.push(header_box);
-
-        // ROWS section with emoji
-        output.push(Self::format_rows_diff(&result.metadata_diff));
         output.push(String::new());
 
-        // SCHEMA section with emoji
-        output.push(Self::format_schema_diff_visual(&result.schema_diff));
+        // ROWS section - wrapped in box
+        let rows_content = Self::format_rows_diff_content(&result.metadata_diff);
+        let rows_box = crate::utils::create_box_frame(
+            Some(&"ROWS".bold().to_string()),
+            rows_content,
+            Some(72),
+        );
+        output.push(rows_box);
         output.push(String::new());
 
-        // METADATA section with emoji (always show)
-        output.push(Self::format_metadata_diff_visual(&result.metadata_diff));
+        // SCHEMA section - wrapped in box
+        let schema_content = Self::format_schema_diff_content(&result.schema_diff);
+        let schema_box = crate::utils::create_box_frame(
+            Some(&"SCHEMA".bold().to_string()),
+            schema_content,
+            Some(72),
+        );
+        output.push(schema_box);
+        output.push(String::new());
 
-        // COLUMN STATISTICS (if verbose mode)
+        // METADATA section - wrapped in box
+        let metadata_content = Self::format_metadata_diff_content(&result.metadata_diff);
+        let metadata_box = crate::utils::create_box_frame(
+            Some(&"METADATA".bold().to_string()),
+            metadata_content,
+            Some(72),
+        );
+        output.push(metadata_box);
+
+        // COLUMN STATISTICS (if verbose mode) - wrapped in box
         if !result.column_stats_diff.is_empty() {
             output.push(String::new());
-            output.push(Self::format_column_stats_diff(&result.column_stats_diff));
+            let stats_content = Self::format_column_stats_content(&result.column_stats_diff);
+            let stats_box = crate::utils::create_box_frame(
+                Some(&"COLUMN STATISTICS".bold().to_string()),
+                stats_content,
+                Some(72),
+            );
+            output.push(stats_box);
         }
 
         output.join("\n")
@@ -836,21 +951,28 @@ impl OutputFormatter {
 
     /// Check if there are metadata changes worth displaying
     fn has_metadata_changes(meta_diff: &crate::core::operations::diff::MetadataDiff) -> bool {
-        meta_diff.compression.as_ref().map_or(false, |(l, r)| l != r)
+        meta_diff
+            .compression
+            .as_ref()
+            .map_or(false, |(l, r)| l != r)
             || !meta_diff.custom_metadata.is_empty()
-            || meta_diff.format_version.as_ref().map_or(false, |(l, r)| l != r)
+            || meta_diff
+                .format_version
+                .as_ref()
+                .map_or(false, |(l, r)| l != r)
     }
 
-    /// Format ROWS section with emoji
-    fn format_rows_diff(meta_diff: &crate::core::operations::diff::MetadataDiff) -> String {
+    /// Format ROWS section content (returns lines for box)
+    fn format_rows_diff_content(
+        meta_diff: &crate::core::operations::diff::MetadataDiff,
+    ) -> Vec<String> {
         let mut output = Vec::new();
-
-        output.push(format!("{} {}", "📊", "ROWS".bold()));
 
         if let Some((left, right)) = meta_diff.num_rows {
             let delta = right - left;
 
-            output.push(format!("  Total:  {} {} {}",
+            output.push(format!(
+                "Total:  {} {} {}",
                 Self::format_number(left),
                 "→".cyan().bold(),
                 Self::format_number(right)
@@ -859,16 +981,19 @@ impl OutputFormatter {
             if delta != 0 {
                 output.push(String::new());
                 if delta > 0 {
-                    output.push(format!("  Added:     {}", Self::format_number(delta).green()));
-                    output.push(format!("  Removed:   {}", "0".red()));
+                    output.push(format!("Added:     {}", Self::format_number(delta).green()));
+                    output.push(format!("Removed:   {}", "0".red()));
                 } else {
-                    output.push(format!("  Added:     {}", "0".green()));
-                    output.push(format!("  Removed:   {}", Self::format_number(delta.abs()).red()));
+                    output.push(format!("Added:     {}", "0".green()));
+                    output.push(format!(
+                        "Removed:   {}",
+                        Self::format_number(delta.abs()).red()
+                    ));
                 }
             }
         }
 
-        output.join("\n")
+        output
     }
 
     /// Format metadata differences (old style, kept for backward compatibility)
@@ -893,57 +1018,70 @@ impl OutputFormatter {
         result.chars().rev().collect()
     }
 
-    /// Format schema differences with visual style
-    fn format_schema_diff_visual(schema_diff: &crate::core::operations::diff::SchemaDiff) -> String {
+    /// Format schema diff content (returns lines for box)
+    fn format_schema_diff_content(
+        schema_diff: &crate::core::operations::diff::SchemaDiff,
+    ) -> Vec<String> {
         let mut output = Vec::new();
-
-        output.push(format!("{} {}", "📋", "SCHEMA".bold()));
 
         // Show if schemas are identical
         if schema_diff.is_identical() {
-            output.push(String::new());
-            output.push(format!("  {} Schemas are identical", "✓".green()));
-            return output.join("\n");
+            output.push(format!("{} Schemas are identical", "✓".green()));
+            return output;
         }
-
-        output.push(String::new());
 
         // Columns added
         if !schema_diff.columns_added.is_empty() {
-            output.push(format!("  Added Columns ({})", schema_diff.columns_added.len()));
+            output.push(format!(
+                "Added Columns ({})",
+                schema_diff.columns_added.len()
+            ));
             for col in &schema_diff.columns_added {
                 let nullable_str = if col.nullable { "nullable" } else { "non-null" };
-                output.push(format!("    {} {:<20} {:<12} {}",
+                output.push(format!(
+                    "  {} {:<20} {:<12} {}",
                     "+".green(),
                     col.name,
                     col.data_type,
                     nullable_str.dimmed()
                 ));
             }
-            output.push(String::new());
+            if !schema_diff.columns_removed.is_empty() || !schema_diff.columns_modified.is_empty() {
+                output.push(String::new());
+            }
         }
 
         // Columns removed
         if !schema_diff.columns_removed.is_empty() {
-            output.push(format!("  Removed Columns ({})", schema_diff.columns_removed.len()));
+            output.push(format!(
+                "Removed Columns ({})",
+                schema_diff.columns_removed.len()
+            ));
             for col in &schema_diff.columns_removed {
                 let nullable_str = if col.nullable { "nullable" } else { "non-null" };
-                output.push(format!("    {} {:<20} {}",
+                output.push(format!(
+                    "  {} {:<20} {}",
                     "-".red(),
                     col.name,
                     col.data_type.dimmed()
                 ));
             }
-            output.push(String::new());
+            if !schema_diff.columns_modified.is_empty() {
+                output.push(String::new());
+            }
         }
 
         // Columns modified
         if !schema_diff.columns_modified.is_empty() {
-            output.push(format!("  Modified Columns ({})", schema_diff.columns_modified.len()));
+            output.push(format!(
+                "Modified Columns ({})",
+                schema_diff.columns_modified.len()
+            ));
             for col in &schema_diff.columns_modified {
                 if let Some((old_type, new_type)) = &col.type_change {
                     let change_str = format!("{} {} {}", old_type, "→".cyan().bold(), new_type);
-                    output.push(format!("    {} {:<20} {}",
+                    output.push(format!(
+                        "  {} {:<20} {}",
                         "~".yellow(),
                         col.name,
                         change_str
@@ -955,7 +1093,8 @@ impl OutputFormatter {
                     } else {
                         "nullable → non-null"
                     };
-                    output.push(format!("    {} {:<20} {}",
+                    output.push(format!(
+                        "  {} {:<20} {}",
                         "~".yellow(),
                         col.name,
                         null_change
@@ -964,22 +1103,32 @@ impl OutputFormatter {
             }
         }
 
-        output.join("\n")
+        output
     }
 
-    /// Format metadata differences with visual style
-    fn format_metadata_diff_visual(meta_diff: &crate::core::operations::diff::MetadataDiff) -> String {
+    /// Format schema differences with visual style (wrapper for backward compat)
+    fn format_schema_diff_visual(
+        schema_diff: &crate::core::operations::diff::SchemaDiff,
+    ) -> String {
+        let mut lines = vec![format!("{} {}", "📋", "SCHEMA".bold())];
+        lines.push(String::new());
+        lines.extend(Self::format_schema_diff_content(schema_diff));
+        lines.join("\n")
+    }
+
+    /// Format metadata diff content (returns lines for box)
+    fn format_metadata_diff_content(
+        meta_diff: &crate::core::operations::diff::MetadataDiff,
+    ) -> Vec<String> {
         let mut output = Vec::new();
 
-        output.push(format!("{} {}", "📦", "METADATA".bold()));
-        output.push(String::new());
-
-        output.push(format!("  {}", "File Properties".dimmed()));
+        output.push(format!("{}", "File Properties".dimmed()));
 
         // Rows (always show if available)
         if let Some((left, right)) = meta_diff.num_rows {
             if left != right {
-                output.push(format!("    Rows:         {} {} {}",
+                output.push(format!(
+                    "  Rows:         {} {} {}",
                     Self::format_number(left),
                     "→".cyan().bold(),
                     Self::format_number(right)
@@ -990,39 +1139,42 @@ impl OutputFormatter {
         // Sizes (always show if available)
         if let Some((left, right)) = meta_diff.compressed_size {
             if left != right {
-                output.push(format!("    Size:         {} {} {}",
+                output.push(format!(
+                    "  Size:         {} {} {}",
                     Self::format_bytes(left),
                     "→".cyan().bold(),
                     Self::format_bytes(right)
                 ));
             } else {
-                output.push(format!("    Size:         {}",
-                    Self::format_bytes(left)
-                ));
+                output.push(format!("  Size:         {}", Self::format_bytes(left)));
             }
         }
 
         // Compression (always show if available)
         if let Some((left, right)) = &meta_diff.compression {
             if left != right {
-                output.push(format!("    Compression:  {} {} {}",
+                output.push(format!(
+                    "  Compression:  {} {} {}",
                     left.to_uppercase(),
                     "→".cyan().bold(),
                     right.to_uppercase()
                 ));
             } else if !left.is_empty() {
-                output.push(format!("    Compression:  {}",
-                    left.to_uppercase()
-                ));
+                output.push(format!("  Compression:  {}", left.to_uppercase()));
             }
         }
 
         // Format version (always show if available)
         if let Some((left, right)) = &meta_diff.format_version {
             if left != right {
-                output.push(format!("    Version:      {} {} {}", left, "→".cyan().bold(), right));
+                output.push(format!(
+                    "  Version:      {} {} {}",
+                    left,
+                    "→".cyan().bold(),
+                    right
+                ));
             } else {
-                output.push(format!("    Version:      {}", left));
+                output.push(format!("  Version:      {}", left));
             }
         }
 
@@ -1033,26 +1185,19 @@ impl OutputFormatter {
                 + meta_diff.custom_metadata.modified.len();
 
             output.push(String::new());
-            output.push(format!("  Custom Metadata ({} changes)", total_changes));
+            output.push(format!("Custom Metadata ({} changes)", total_changes));
 
             for (key, value) in &meta_diff.custom_metadata.added {
-                output.push(format!("    {} {} = {}",
-                    "+".green(),
-                    key,
-                    value
-                ));
+                output.push(format!("  {} {} = {}", "+".green(), key, value));
             }
 
             for (key, value) in &meta_diff.custom_metadata.removed {
-                output.push(format!("    {} {} = {}",
-                    "-".red(),
-                    key,
-                    value
-                ));
+                output.push(format!("  {} {} = {}", "-".red(), key, value));
             }
 
             for (key, (old_val, new_val)) in &meta_diff.custom_metadata.modified {
-                output.push(format!("    {} {}: {} → {}",
+                output.push(format!(
+                    "  {} {}: {} → {}",
                     "~".yellow(),
                     key,
                     old_val,
@@ -1061,7 +1206,17 @@ impl OutputFormatter {
             }
         }
 
-        output.join("\n")
+        output
+    }
+
+    /// Format metadata differences with visual style (wrapper for backward compat)
+    fn format_metadata_diff_visual(
+        meta_diff: &crate::core::operations::diff::MetadataDiff,
+    ) -> String {
+        let mut lines = vec![format!("{} {}", "📦", "METADATA".bold())];
+        lines.push(String::new());
+        lines.extend(Self::format_metadata_diff_content(meta_diff));
+        lines.join("\n")
     }
 
     /// Format schema differences (old style, kept for backward compatibility)
@@ -1069,17 +1224,17 @@ impl OutputFormatter {
         Self::format_schema_diff_visual(schema_diff)
     }
 
-    /// Format column statistics differences (verbose mode)
-    fn format_column_stats_diff(
+    /// Format column stats content (returns lines for box)
+    fn format_column_stats_content(
         stats_diff: &[crate::core::operations::diff::ColumnStatsDiff],
-    ) -> String {
+    ) -> Vec<String> {
         let mut output = Vec::new();
 
-        output.push(format!("{}", "COLUMN STATISTICS".bold().underline()));
-
         for stat in stats_diff {
-            output.push(String::new());
-            output.push(format!("  {}", stat.name.bold()));
+            if !output.is_empty() {
+                output.push(String::new());
+            }
+            output.push(format!("{}", stat.name.bold()));
 
             let mut has_diff = false;
 
@@ -1087,8 +1242,14 @@ impl OutputFormatter {
             if let Some((left, right)) = stat.null_count {
                 if left != right {
                     has_diff = true;
-                    let change_str = format!("{} → {}", Self::format_number(left), Self::format_number(right)).yellow();
-                    output.push(format!("    Null count: {}", change_str));
+                    let change_str = format!(
+                        "{} {} {}",
+                        Self::format_number(left),
+                        "→".cyan().bold(),
+                        Self::format_number(right)
+                    )
+                    .yellow();
+                    output.push(format!("  Null count: {}", change_str));
                 }
             }
 
@@ -1096,8 +1257,14 @@ impl OutputFormatter {
             if let Some((left, right)) = stat.distinct_count_approx {
                 if left != right {
                     has_diff = true;
-                    let change_str = format!("{} → {}", Self::format_number(left), Self::format_number(right)).yellow();
-                    output.push(format!("    Distinct count (approx): {}", change_str));
+                    let change_str = format!(
+                        "{} {} {}",
+                        Self::format_number(left),
+                        "→".cyan().bold(),
+                        Self::format_number(right)
+                    )
+                    .yellow();
+                    output.push(format!("  Distinct count (approx): {}", change_str));
                 }
             }
 
@@ -1105,8 +1272,8 @@ impl OutputFormatter {
             if let Some((left, right)) = &stat.min_value {
                 if left != right {
                     has_diff = true;
-                    let change_str = format!("{} → {}", left, right).yellow();
-                    output.push(format!("    Min: {}", change_str));
+                    let change_str = format!("{} {} {}", left, "→".cyan().bold(), right).yellow();
+                    output.push(format!("  Min: {}", change_str));
                 }
             }
 
@@ -1114,8 +1281,8 @@ impl OutputFormatter {
             if let Some((left, right)) = &stat.max_value {
                 if left != right {
                     has_diff = true;
-                    let change_str = format!("{} → {}", left, right).yellow();
-                    output.push(format!("    Max: {}", change_str));
+                    let change_str = format!("{} {} {}", left, "→".cyan().bold(), right).yellow();
+                    output.push(format!("  Max: {}", change_str));
                 }
             }
 
@@ -1129,20 +1296,32 @@ impl OutputFormatter {
                     } else {
                         format!("({:.4})", diff).red()
                     };
-                    let change_str = format!("{:.4} → {:.4} {}",
+                    let change_str = format!(
+                        "{:.4} {} {:.4} {}",
                         left,
+                        "→".cyan().bold(),
                         right,
                         diff_marker
-                    ).yellow();
-                    output.push(format!("    Mean: {}", change_str));
+                    )
+                    .yellow();
+                    output.push(format!("  Mean: {}", change_str));
                 }
             }
 
             if !has_diff {
-                output.push(format!("    {} No differences", "•".dimmed()));
+                output.push(format!("  {} No differences", "•".dimmed()));
             }
         }
 
-        output.join("\n")
+        output
+    }
+
+    /// Format column statistics differences (wrapper for backward compat)
+    fn format_column_stats_diff(
+        stats_diff: &[crate::core::operations::diff::ColumnStatsDiff],
+    ) -> String {
+        let mut lines = vec![format!("{}", "COLUMN STATISTICS".bold().underline())];
+        lines.extend(Self::format_column_stats_content(stats_diff));
+        lines.join("\n")
     }
 }

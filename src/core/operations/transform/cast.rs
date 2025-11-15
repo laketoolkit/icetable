@@ -1,8 +1,8 @@
 //! Column type casting operations
 
-use arrow::compute;
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::compute;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 use std::sync::Arc;
 

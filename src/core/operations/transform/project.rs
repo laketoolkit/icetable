@@ -1,8 +1,8 @@
 //! Column projection operations
 
-use arrow::array::Array;
-use arrow::datatypes::{Field, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};

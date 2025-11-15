@@ -7,9 +7,9 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::array::Array;
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::array::Array;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::record_batch::RecordBatch;
 use arrow_csv::{ReaderBuilder, WriterBuilder};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -158,7 +158,7 @@ impl FormatHandler for CsvHandler {
         } else {
             // Concatenate multiple batches
             let schema = batches[0].schema();
-            arrow::compute::concat_batches(&schema, &batches).map_err(Error::Arrow)
+            datafusion::arrow::compute::concat_batches(&schema, &batches).map_err(Error::Arrow)
         }
     }
 

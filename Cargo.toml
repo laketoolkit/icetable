@@ -10,19 +10,15 @@ keywords = ["parquet", "arrow", "iceberg", "delta-lake", "cli"]
 categories = ["command-line-utilities", "database"]
 
 [dependencies]
-# Apache Arrow ecosystem - core data processing
-arrow = { version = "54", features = ["prettyprint"] }
-arrow-array = "54"
-arrow-csv = "54"
-arrow-json = "54"
-arrow-schema = "54"
-arrow-ipc = "54"
-arrow-row = "54"
-parquet = { version = "54", features = ["async"] }
-datafusion = { version = "44", features = ["parquet"] }
+# Apache Arrow ecosystem - use DataFusion's re-exported arrow
+datafusion = { version = "50.3.0", features = ["parquet"] }
+
+# Arrow CSV/JSON readers - must match DataFusion's arrow version (56.2.0)
+arrow-csv = "56.2.0"
+arrow-json = "56.2.0"
 
 # Table formats
-deltalake = { version = "0.22", features = ["s3", "gcs", "azure"], optional = true }
+deltalake = { version = "0.29", features = ["s3", "gcs", "azure"], optional = true }
 iceberg = { version = "0.3", optional = true }
 
 # Cloud storage abstraction
@@ -52,6 +48,7 @@ tokio = { version = "1.40", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures = "0.3"
 async-trait = "0.1"
+async-stream = "0.3"
 
 # Utilities
 chrono = "0.4"

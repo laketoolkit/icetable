@@ -1,15 +1,15 @@
 //! Generate test fixture Parquet and Arrow files
 //! Run with: cargo run --bin build_fixtures
 
-use arrow::array::{
+use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
     TimestampMillisecondArray,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::ipc::writer::FileWriter as ArrowFileWriter;
-use arrow::record_batch::RecordBatch;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::arrow::ipc::writer::FileWriter as ArrowFileWriter;
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::file::properties::WriterProperties;
 use std::fs::{self, File};
 use std::sync::Arc;
 
@@ -73,7 +73,7 @@ fn generate_simple_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/sample.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::SNAPPY)
+        .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
         .build();
 
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
@@ -126,8 +126,8 @@ fn generate_types_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/types.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::GZIP(Default::default()))
-        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+        .set_compression(datafusion::parquet::basic::Compression::GZIP(Default::default()))
+        .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page)
         .build();
 
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
@@ -177,8 +177,8 @@ fn generate_larger_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/larger.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
-        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+        .set_compression(datafusion::parquet::basic::Compression::ZSTD(Default::default()))
+        .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page)
         .build();
 
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;

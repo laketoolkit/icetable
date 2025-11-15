@@ -6,15 +6,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use bytes::Bytes;
-use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::basic::Type as PhysicalType;
-use parquet::file::properties::WriterProperties;
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use datafusion::parquet::basic::Type as PhysicalType;
+use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 
 use crate::core::formats::traits::*;
 use crate::core::storage::StorageBackend;
@@ -143,7 +143,7 @@ impl FormatHandler for ParquetHandler {
 
         let parquet_schema = reader.metadata().file_metadata().schema_descr();
         let arrow_schema =
-            parquet::arrow::parquet_to_arrow_schema(parquet_schema, None).map_err(|e| {
+            datafusion::parquet::arrow::parquet_to_arrow_schema(parquet_schema, None).map_err(|e| {
                 Error::corrupted_file(
                     &self.path,
                     format!("Failed to convert Parquet schema: {}", e),
@@ -221,7 +221,7 @@ impl FormatHandler for ParquetHandler {
         } else {
             // Concatenate multiple batches
             let schema = batches[0].schema();
-            arrow::compute::concat_batches(&schema, &batches).map_err(|e| Error::Arrow(e))
+            datafusion::arrow::compute::concat_batches(&schema, &batches).map_err(|e| Error::Arrow(e))
         }
     }
 
@@ -255,7 +255,7 @@ impl FormatHandler for ParquetHandler {
             Some(indices) => {
                 let projection_mask = {
                     let parquet_schema = builder.parquet_schema();
-                    parquet::arrow::ProjectionMask::roots(parquet_schema, indices)
+                    datafusion::parquet::arrow::ProjectionMask::roots(parquet_schema, indices)
                 };
                 builder.with_projection(projection_mask)
             }
@@ -325,7 +325,7 @@ impl FormatHandler for ParquetHandler {
         // Get schema
         let parquet_schema = parquet_metadata.file_metadata().schema_descr();
         let schema =
-            parquet::arrow::parquet_to_arrow_schema(parquet_schema, None).map_err(|e| {
+            datafusion::parquet::arrow::parquet_to_arrow_schema(parquet_schema, None).map_err(|e| {
                 Error::corrupted_file(&self.path, format!("Failed to convert schema: {}", e))
             })?;
 
@@ -442,12 +442,12 @@ impl FormatHandler for ParquetHandler {
 
         if let Some(compression) = options.compression() {
             let codec = match compression.to_lowercase().as_str() {
-                "snappy" => parquet::basic::Compression::SNAPPY,
-                "gzip" => parquet::basic::Compression::GZIP(Default::default()),
-                "lz4" => parquet::basic::Compression::LZ4,
-                "zstd" => parquet::basic::Compression::ZSTD(Default::default()),
-                "none" | "uncompressed" => parquet::basic::Compression::UNCOMPRESSED,
-                _ => parquet::basic::Compression::SNAPPY, // Default
+                "snappy" => datafusion::parquet::basic::Compression::SNAPPY,
+                "gzip" => datafusion::parquet::basic::Compression::GZIP(Default::default()),
+                "lz4" => datafusion::parquet::basic::Compression::LZ4,
+                "zstd" => datafusion::parquet::basic::Compression::ZSTD(Default::default()),
+                "none" | "uncompressed" => datafusion::parquet::basic::Compression::UNCOMPRESSED,
+                _ => datafusion::parquet::basic::Compression::SNAPPY, // Default
             };
             props_builder = props_builder.set_compression(codec);
         }
@@ -458,7 +458,7 @@ impl FormatHandler for ParquetHandler {
 
         if options.enable_statistics() {
             props_builder = props_builder
-                .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page);
+                .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page);
         }
 
         let props = props_builder.build();

@@ -18,10 +18,10 @@ impl ConvertCommand {
     /// Execute convert command
     pub async fn execute(args: ConvertArgs) -> Result<()> {
         // 1. Check if output file exists and handle overwrite
-        if !args.overwrite && std::path::Path::new(&args.output).exists() {
+        if !args.overwrite && std::path::Path::new(&args.file).exists() {
             return Err(Error::General(format!(
                 "Output file '{}' already exists. Use --overwrite to replace it.",
-                args.output
+                args.file
             )));
         }
 
@@ -37,7 +37,7 @@ impl ConvertCommand {
 
         // 4. Create storage backends
         let source_storage = StorageBackendFactory::create_backend(&args.input).await?;
-        let target_storage = StorageBackendFactory::create_backend(&args.output).await?;
+        let target_storage = StorageBackendFactory::create_backend(&args.file).await?;
 
         // 5. Create format handlers using registry
         let source_path = Path::new(&args.input);
@@ -45,7 +45,7 @@ impl ConvertCommand {
             .create_handler(source_path, source_storage)
             .await?;
 
-        let target_path = Path::new(&args.output);
+        let target_path = Path::new(&args.file);
         let target_handler = FormatHandlerRegistry::global()
             .create_handler(target_path, target_storage)
             .await?;
@@ -68,7 +68,7 @@ impl ConvertCommand {
 
         // 7. Execute conversion
         let progress =
-            ProgressTracker::spinner(&format!("Converting {} to {}...", args.input, args.output));
+            ProgressTracker::spinner(&format!("Converting {} to {}...", args.input, args.file));
 
         let operation = if transform_config.has_transforms() {
             ConvertOperation::with_transforms(
@@ -106,7 +106,7 @@ impl ConvertCommand {
 
             use crate::core::operations::validate::ValidateOperation;
 
-            let validate_storage = StorageBackendFactory::create_backend(&args.output).await?;
+            let validate_storage = StorageBackendFactory::create_backend(&args.file).await?;
             let validate_handler = FormatHandlerRegistry::global()
                 .create_handler(target_path, validate_storage)
                 .await?;

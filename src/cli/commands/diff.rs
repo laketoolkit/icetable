@@ -56,49 +56,83 @@ impl DiffCommand {
             .await?;
 
         // Format output
-        let output = match args.format.as_str() {
+        let output = match args.output.as_str() {
             "json" => {
-                // Create serializable version of the result
-                let serializable = serde_json::json!({
-                    "left_path": result.left_path,
-                    "right_path": result.right_path,
-                    "metadata_diff": {
-                        "num_rows": result.metadata_diff.num_rows,
-                        "compressed_size": result.metadata_diff.compressed_size,
-                        "uncompressed_size": result.metadata_diff.uncompressed_size,
-                        "compression": result.metadata_diff.compression,
-                        "format_version": result.metadata_diff.format_version,
-                        "custom_metadata": {
-                            "added": result.metadata_diff.custom_metadata.added,
-                            "removed": result.metadata_diff.custom_metadata.removed,
-                            "modified": result.metadata_diff.custom_metadata.modified,
+                // Calculate row deltas
+                let (rows_added, rows_removed, rows_delta, rows_delta_pct) =
+                    if let Some((left, right)) = result.metadata_diff.num_rows {
+                        let delta = right - left;
+                        let delta_pct = if left > 0 {
+                            ((delta as f64) / (left as f64)) * 100.0
+                        } else {
+                            0.0
+                        };
+                        if delta > 0 {
+                            (delta, 0, delta, delta_pct)
+                        } else {
+                            (0, delta.abs(), delta, delta_pct)
                         }
+                    } else {
+                        (0, 0, 0, 0.0)
+                    };
+
+                // Create JSON matching visual structure
+                let serializable = serde_json::json!({
+                    "files": {
+                        "left": result.left_path,
+                        "right": result.right_path,
                     },
-                    "schema_diff": {
-                        "columns_added": result.schema_diff.columns_added.iter().map(|c| {
+                    "rows": {
+                        "total": {
+                            "left": result.metadata_diff.num_rows.map(|(l, _)| l),
+                            "right": result.metadata_diff.num_rows.map(|(_, r)| r),
+                            "delta": rows_delta,
+                            "delta_percent": rows_delta_pct,
+                        },
+                        "added": rows_added,
+                        "removed": rows_removed,
+                    },
+                    "schema": {
+                        "is_identical": result.schema_diff.is_identical(),
+                        "added_columns": result.schema_diff.columns_added.iter().map(|c| {
                             serde_json::json!({
                                 "name": c.name,
                                 "data_type": c.data_type,
                                 "nullable": c.nullable,
                             })
                         }).collect::<Vec<_>>(),
-                        "columns_removed": result.schema_diff.columns_removed.iter().map(|c| {
+                        "removed_columns": result.schema_diff.columns_removed.iter().map(|c| {
                             serde_json::json!({
                                 "name": c.name,
                                 "data_type": c.data_type,
                                 "nullable": c.nullable,
                             })
                         }).collect::<Vec<_>>(),
-                        "columns_modified": result.schema_diff.columns_modified.iter().map(|c| {
+                        "modified_columns": result.schema_diff.columns_modified.iter().map(|c| {
                             serde_json::json!({
                                 "name": c.name,
                                 "type_change": c.type_change,
                                 "nullability_change": c.nullability_change,
                             })
                         }).collect::<Vec<_>>(),
-                        "is_identical": result.schema_diff.is_identical(),
                     },
-                    "column_stats_diff": if args.verbose {
+                    "metadata": {
+                        "file_properties": {
+                            "rows": result.metadata_diff.num_rows,
+                            "size": {
+                                "compressed": result.metadata_diff.compressed_size,
+                                "uncompressed": result.metadata_diff.uncompressed_size,
+                            },
+                            "compression": result.metadata_diff.compression,
+                            "version": result.metadata_diff.format_version,
+                        },
+                        "custom_metadata": {
+                            "added": result.metadata_diff.custom_metadata.added,
+                            "removed": result.metadata_diff.custom_metadata.removed,
+                            "modified": result.metadata_diff.custom_metadata.modified,
+                        }
+                    },
+                    "column_statistics": if args.verbose {
                         result.column_stats_diff.iter().map(|s| {
                             serde_json::json!({
                                 "name": s.name,

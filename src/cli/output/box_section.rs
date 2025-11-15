@@ -27,10 +27,10 @@ pub enum SectionStyle {
     /// Título en dimmed/gris
     Dimmed,
     /// Color personalizado
-    Info,     // Cyan
-    Success,  // Green
-    Warning,  // Yellow
-    Error,    // Red
+    Info, // Cyan
+    Success, // Green
+    Warning, // Yellow
+    Error,   // Red
 }
 
 /// Una sección dentro de una caja con header opcional

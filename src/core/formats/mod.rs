@@ -29,7 +29,7 @@ pub use traits::{
 pub use arrow::ArrowHandler;
 pub use csv::CsvHandler;
 pub use json::JsonHandler;
-pub use parquet::ParquetHandler;
+pub use self::parquet::ParquetHandler;
 
 #[cfg(feature = "delta")]
 pub use delta::DeltaHandler;

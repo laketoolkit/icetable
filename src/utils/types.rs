@@ -1,7 +1,7 @@
 //! Type parsing utilities for Arrow data types
 
 use crate::error::{Error, Result};
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 
 /// Parse an Arrow DataType from a string representation
 ///
@@ -47,19 +47,19 @@ pub fn parse_data_type(type_str: &str) -> Result<DataType> {
         "date32" => Ok(DataType::Date32),
         "date64" => Ok(DataType::Date64),
         "timestamp" | "timestamp_us" => Ok(DataType::Timestamp(
-            arrow::datatypes::TimeUnit::Microsecond,
+            datafusion::arrow::datatypes::TimeUnit::Microsecond,
             None,
         )),
         "timestamp_s" => Ok(DataType::Timestamp(
-            arrow::datatypes::TimeUnit::Second,
+            datafusion::arrow::datatypes::TimeUnit::Second,
             None,
         )),
         "timestamp_ms" => Ok(DataType::Timestamp(
-            arrow::datatypes::TimeUnit::Millisecond,
+            datafusion::arrow::datatypes::TimeUnit::Millisecond,
             None,
         )),
         "timestamp_ns" => Ok(DataType::Timestamp(
-            arrow::datatypes::TimeUnit::Nanosecond,
+            datafusion::arrow::datatypes::TimeUnit::Nanosecond,
             None,
         )),
 

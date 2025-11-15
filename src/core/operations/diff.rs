@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 
 use crate::core::formats::{ColumnStats, FileMetadata, FormatHandler};
 use crate::error::Result;
@@ -151,8 +151,8 @@ impl DiffOperation {
 
     /// Compute schema differences
     fn compute_schema_diff(
-        left: &arrow::datatypes::Schema,
-        right: &arrow::datatypes::Schema,
+        left: &datafusion::arrow::datatypes::Schema,
+        right: &datafusion::arrow::datatypes::Schema,
     ) -> SchemaDiff {
         let mut columns_added = Vec::new();
         let mut columns_removed = Vec::new();
@@ -163,23 +163,13 @@ impl DiffOperation {
         let left_fields: HashMap<_, _> = left
             .fields()
             .iter()
-            .map(|f| {
-                (
-                    f.name().clone(),
-                    (f.data_type().clone(), f.is_nullable()),
-                )
-            })
+            .map(|f| (f.name().clone(), (f.data_type().clone(), f.is_nullable())))
             .collect();
 
         let right_fields: HashMap<_, _> = right
             .fields()
             .iter()
-            .map(|f| {
-                (
-                    f.name().clone(),
-                    (f.data_type().clone(), f.is_nullable()),
-                )
-            })
+            .map(|f| (f.name().clone(), (f.data_type().clone(), f.is_nullable())))
             .collect();
 
         // Find added columns (in right but not in left)
@@ -481,7 +471,7 @@ pub struct DiffResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Field, Schema as ArrowSchema};
+    use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema};
     use std::sync::Arc;
 
     #[test]
@@ -603,7 +593,10 @@ mod tests {
         assert_eq!(diff.columns_modified.len(), 1);
         assert_eq!(diff.columns_modified[0].name, "name");
         assert_eq!(diff.columns_modified[0].type_change, None);
-        assert_eq!(diff.columns_modified[0].nullability_change, Some((false, true)));
+        assert_eq!(
+            diff.columns_modified[0].nullability_change,
+            Some((false, true))
+        );
     }
 
     #[test]
