@@ -54,14 +54,29 @@ impl ObjectStoreAdapter {
     fn to_storage_path(&self, location: &ObjectPath) -> String {
         let path_str = location.as_ref();
 
-        // If base_path is absolute and path is relative, join them
-        if self.base_path.starts_with('/') && !path_str.starts_with('/') {
-            format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
-        } else if self.base_path.starts_with("s3://")
+        // Local filesystem: DataFusion may pass paths with or without leading slash
+        // Example: location = "home/user/data/file.parquet" (slash removed by DataFusion)
+        // We need to ensure it's an absolute path
+        if self.base_path.starts_with('/') {
+            if path_str.starts_with('/') {
+                // Path is already absolute
+                path_str.to_string()
+            } else {
+                // DataFusion removed the leading slash, add it back
+                format!("/{}", path_str)
+            }
+        }
+        // Cloud storage (S3/GCS/Azure): DataFusion passes paths relative to bucket
+        // Example: base_path = "s3://bucket", location = "path/file.parquet"
+        // We concatenate them: "s3://bucket/path/file.parquet"
+        else if self.base_path.starts_with("s3://")
             || self.base_path.starts_with("gs://")
-            || self.base_path.starts_with("az://") {
+            || self.base_path.starts_with("az://")
+        {
             format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
-        } else {
+        }
+        // Fallback: return as-is
+        else {
             path_str.to_string()
         }
     }
@@ -71,7 +86,7 @@ impl ObjectStoreAdapter {
         ObjectMeta {
             location,
             last_modified: metadata.last_modified,
-            size: metadata.size as usize,
+            size: metadata.size, // ObjectMeta.size is u64 in object_store 0.12.4
             e_tag: metadata.e_tag,
             version: None,
         }
@@ -192,15 +207,17 @@ impl ObjectStore for ObjectStoreAdapter {
             .await
             .map_err(Self::to_object_store_error)?;
 
-        let object_meta = self.to_object_meta(meta, location.clone());
-        let bytes_len = bytes.len();
+        let object_meta = self.to_object_meta(meta.clone(), location.clone());
+
+        // Full file request, so range is 0..file_size
+        let file_range = 0..meta.size;
 
         Ok(GetResult {
             payload: object_store::GetResultPayload::Stream(
                 futures::stream::once(async move { Ok(bytes) }).boxed(),
             ),
             meta: object_meta,
-            range: 0..bytes_len,
+            range: file_range,
             attributes: Default::default(),
         })
     }
@@ -259,20 +276,27 @@ impl ObjectStore for ObjectStoreAdapter {
             .await
             .map_err(Self::to_object_store_error)?;
 
-        let object_meta = self.to_object_meta(meta, location.clone());
-        let bytes_len = bytes.len();
+        let object_meta = self.to_object_meta(meta.clone(), location.clone());
+
+        // Calculate the actual range in the file
+        // If a range was requested, use it; otherwise it's the full file
+        let actual_range = if let Some((start, end)) = our_options.range {
+            start..end
+        } else {
+            0..meta.size
+        };
 
         Ok(GetResult {
             payload: object_store::GetResultPayload::Stream(
                 futures::stream::once(async move { Ok(bytes) }).boxed(),
             ),
             meta: object_meta,
-            range: 0..bytes_len,
+            range: actual_range,
             attributes: Default::default(),
         })
     }
 
-    async fn get_range(&self, location: &ObjectPath, range: Range<usize>) -> OSResult<Bytes> {
+    async fn get_range(&self, location: &ObjectPath, range: Range<u64>) -> OSResult<Bytes> {
         let path = self.to_storage_path(location);
 
         self.backend
@@ -302,7 +326,7 @@ impl ObjectStore for ObjectStoreAdapter {
             .map_err(Self::to_object_store_error)
     }
 
-    fn list(&self, prefix: Option<&ObjectPath>) -> BoxStream<'_, OSResult<ObjectMeta>> {
+    fn list(&self, prefix: Option<&ObjectPath>) -> BoxStream<'static, OSResult<ObjectMeta>> {
         let prefix_str = prefix.map(|p| {
             let p_str = p.as_ref();
             if self.base_path.starts_with('/') && !p_str.starts_with('/') {
@@ -328,7 +352,7 @@ impl ObjectStore for ObjectStoreAdapter {
                         let meta = ObjectMeta {
                             location,
                             last_modified: obj.last_modified,
-                            size: obj.size as usize,
+                            size: obj.size,
                             e_tag: obj.e_tag,
                             version: None,
                         };
@@ -374,7 +398,7 @@ impl ObjectStore for ObjectStoreAdapter {
                 ObjectMeta {
                     location,
                     last_modified: obj.last_modified,
-                    size: obj.size as usize,
+                    size: obj.size,
                     e_tag: obj.e_tag,
                     version: None,
                 }

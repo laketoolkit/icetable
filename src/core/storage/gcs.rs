@@ -22,9 +22,12 @@ impl GcsBackend {
     /// - Or GOOGLE_SERVICE_ACCOUNT_KEY (JSON content directly)
     /// - Or Application Default Credentials (ADC)
     ///
-    /// For bucket-specific operations, the bucket name is extracted from the path
-    pub async fn new() -> Result<Self> {
+    /// The bucket name is extracted from the gs:// path
+    pub async fn new(path: &str) -> Result<Self> {
+        let (bucket, _) = Self::parse_gcs_path(path)?;
+
         let store = GoogleCloudStorageBuilder::from_env()
+            .with_bucket_name(&bucket)
             .build()
             .map_err(|e| Error::Configuration {
                 message: format!("Failed to create GCS backend: {}", e),
@@ -116,7 +119,7 @@ impl StorageBackend for GcsBackend {
 
         if let Some((start, end)) = options.range {
             // Use range request
-            let range = (start as usize)..(end as usize);
+            let range = start..end;
             self.store
                 .get_range(&obj_path, range)
                 .await

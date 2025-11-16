@@ -22,9 +22,12 @@ impl AzureBackend {
     /// - AZURE_STORAGE_ACCOUNT_KEY or AZURE_STORAGE_SAS_TOKEN
     /// - Or AZURE_STORAGE_USE_EMULATOR for local development
     ///
-    /// For container-specific operations, the container name is extracted from the path
-    pub async fn new() -> Result<Self> {
+    /// The container name is extracted from the az:// or azure:// path
+    pub async fn new(path: &str) -> Result<Self> {
+        let (container, _) = Self::parse_azure_path(path)?;
+
         let store = MicrosoftAzureBuilder::from_env()
+            .with_container_name(&container)
             .build()
             .map_err(|e| Error::Configuration {
                 message: format!("Failed to create Azure backend: {}", e),
@@ -120,7 +123,7 @@ impl StorageBackend for AzureBackend {
 
         if let Some((start, end)) = options.range {
             // Use range request
-            let range = (start as usize)..(end as usize);
+            let range = start..end;
             self.store
                 .get_range(&obj_path, range)
                 .await

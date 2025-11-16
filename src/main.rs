@@ -9,11 +9,11 @@ use tabletools::cli::parser::{Cli, Commands};
 
 #[tokio::main]
 async fn main() {
-    // Initialize logger
-    env_logger::init();
-
     // Parse command-line arguments
     let cli = Cli::parse();
+
+    // Initialize logger with settings from CLI
+    tabletools::utils::init_logger(cli.log_level);
 
     // Execute command and handle errors
     let result = match cli.command {

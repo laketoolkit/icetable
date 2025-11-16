@@ -15,22 +15,50 @@ pub struct S3Backend {
 }
 
 impl S3Backend {
-    /// Create a new S3 backend from environment variables
+    /// Create a new S3 backend from environment variables and path
     ///
     /// Expects the following environment variables:
-    /// - AWS_REGION or AWS_DEFAULT_REGION
-    /// - AWS_ACCESS_KEY_ID (optional if using IAM roles)
-    /// - AWS_SECRET_ACCESS_KEY (optional if using IAM roles)
-    /// - AWS_SESSION_TOKEN (optional)
+    /// - AWS_ACCESS_KEY_ID
+    /// - AWS_SECRET_ACCESS_KEY
+    /// - AWS_ENDPOINT_URL (optional, for MinIO or custom S3 endpoints)
+    /// - AWS_REGION or AWS_DEFAULT_REGION (optional, defaults to us-east-1)
     ///
-    /// For bucket-specific operations, the bucket name is extracted from the path
-    pub async fn new() -> Result<Self> {
-        let store = AmazonS3Builder::from_env()
-            .build()
+    /// The bucket name is extracted from the s3:// path
+    pub async fn new(path: &str) -> Result<Self> {
+        log::debug!("Creating S3 backend for path: {}", path);
+        let (bucket, _) = Self::parse_s3_path(path)?;
+        log::debug!("Extracted bucket: {}", bucket);
+
+        // Build from environment, then explicitly set bucket
+        // The bucket from the path takes precedence over any environment variable
+        let mut builder = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket);
+
+        // For MinIO compatibility, configure endpoint and path style
+        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+            // Parse endpoint to extract host and port
+            if let Ok(endpoint_url) = url::Url::parse(&endpoint) {
+                if let Some(host) = endpoint_url.host_str() {
+                    builder = builder.with_endpoint(endpoint);
+
+                    // MinIO requires path-style URLs (bucket in path, not subdomain)
+                    builder = builder.with_virtual_hosted_style_request(false);
+
+                    // Allow HTTP if endpoint is not HTTPS
+                    if endpoint_url.scheme() == "http" {
+                        builder = builder.with_allow_http(true);
+                    }
+                }
+            }
+        }
+
+        log::debug!("Building S3 store with endpoint: {:?}", std::env::var("AWS_ENDPOINT_URL").ok());
+        let store = builder.build()
             .map_err(|e| Error::Configuration {
-                message: format!("Failed to create S3 backend: {}", e),
+                message: format!("Failed to create S3 backend: {}\nPath: {}\nMake sure AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_ENDPOINT_URL (for MinIO) are set.", e, path),
             })?;
 
+        log::debug!("S3 backend created successfully");
         Ok(Self {
             store: Arc::new(store),
         })
@@ -90,6 +118,7 @@ impl StorageBackend for S3Backend {
     }
 
     async fn head(&self, path: &str) -> Result<ObjectMetadata> {
+        log::debug!("S3 HEAD: {}", path);
         let (_, key) = Self::parse_s3_path(path)?;
         let obj_path = object_store::path::Path::from(key);
 
@@ -118,13 +147,15 @@ impl StorageBackend for S3Backend {
 
         if let Some((start, end)) = options.range {
             // Use range request
-            let range = (start as usize)..(end as usize);
+            log::debug!("S3 GET RANGE: {} (range {}-{})", path, start, end);
+            let range = start..end;
             self.store
                 .get_range(&obj_path, range)
                 .await
                 .map_err(|e| Error::General(format!("Failed to get S3 object range: {}", e)))
         } else {
             // Get full object
+            log::debug!("S3 GET FULL: {}", path);
             let result = self.store.get(&obj_path).await.map_err(|e| {
                 if matches!(e, object_store::Error::NotFound { .. }) {
                     Error::FileNotFound {

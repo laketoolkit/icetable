@@ -11,18 +11,18 @@ categories = ["command-line-utilities", "database"]
 
 [dependencies]
 # Apache Arrow ecosystem - use DataFusion's re-exported arrow
-datafusion = { version = "50.3.0", features = ["parquet"] }
+datafusion = { version = "49.0.2", features = ["parquet"] }
 
-# Arrow CSV/JSON readers - must match DataFusion's arrow version (56.2.0)
-arrow-csv = "56.2.0"
-arrow-json = "56.2.0"
+# Arrow CSV/JSON readers - must match DataFusion's arrow version (55.2.0)
+arrow-csv = "55.2.0"
+arrow-json = "55.2.0"
 
 # Table formats
-deltalake = { version = "0.29", features = ["s3", "gcs", "azure"], optional = true }
-iceberg = { version = "0.3", optional = true }
+deltalake = { version = "0.28.0", features = ["s3", "gcs", "azure"], optional = true }
+iceberg = { version = "0.7", optional = true }
 
 # Cloud storage abstraction
-object_store = { version = "0.11", features = ["aws", "gcp", "azure", "http"] }
+object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive", "cargo", "env"] }
@@ -72,7 +72,7 @@ tempfile = "3.13"
 tokio-test = "0.4"
 
 [features]
-default = ["delta", "tui"]
+default = ["delta", "iceberg", "tui"]
 delta = ["dep:deltalake"]
 iceberg = ["dep:iceberg"]
 tui = ["dep:ratatui", "dep:crossterm"]

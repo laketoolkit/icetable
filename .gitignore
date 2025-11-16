@@ -34,3 +34,4 @@ benches/results/
 **/*.arrow
 **/*.parquet
 **/data
+examples/**

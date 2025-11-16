@@ -188,15 +188,15 @@ impl StorageBackendFactory {
                 Ok(std::sync::Arc::new(backend))
             }
             "s3" => {
-                let backend = crate::core::storage::S3Backend::new().await?;
+                let backend = crate::core::storage::S3Backend::new(path).await?;
                 Ok(std::sync::Arc::new(backend))
             }
             "gcs" => {
-                let backend = crate::core::storage::GcsBackend::new().await?;
+                let backend = crate::core::storage::GcsBackend::new(path).await?;
                 Ok(std::sync::Arc::new(backend))
             }
             "azure" => {
-                let backend = crate::core::storage::AzureBackend::new().await?;
+                let backend = crate::core::storage::AzureBackend::new(path).await?;
                 Ok(std::sync::Arc::new(backend))
             }
             _ => Err(crate::error::Error::Configuration {

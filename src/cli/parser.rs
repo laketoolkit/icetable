@@ -16,9 +16,9 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Log level (error, warn, info, debug, trace)
-    #[arg(long, global = true, default_value = "info")]
-    pub log_level: String,
+    /// Log level (off, error, warn, info, debug, trace)
+    #[arg(long, global = true, default_value = "off", value_parser = parse_log_level)]
+    pub log_level: crate::utils::LogLevel,
 
     /// Log to file
     #[arg(long, global = true)]
@@ -273,4 +273,9 @@ pub struct TuiArgs {
     /// Refresh interval in seconds
     #[arg(short, long, default_value = "5")]
     pub refresh: u64,
+}
+
+/// Parse log level from string
+fn parse_log_level(s: &str) -> Result<crate::utils::LogLevel, String> {
+    s.parse()
 }

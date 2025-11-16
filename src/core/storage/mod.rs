@@ -14,6 +14,9 @@ pub mod s3;
 // ObjectStore adapter for DataFusion integration
 pub mod object_store_adapter;
 
+// Seekable reader for efficient remote file access
+pub mod seekable_reader;
+
 // Re-export core types
 pub use traits::{
     GetOptions, ListOptions, ListResult, ObjectMetadata, PutOptions, StorageBackend,
@@ -28,3 +31,6 @@ pub use s3::S3Backend;
 
 // Re-export adapter
 pub use object_store_adapter::ObjectStoreAdapter;
+
+// Re-export seekable reader
+pub use seekable_reader::SeekableReader;

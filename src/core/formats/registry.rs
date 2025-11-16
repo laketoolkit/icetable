@@ -139,21 +139,17 @@ impl FormatHandlerRegistry {
             Ok(Box::new(JsonHandler::new(path, storage)?))
         });
 
-        // Delta Lake (feature-gated) - TODO: Implement DeltaHandler
-        // #[cfg(feature = "delta")]
-        // self.register("delta", 80, |path, storage| {
-        //     Ok(Box::new(crate::core::formats::DeltaHandler::new(
-        //         path, storage,
-        //     )?))
-        // });
+        // Delta Lake (feature-gated)
+        #[cfg(feature = "delta")]
+        self.register("delta", 80, |path, storage| {
+            Ok(Box::new(super::DeltaHandler::new(path, storage)?))
+        });
 
-        // Iceberg (feature-gated) - TODO: Implement IcebergHandler
-        // #[cfg(feature = "iceberg")]
-        // self.register("iceberg", 80, |path, storage| {
-        //     Ok(Box::new(crate::core::formats::IcebergHandler::new(
-        //         path, storage,
-        //     )?))
-        // });
+        // Iceberg (feature-gated)
+        #[cfg(feature = "iceberg")]
+        self.register("iceberg", 80, |path, storage| {
+            Ok(Box::new(super::IcebergHandler::new(path, storage)?))
+        });
     }
 
     /// Get list of registered format names (for debugging)
