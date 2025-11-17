@@ -2,14 +2,15 @@
 //! Run with: cargo run --bin build_fixtures
 
 use datafusion::arrow::array::{
-    ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
-    TimestampMillisecondArray,
+    ArrayRef, BooleanArray, DictionaryArray, Float64Array, Int32Array, Int64Array, StringArray,
+    TimestampMillisecondArray, UInt16Array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UInt16Type};
 use datafusion::arrow::ipc::writer::FileWriter as ArrowFileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate_simple_arrow()?;
     generate_types_arrow()?;
     generate_larger_arrow()?;
+    generate_arrow_with_metadata()?;
 
     println!("Test fixtures generated successfully!");
     Ok(())
@@ -334,5 +336,93 @@ fn generate_larger_arrow() -> Result<(), Box<dyn std::error::Error>> {
     writer.finish()?;
 
     println!("Created: tests/fixtures/larger.arrow");
+    Ok(())
+}
+
+/// Generate Arrow IPC file with custom metadata and dictionary columns
+fn generate_arrow_with_metadata() -> Result<(), Box<dyn std::error::Error>> {
+    // Create schema with custom metadata and dictionary columns
+    let mut metadata = HashMap::new();
+    metadata.insert("writer.name".to_string(), "tabletools-test".to_string());
+    metadata.insert("writer.version".to_string(), "0.1.0".to_string());
+    metadata.insert("created_by".to_string(), "build_fixtures".to_string());
+    metadata.insert(
+        "description".to_string(),
+        "Test file with dictionaries and custom metadata".to_string(),
+    );
+
+    let schema = Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "category",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "status",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new("value", DataType::Int32, true),
+        ],
+        metadata,
+    );
+
+    let schema_ref = Arc::new(schema);
+
+    // Create output file
+    let file = File::create("tests/fixtures/with-metadata.arrow")?;
+    let mut writer = ArrowFileWriter::try_new(file, &schema_ref)?;
+
+    // Generate 3 record batches with dictionary-encoded data
+    for batch_num in 0..3 {
+        let batch_size = 1000;
+        let start_id = batch_num * batch_size;
+
+        // ID column
+        let ids: Vec<i32> = (start_id..start_id + batch_size).collect();
+        let id_array = Arc::new(Int32Array::from(ids)) as ArrayRef;
+
+        // Category dictionary column (3 categories)
+        let categories = vec!["Electronics", "Clothing", "Food"];
+        let category_values: Vec<u16> = (0..batch_size).map(|i| (i % 3) as u16).collect();
+
+        let category_keys = UInt16Array::from(category_values);
+        let category_dict: ArrayRef = Arc::new(StringArray::from(categories));
+        let category_array =
+            Arc::new(DictionaryArray::<UInt16Type>::try_new(category_keys, category_dict)?)
+                as ArrayRef;
+
+        // Status dictionary column (4 statuses)
+        let statuses = vec!["pending", "active", "completed", "cancelled"];
+        let status_values: Vec<u16> = (0..batch_size).map(|i| (i % 4) as u16).collect();
+
+        let status_keys = UInt16Array::from(status_values);
+        let status_dict: ArrayRef = Arc::new(StringArray::from(statuses));
+        let status_array =
+            Arc::new(DictionaryArray::<UInt16Type>::try_new(status_keys, status_dict)?) as ArrayRef;
+
+        // Value column (some nulls)
+        let values: Vec<Option<i32>> = (0..batch_size)
+            .map(|i| if i % 10 == 0 { None } else { Some(i * 100) })
+            .collect();
+        let value_array = Arc::new(Int32Array::from(values)) as ArrayRef;
+
+        let batch = RecordBatch::try_new(
+            schema_ref.clone(),
+            vec![id_array, category_array, status_array, value_array],
+        )?;
+
+        writer.write(&batch)?;
+    }
+
+    writer.finish()?;
+
+    println!("Created: tests/fixtures/with-metadata.arrow");
+    println!("  - 3 RecordBatches (3000 rows total)");
+    println!("  - 2 Dictionary columns (category, status)");
+    println!("  - 4 custom metadata entries");
+
     Ok(())
 }

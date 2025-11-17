@@ -297,12 +297,12 @@ impl OutputFormatter {
     /// # Arguments
     /// * `title` - Optional title to display centered in the top border
     /// * `lines` - Vector of content lines to display in the box
-    /// * `width` - Fixed width of the box (default 80)
+    /// * `width` - Fixed width of the box (default 100)
     ///
     /// # Returns
     /// A formatted string with the framed content
     pub fn framed_box(title: Option<&str>, lines: Vec<String>, width: Option<usize>) -> String {
-        let box_width = width.unwrap_or(80);
+        let box_width = width.unwrap_or(100);
         let content_width = box_width - 2; // -2 for left and right borders
 
         let mut output = Vec::new();

@@ -73,6 +73,10 @@ pub struct InspectArgs {
     #[arg(short, long)]
     pub metadata: bool,
 
+    /// Only show physical layout
+    #[arg(long)]
+    pub layout: bool,
+
     /// Show statistics
     #[arg(long)]
     pub stats: bool,
@@ -80,6 +84,10 @@ pub struct InspectArgs {
     /// Show data preview
     #[arg(short, long)]
     pub preview: bool,
+
+    /// Verbose mode (more detailed info)
+    #[arg(short, long)]
+    pub verbose: bool,
 
     /// Force specific format
     #[arg(short, long)]

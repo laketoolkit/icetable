@@ -1,5 +1,13 @@
 //! Inspect command implementation
 
+mod arrow;
+mod common;
+mod csv;
+mod delta;
+mod iceberg;
+mod json;
+mod parquet;
+
 use std::path::Path;
 
 use crate::cli::output::OutputFormatter;
@@ -9,12 +17,51 @@ use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
 use crate::error::Result;
 
+use common::PhysicalInspectOptions;
+
 /// Handler for inspect command
 pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
     pub async fn execute(args: InspectArgs) -> Result<()> {
+        // Check if any physical layout flags are set
+        let physical_mode = args.layout || (!args.schema && !args.metadata && !args.stats && !args.preview);
+
+        // If physical mode, use new physical layout inspection
+        if physical_mode {
+            return Self::execute_physical_inspect(args).await;
+        }
+
+        // Otherwise, use legacy inspect (for backwards compatibility)
+        Self::execute_legacy_inspect(args).await
+    }
+
+    /// Execute physical layout inspection (new mode)
+    async fn execute_physical_inspect(args: InspectArgs) -> Result<()> {
+        // 1. Create storage backend based on path
+        let storage = StorageBackendFactory::create_backend(&args.path).await?;
+
+        // 2. Build physical inspect options
+        let options = PhysicalInspectOptions::from_cli_args(
+            args.schema,
+            args.layout,
+            args.stats,
+            args.verbose,
+        );
+
+        // 3. Inspect physical layout
+        let path = Path::new(&args.path);
+        let result = self::inspect_physical_layout(path, storage, &options).await?;
+
+        // 4. Display result
+        println!("{}", result);
+
+        Ok(())
+    }
+
+    /// Execute legacy inspect (old mode, for backwards compatibility)
+    async fn execute_legacy_inspect(args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
         let storage = StorageBackendFactory::create_backend(&args.path).await?;
 
@@ -105,4 +152,63 @@ impl InspectCommand {
 
         Ok(())
     }
+}
+
+/// Inspect physical layout of a file
+async fn inspect_physical_layout(
+    path: &Path,
+    storage: std::sync::Arc<dyn crate::core::storage::StorageBackend>,
+    options: &PhysicalInspectOptions,
+) -> Result<String> {
+    // Detect format and dispatch to appropriate inspector
+    let extension = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let result = match extension.as_str() {
+        "parquet" => {
+            let result = parquet::inspect_parquet_layout(path, storage, options).await?;
+            result.render("Apache Parquet File")
+        }
+        "arrow" | "ipc" => {
+            let result = arrow::inspect_arrow_layout(path, storage, options).await?;
+            result.render("Apache Arrow IPC File")
+        }
+        "csv" => {
+            let result = csv::inspect_csv_layout(path, storage, options).await?;
+            result.render("CSV File")
+        }
+        "json" | "jsonl" | "ndjson" => {
+            let result = json::inspect_json_layout(path, storage, options).await?;
+            result.render("JSON File")
+        }
+        _ => {
+            // Try Delta Lake (directory-based) - check for _delta_log
+            let path_str = path.to_str().unwrap_or("");
+            let delta_log_path = format!("{}/_delta_log", path_str);
+
+            if storage.exists(&delta_log_path).await.unwrap_or(false) {
+                let result = delta::inspect_delta_layout(path, storage, options).await?;
+                return Ok(result.render("Delta Lake Table"));
+            }
+
+            // Check for Iceberg metadata
+            let metadata_path = format!("{}/metadata", path_str);
+            if storage.exists(&metadata_path).await.unwrap_or(false) {
+                let result = iceberg::inspect_iceberg_layout(path, storage, options).await?;
+                return Ok(result.render("Apache Iceberg Table"));
+            }
+
+            return Err(crate::error::Error::InvalidFormat {
+                message: format!(
+                    "Unsupported file format for physical inspection: {}",
+                    extension
+                ),
+            });
+        }
+    };
+
+    Ok(result)
 }
