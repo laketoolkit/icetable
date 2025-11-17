@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{Schema as ArrowSchema, DataType, Field, Fields, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
+use iceberg::TableIdent;
 use iceberg::io::FileIOBuilder;
 use iceberg::table::StaticTable;
-use iceberg::TableIdent;
 
+use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
 use crate::core::storage::StorageBackend;
 use crate::error::{Error, Result};
@@ -64,16 +65,15 @@ impl IcebergHandler {
             .map_err(|e| Error::General(format!("Failed to create table identifier: {}", e)))?;
 
         // Load the static table from the metadata file
-        let table = StaticTable::from_metadata_file(
-            &metadata_location,
-            table_ident,
-            file_io.clone(),
-        )
-        .await
-        .map_err(|e| Error::General(format!(
-            "Failed to load Iceberg table from '{}': {}",
-            metadata_location, e
-        )))?;
+        let table =
+            StaticTable::from_metadata_file(&metadata_location, table_ident, file_io.clone())
+                .await
+                .map_err(|e| {
+                    Error::General(format!(
+                        "Failed to load Iceberg table from '{}': {}",
+                        metadata_location, e
+                    ))
+                })?;
 
         Ok(table)
     }
@@ -100,7 +100,9 @@ impl IcebergHandler {
         let components: Vec<&str> = table_path.split('/').filter(|s| !s.is_empty()).collect();
 
         if components.is_empty() {
-            return Err(Error::General("Invalid Iceberg path: empty path".to_string()));
+            return Err(Error::General(
+                "Invalid Iceberg path: empty path".to_string(),
+            ));
         }
 
         // Try to parse path structure
@@ -111,9 +113,9 @@ impl IcebergHandler {
 
         let (warehouse, namespace, table_name) = if components.len() >= 3 {
             // Format: warehouse/namespace/table
-            let warehouse = components[..components.len()-2].join("/");
-            let namespace = components[components.len()-2].to_string();
-            let table = components[components.len()-1].to_string();
+            let warehouse = components[..components.len() - 2].join("/");
+            let namespace = components[components.len() - 2].to_string();
+            let table = components[components.len() - 1].to_string();
             (warehouse, namespace, table)
         } else if components.len() == 2 {
             // Format: warehouse/table or namespace/table
@@ -136,16 +138,13 @@ impl IcebergHandler {
         let struct_type = iceberg_schema.as_struct();
 
         // Convert each field
-        let fields: Result<Vec<Field>> = struct_type.fields()
+        let fields: Result<Vec<Field>> = struct_type
+            .fields()
             .iter()
             .map(|field| {
                 // Convert the iceberg field to an arrow field
                 let data_type = Self::iceberg_type_to_arrow(&field.field_type)?;
-                Ok(Field::new(
-                    field.name.clone(),
-                    data_type,
-                    field.required,
-                ))
+                Ok(Field::new(field.name.clone(), data_type, field.required))
             })
             .collect();
 
@@ -166,9 +165,15 @@ impl IcebergHandler {
                 PrimitiveType::Date => Ok(DataType::Date32),
                 PrimitiveType::Time => Ok(DataType::Time64(TimeUnit::Microsecond)),
                 PrimitiveType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-                PrimitiveType::Timestamptz => Ok(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))),
+                PrimitiveType::Timestamptz => Ok(DataType::Timestamp(
+                    TimeUnit::Microsecond,
+                    Some("UTC".into()),
+                )),
                 PrimitiveType::TimestampNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-                PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))),
+                PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    Some("UTC".into()),
+                )),
                 PrimitiveType::String => Ok(DataType::Utf8),
                 PrimitiveType::Uuid => Ok(DataType::FixedSizeBinary(16)),
                 PrimitiveType::Fixed(size) => Ok(DataType::FixedSizeBinary(*size as i32)),
@@ -183,16 +188,12 @@ impl IcebergHandler {
                     feature: "Nested struct types in Iceberg not yet fully supported".to_string(),
                 })
             }
-            iceberg::spec::Type::List(_) => {
-                Err(Error::UnsupportedFeature {
-                    feature: "List types in Iceberg not yet fully supported".to_string(),
-                })
-            }
-            iceberg::spec::Type::Map(_) => {
-                Err(Error::UnsupportedFeature {
-                    feature: "Map types in Iceberg not yet fully supported".to_string(),
-                })
-            }
+            iceberg::spec::Type::List(_) => Err(Error::UnsupportedFeature {
+                feature: "List types in Iceberg not yet fully supported".to_string(),
+            }),
+            iceberg::spec::Type::Map(_) => Err(Error::UnsupportedFeature {
+                feature: "Map types in Iceberg not yet fully supported".to_string(),
+            }),
         }
     }
 }
@@ -253,7 +254,10 @@ impl FormatHandler for IcebergHandler {
 
         // Get current snapshot info
         if let Some(snapshot) = metadata.current_snapshot() {
-            metadata_map.insert("snapshot_id".to_string(), snapshot.snapshot_id().to_string());
+            metadata_map.insert(
+                "snapshot_id".to_string(),
+                snapshot.snapshot_id().to_string(),
+            );
             metadata_map.insert(
                 "timestamp_ms".to_string(),
                 snapshot.timestamp_ms().to_string(),
@@ -284,17 +288,8 @@ impl FormatHandler for IcebergHandler {
 
     async fn read_batch(&self, options: &ReadOptions) -> Result<RecordBatch> {
         let batches = self.read_batches(options).await?;
-
-        if batches.is_empty() {
-            let schema = self.read_schema().await?;
-            Ok(RecordBatch::new_empty(schema))
-        } else if batches.len() == 1 {
-            Ok(batches.into_iter().next().unwrap())
-        } else {
-            let schema = batches[0].schema();
-            datafusion::arrow::compute::concat_batches(&schema, &batches)
-                .map_err(|e| Error::Arrow(e))
-        }
+        let schema = self.read_schema().await?;
+        table_utils::merge_batches(batches, schema)
     }
 
     async fn read_batches(&self, options: &ReadOptions) -> Result<Vec<RecordBatch>> {
@@ -320,56 +315,21 @@ impl FormatHandler for IcebergHandler {
             .await
             .map_err(|e| Error::General(format!("Failed to execute Iceberg scan: {}", e)))?;
 
+        // Read all batches from the stream
         use futures::stream::StreamExt;
         let mut batches = Vec::new();
 
         let mut stream = std::pin::pin!(stream);
         while let Some(batch_result) = stream.next().await {
-            let batch = batch_result
-                .map_err(|e| Error::General(format!("Failed to read batch: {}", e)))?;
+            let batch =
+                batch_result.map_err(|e| Error::General(format!("Failed to read batch: {}", e)))?;
             batches.push(batch);
         }
 
-        // Apply offset and limit using simple total_rows counter
+        // Apply pagination using table_utils
         let offset = options.offset().unwrap_or(0);
         let limit = options.limit().unwrap_or(usize::MAX);
-        let mut result_batches = Vec::new();
-        let mut total_rows_processed = 0usize;
-        let mut total_rows_collected = 0usize;
-
-        for batch in batches {
-            let batch_rows = batch.num_rows();
-
-            // Skip batches before offset
-            if total_rows_processed + batch_rows <= offset {
-                total_rows_processed += batch_rows;
-                continue;
-            }
-
-            // If we've collected enough rows, stop
-            if total_rows_collected >= limit {
-                break;
-            }
-
-            // Calculate which portion of this batch to include
-            let skip_rows = if total_rows_processed < offset {
-                offset - total_rows_processed
-            } else {
-                0
-            };
-
-            let take_rows = (batch_rows - skip_rows).min(limit - total_rows_collected);
-
-            if take_rows > 0 {
-                let sliced_batch = batch.slice(skip_rows, take_rows);
-                total_rows_collected += take_rows;
-                result_batches.push(sliced_batch);
-            }
-
-            total_rows_processed += batch_rows;
-        }
-
-        Ok(result_batches)
+        table_utils::apply_batch_pagination(batches, offset, limit)
     }
 
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>> {
@@ -419,8 +379,8 @@ impl FormatHandler for IcebergHandler {
             }
             Err(e) => {
                 report
-                        .errors
-                        .push(format!("Failed to open Iceberg table: {}", e));
+                    .errors
+                    .push(format!("Failed to open Iceberg table: {}", e));
                 report.is_valid = false;
             }
         }

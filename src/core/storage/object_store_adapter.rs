@@ -5,12 +5,12 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::path::Path as ObjectPath;
 use object_store::{
-    GetOptions as OSGetOptions, GetResult, ListResult as OSListResult, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions as OSPutOptions, PutPayload, PutResult,
+    GetOptions as OSGetOptions, GetResult, ListResult as OSListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions as OSPutOptions, PutPayload, PutResult,
     Result as OSResult,
 };
 use std::fmt;
@@ -18,7 +18,10 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::traits::{GetOptions, ListOptions, ObjectMetadata, PutOptions, StorageBackend};
-use crate::error::{Error, Result};
+use crate::error::Error;
+
+#[cfg(test)]
+use crate::error::Result;
 
 /// Adapter that implements object_store::ObjectStore using our StorageBackend
 ///
@@ -62,8 +65,8 @@ impl ObjectStoreAdapter {
                 // Path is already absolute
                 path_str.to_string()
             } else {
-                // DataFusion removed the leading slash, add it back
-                format!("/{}", path_str)
+                // Relative path - concatenate with base_path
+                format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
             }
         }
         // Cloud storage (S3/GCS/Azure): DataFusion passes paths relative to bucket
@@ -95,24 +98,20 @@ impl ObjectStoreAdapter {
     /// Convert our Error to ObjectStore error
     fn to_object_store_error(error: Error) -> object_store::Error {
         match error {
-            Error::FileNotFound { path } => {
-                object_store::Error::NotFound {
-                    path: path.to_string_lossy().to_string(),
-                    source: Box::new(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("File not found: {:?}", path),
-                    )),
-                }
-            }
-            Error::PermissionDenied { path } => {
-                object_store::Error::Generic {
-                    store: "storage_backend",
-                    source: Box::new(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!("Permission denied: {:?}", path),
-                    )),
-                }
-            }
+            Error::FileNotFound { path } => object_store::Error::NotFound {
+                path: path.to_string_lossy().to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("File not found: {:?}", path),
+                )),
+            },
+            Error::PermissionDenied { path } => object_store::Error::Generic {
+                store: "storage_backend",
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Permission denied: {:?}", path),
+                )),
+            },
             Error::Io(e) => object_store::Error::Generic {
                 store: "storage_backend",
                 source: Box::new(e),
@@ -186,7 +185,7 @@ impl ObjectStore for ObjectStoreAdapter {
     async fn put_multipart_opts(
         &self,
         location: &ObjectPath,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> OSResult<Box<dyn MultipartUpload>> {
         self.put_multipart(location).await
     }
@@ -483,10 +482,7 @@ mod tests {
         tokio::fs::write(&test_file, b"test data").await?;
 
         let backend = Arc::new(LocalBackend::new()?);
-        let adapter = ObjectStoreAdapter::new(
-            backend,
-            temp_path.to_string_lossy().to_string(),
-        );
+        let adapter = ObjectStoreAdapter::new(backend, temp_path.to_string_lossy().to_string());
 
         let obj_path = ObjectPath::from("test.txt");
         let meta = adapter.head(&obj_path).await.unwrap();
@@ -506,10 +502,7 @@ mod tests {
         tokio::fs::write(&test_file, b"test data").await?;
 
         let backend = Arc::new(LocalBackend::new()?);
-        let adapter = ObjectStoreAdapter::new(
-            backend,
-            temp_path.to_string_lossy().to_string(),
-        );
+        let adapter = ObjectStoreAdapter::new(backend, temp_path.to_string_lossy().to_string());
 
         let obj_path = ObjectPath::from("test.txt");
         let result = adapter.get(&obj_path).await.unwrap();
@@ -538,10 +531,7 @@ mod tests {
         tokio::fs::write(&test_file, b"0123456789").await?;
 
         let backend = Arc::new(LocalBackend::new()?);
-        let adapter = ObjectStoreAdapter::new(
-            backend,
-            temp_path.to_string_lossy().to_string(),
-        );
+        let adapter = ObjectStoreAdapter::new(backend, temp_path.to_string_lossy().to_string());
 
         let obj_path = ObjectPath::from("test.txt");
         let bytes = adapter.get_range(&obj_path, 2..5).await.unwrap();

@@ -125,6 +125,7 @@ pub struct FilterStep {
 }
 
 impl FilterStep {
+    /// Creates a new filter step with the given expression
     pub fn new(expression: impl Into<String>) -> Self {
         Self {
             expression: expression.into(),
@@ -148,6 +149,7 @@ pub struct ProjectStep {
 }
 
 impl ProjectStep {
+    /// Creates a new project step with the specified columns to select
     pub fn new(columns: Vec<String>) -> Self {
         Self { columns }
     }
@@ -169,6 +171,7 @@ pub struct RenameStep {
 }
 
 impl RenameStep {
+    /// Creates a new rename step with the mapping of old to new column names
     pub fn new(renames: HashMap<String, String>) -> Self {
         Self { renames }
     }
@@ -190,6 +193,7 @@ pub struct CastStep {
 }
 
 impl CastStep {
+    /// Creates a new cast step with the mapping of column names to target data types
     pub fn new(casts: HashMap<String, datafusion::arrow::datatypes::DataType>) -> Self {
         Self { casts }
     }
@@ -229,6 +233,7 @@ impl<F> CustomTransformStep<F>
 where
     F: Fn(RecordBatch) -> Result<RecordBatch> + Send + Sync,
 {
+    /// Creates a new custom transformation step with the given name and function
     pub fn new(name: impl Into<String>, transform_fn: F) -> Self {
         Self {
             name: name.into(),

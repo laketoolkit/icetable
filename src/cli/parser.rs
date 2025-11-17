@@ -24,6 +24,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub log_file: Option<PathBuf>,
 
+    /// The command to execute
     #[command(subcommand)]
     pub command: Commands,
 }

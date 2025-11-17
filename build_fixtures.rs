@@ -126,7 +126,9 @@ fn generate_types_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/types.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::GZIP(Default::default()))
+        .set_compression(datafusion::parquet::basic::Compression::GZIP(
+            Default::default(),
+        ))
         .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page)
         .build();
 
@@ -177,7 +179,9 @@ fn generate_larger_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/larger.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::ZSTD(Default::default()))
+        .set_compression(datafusion::parquet::basic::Compression::ZSTD(
+            Default::default(),
+        ))
         .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page)
         .build();
 

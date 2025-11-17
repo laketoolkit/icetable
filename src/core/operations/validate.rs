@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::core::formats::{FormatHandler, ValidationReport};
+use crate::core::formats::FormatHandler;
 use crate::error::Result;
 
 /// Operation for validating tables

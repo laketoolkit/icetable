@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use crate::cli::output::{OutputFormatter, SeverityIcon, StatusIcon};
 use crate::cli::parser::ValidateArgs;
 use crate::core::formats::{FormatHandler, FormatHandlerRegistry};
 use crate::core::operations::validate::ValidateOperation;

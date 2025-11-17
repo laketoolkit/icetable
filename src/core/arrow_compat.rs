@@ -103,7 +103,9 @@ fn serialize_batch_to_ipc(batch: &datafusion::arrow::record_batch::RecordBatch) 
 }
 
 /// Serialize multiple arrow v54 RecordBatches to IPC stream format
-fn serialize_batches_to_ipc(batches: &[datafusion::arrow::record_batch::RecordBatch]) -> Result<Bytes> {
+fn serialize_batches_to_ipc(
+    batches: &[datafusion::arrow::record_batch::RecordBatch],
+) -> Result<Bytes> {
     use datafusion::arrow::ipc::writer::StreamWriter;
 
     if batches.is_empty() {
@@ -134,7 +136,9 @@ fn serialize_batches_to_ipc(batches: &[datafusion::arrow::record_batch::RecordBa
 }
 
 /// Deserialize arrow v54 RecordBatch from IPC format
-fn deserialize_batch_from_ipc(bytes: &[u8]) -> Result<datafusion::arrow::record_batch::RecordBatch> {
+fn deserialize_batch_from_ipc(
+    bytes: &[u8],
+) -> Result<datafusion::arrow::record_batch::RecordBatch> {
     use datafusion::arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 

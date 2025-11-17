@@ -1,9 +1,9 @@
 //! Output formatting utilities
 
-use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets};
+use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::formats::{ColumnStats, FileMetadata};
@@ -678,8 +678,9 @@ impl OutputFormatter {
                     let cell = Cell::new("null").fg(Color::Red);
                     row_data.push(cell);
                 } else {
-                    let value = datafusion::arrow::util::display::array_value_to_string(col, row_idx)
-                        .unwrap_or_else(|_| "Error".to_string());
+                    let value =
+                        datafusion::arrow::util::display::array_value_to_string(col, row_idx)
+                            .unwrap_or_else(|_| "Error".to_string());
                     row_data.push(Cell::new(value));
                 }
             }
@@ -1058,7 +1059,6 @@ impl OutputFormatter {
                 schema_diff.columns_removed.len()
             ));
             for col in &schema_diff.columns_removed {
-                let nullable_str = if col.nullable { "nullable" } else { "non-null" };
                 output.push(format!(
                     "  {} {:<20} {}",
                     "-".red(),
@@ -1087,7 +1087,7 @@ impl OutputFormatter {
                         change_str
                     ));
                 }
-                if let Some((old_nullable, new_nullable)) = col.nullability_change {
+                if let Some((_old_nullable, new_nullable)) = col.nullability_change {
                     let null_change = if new_nullable {
                         "non-null → nullable"
                     } else {

@@ -25,11 +25,15 @@ impl FileReference {
             // User provided explicit alias - use it
             a.clone()
         } else {
-            // No alias - generate unique table name from path hash
-            // Use first 8 hex chars of xxhash to avoid conflicts with SQL keywords
-            use xxhash_rust::xxh3::xxh3_64;
-            let hash = xxh3_64(path.as_bytes());
-            format!("t_{:08x}", (hash & 0xFFFFFFFF) as u32)
+            // No alias - extract filename without extension
+            // Example: "data/flights.parquet" -> "flights"
+            use std::path::Path;
+            let path_obj = Path::new(&path);
+            path_obj
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("table")
+                .to_string()
         };
 
         Self {
@@ -52,8 +56,8 @@ impl SqlPathExtractor {
             // - Case-insensitive FROM or JOIN
             // - Followed by whitespace
             // - Single or double quoted file path
-            // - Optional AS keyword with alias (only capture alias if AS is present)
-            Regex::new(r#"(?i)(FROM|JOIN)\s+['"]([^'"]+)['"]\s*(?:AS\s+(\w+))?"#)
+            // - Optional AS keyword with alias OR just identifier (capture both)
+            Regex::new(r#"(?i)(FROM|JOIN)\s+['"]([^'"]+)['"]\s*(?:AS\s+)?(\w+)?"#)
                 .expect("Failed to compile SQL path extraction regex")
         })
     }
@@ -291,15 +295,9 @@ mod tests {
     #[test]
     fn test_rewrite_sql_single_file() {
         let sql = "SELECT * FROM 'data/flights.parquet' WHERE year > 2020";
-        let refs = vec![FileReference::new(
-            "data/flights.parquet".to_string(),
-            None,
-        )];
+        let refs = vec![FileReference::new("data/flights.parquet".to_string(), None)];
         let rewritten = SqlPathExtractor::rewrite_sql(sql, &refs);
-        assert_eq!(
-            rewritten,
-            "SELECT * FROM flights WHERE year > 2020"
-        );
+        assert_eq!(rewritten, "SELECT * FROM flights WHERE year > 2020");
     }
 
     #[test]

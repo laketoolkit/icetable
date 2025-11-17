@@ -5,6 +5,10 @@
 
 pub mod traits;
 
+// Core infrastructure for cloud storage backends
+pub mod base;
+pub mod path_parser;
+
 // Storage implementations - these will be implemented by Rust-Developer
 pub mod azure;
 pub mod gcs;
@@ -14,7 +18,7 @@ pub mod s3;
 // ObjectStore adapter for DataFusion integration
 pub mod object_store_adapter;
 
-// Seekable reader for efficient remote file access
+/// Seekable reader for efficient remote file access
 pub mod seekable_reader;
 
 // Re-export core types

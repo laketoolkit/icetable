@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 
 use super::traits::StorageBackend;
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// A seekable reader that uses range requests to read from remote storage
 ///
@@ -67,7 +67,8 @@ impl SeekableReader {
         let backend = self.backend.clone();
         let path = self.path.clone();
         let bytes = tokio::task::block_in_place(|| {
-            self.handle.block_on(backend.get_range(&path, start, fetch_end))
+            self.handle
+                .block_on(backend.get_range(&path, start, fetch_end))
         })?;
 
         // Cache the fetched chunk

@@ -7,6 +7,7 @@ pub struct BoxLayout {
     style: BoxStyle,
 }
 
+/// Box border style options
 #[derive(Debug, Clone, Copy)]
 pub enum BoxStyle {
     /// Bordes redondeados (╭─╮│╰╯)

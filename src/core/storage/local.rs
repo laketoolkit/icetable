@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::core::storage::traits::*;
 use crate::error::{Error, Result};

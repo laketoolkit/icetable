@@ -55,7 +55,7 @@ impl QueryResult {
     /// Apply a limit to the result batches
     ///
     /// Returns a new QueryResult with at most `limit` rows
-    pub fn with_limit(mut self, limit: usize) -> Self {
+    pub fn with_limit(self, limit: usize) -> Self {
         if self.row_count <= limit {
             return self;
         }

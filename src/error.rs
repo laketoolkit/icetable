@@ -16,65 +16,113 @@ pub enum Error {
 
     /// File not found errors with context
     #[error("File not found: {path}")]
-    FileNotFound { path: PathBuf },
+    FileNotFound {
+        /// The path to the file that was not found
+        path: PathBuf,
+    },
 
     /// Permission denied errors
     #[error("Permission denied accessing: {path}")]
-    PermissionDenied { path: PathBuf },
+    PermissionDenied {
+        /// The path that could not be accessed
+        path: PathBuf,
+    },
 
     /// Errors parsing or reading table formats
     #[error("Parse error: {message}")]
     Parse {
+        /// The error message describing what failed
         message: String,
+        /// The underlying error source, if available
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// Corrupted file errors
     #[error("Corrupted file: {path} - {reason}")]
-    CorruptedFile { path: PathBuf, reason: String },
+    CorruptedFile {
+        /// The path to the corrupted file
+        path: PathBuf,
+        /// The reason the file is considered corrupted
+        reason: String,
+    },
 
     /// Invalid format errors
     #[error("Invalid format: {message}")]
-    InvalidFormat { message: String },
+    InvalidFormat {
+        /// The error message describing the format issue
+        message: String,
+    },
 
     /// Schema validation errors
     #[error("Schema validation failed: {message}")]
-    SchemaValidation { message: String },
+    SchemaValidation {
+        /// The error message describing the validation failure
+        message: String,
+    },
 
     /// Data validation errors
     #[error("Data validation failed: {message}")]
-    DataValidation { message: String },
+    DataValidation {
+        /// The error message describing the data validation failure
+        message: String,
+    },
 
     /// Type conversion errors
     #[error("Type conversion error: {message}")]
-    TypeConversion { message: String },
+    TypeConversion {
+        /// The error message describing the conversion failure
+        message: String,
+    },
 
     /// Unsupported feature errors
     #[error("Unsupported feature: {feature}")]
-    UnsupportedFeature { feature: String },
+    UnsupportedFeature {
+        /// The name of the unsupported feature
+        feature: String,
+    },
 
     /// Cloud storage authentication errors
     #[error("Authentication failed for {provider}: {message}")]
-    AuthenticationFailed { provider: String, message: String },
+    AuthenticationFailed {
+        /// The cloud storage provider (e.g., S3, GCS, Azure)
+        provider: String,
+        /// The error message describing the authentication failure
+        message: String,
+    },
 
     /// Cloud storage network errors
     #[error("Network error: {message}")]
     Network {
+        /// The error message describing the network failure
         message: String,
+        /// The underlying error source, if available
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
     /// Timeout errors
     #[error("Operation timed out after {seconds}s: {operation}")]
-    Timeout { operation: String, seconds: u64 },
+    Timeout {
+        /// The operation that timed out
+        operation: String,
+        /// The timeout duration in seconds
+        seconds: u64,
+    },
 
     /// Cloud storage access denied
     #[error("Access denied to {path}: {message}")]
-    AccessDenied { path: String, message: String },
+    AccessDenied {
+        /// The path or resource that was denied
+        path: String,
+        /// The error message describing the access denial
+        message: String,
+    },
 
     /// Configuration errors
     #[error("Configuration error: {message}")]
-    Configuration { message: String },
+    Configuration {
+        /// The error message describing the configuration issue
+        message: String,
+    },
 
     /// Arrow-specific errors
     #[error("Arrow error: {0}")]

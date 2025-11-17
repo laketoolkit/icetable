@@ -4,9 +4,9 @@
 //! This provides a unified interface for working with different table formats
 //! (Parquet, Arrow, Iceberg, Delta Lake, etc.)
 
+use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
 

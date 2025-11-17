@@ -69,7 +69,7 @@ impl std::fmt::Display for LogLevel {
 pub fn init_logger(log_level: LogLevel) {
     env_logger::Builder::from_default_env()
         .filter_level(log_level.to_level_filter())
-        .format_timestamp_millis()  // Show timestamps with millisecond precision
+        .format_timestamp_millis() // Show timestamps with millisecond precision
         .format_module_path(false)
         .init();
 

@@ -59,6 +59,7 @@ log = "0.4"
 env_logger = "0.11"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 strip-ansi-escapes = "0.2"
+num-traits = "0.2"
 
 # Terminal UI (for tui command)
 ratatui = { version = "0.29", optional = true }

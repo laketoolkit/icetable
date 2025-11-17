@@ -3,6 +3,19 @@
 //! This module contains implementations of the FormatHandler trait for various
 //! table formats including Parquet, Arrow IPC, CSV, JSON, Delta Lake, and Iceberg.
 
+// Base infrastructure (Strategy pattern)
+pub mod base;
+pub mod strategies;
+
+// Utilities for table formats
+pub mod table_utils;
+
+// Strategy implementations
+pub mod arrow_strategy;
+pub mod csv_strategy;
+pub mod json_strategy;
+pub mod parquet_strategy;
+
 pub mod registry;
 pub mod traits;
 
@@ -26,10 +39,10 @@ pub use traits::{
 };
 
 // Re-export format handlers
+pub use self::parquet::ParquetHandler;
 pub use arrow::ArrowHandler;
 pub use csv::CsvHandler;
 pub use json::JsonHandler;
-pub use self::parquet::ParquetHandler;
 
 #[cfg(feature = "delta")]
 pub use delta::DeltaHandler;

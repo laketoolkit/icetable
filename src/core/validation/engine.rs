@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::Schema;
 use regex::Regex;
 
 use super::rules::{RuleResult, RuleType, Severity, ValidationRule, ValidationRules};

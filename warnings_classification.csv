@@ -1,0 +1,34 @@
+ID,Archivo,Linea,Tipo,Item,Clasificacion,Razon,Accion,Prioridad,Esfuerzo_Min
+1,cli/commands/validate.rs,5,unused import,OutputFormatter,A - CODIGO MUERTO,Nunca usado en el archivo,Eliminar,Media,1
+2,cli/commands/validate.rs,5,unused import,SeverityIcon,A - CODIGO MUERTO,Nunca usado en el archivo,Eliminar,Media,1
+3,cli/commands/validate.rs,5,unused import,StatusIcon,A - CODIGO MUERTO,Nunca usado en el archivo,Eliminar,Media,1
+4,core/operations/query/table_registry.rs,534,unused import,ArrayData,D - FALSE POSITIVE,Si se usa en linea 540,Ignorar,N/A,0
+5,core/operations/query/table_registry.rs,534,unused import,make_array,D - FALSE POSITIVE,Si se usa en linea 572,Ignorar,N/A,0
+6,core/operations/validate.rs,7,unused import,ValidationReport,A - CODIGO MUERTO,Import mal ubicado,Eliminar,Baja,1
+7,core/storage/traits.rs,9,unused import,std::path::Path,A - CODIGO MUERTO,Residual de refactor,Eliminar,Baja,1
+8,core/storage/local.rs,6,unused import,Path,D - FALSE POSITIVE,Usado en linea 23,Ignorar,N/A,0
+9,core/storage/object_store_adapter.rs,21,unused import,Result,A - CODIGO MUERTO,No se usa en el archivo,Eliminar,Media,1
+10,core/storage/seekable_reader.rs,7,unused import,Error,A - CODIGO MUERTO,No se usa en el archivo,Eliminar,Media,1
+11,core/validation/engine.rs,6,unused import,DataType,A - CODIGO MUERTO,Residual de refactor,Eliminar,Baja,1
+12,cli/output/formatter.rs,1062,unused variable,nullable_str,A - CODIGO MUERTO,Variable computada pero no usada,Eliminar o usar,Baja,1
+13,cli/output/formatter.rs,1091,unused variable,old_nullable,B - NO CONECTADO,Destructurado pero no necesario,Prefixar con _,Baja,1
+14,core/storage/traits.rs,136,unused variable,path,C - PREPARATORIO,Default impl de trait method,Prefixar con _,Baja,1
+15,core/storage/traits.rs,136,unused variable,expires_in,C - PREPARATORIO,Default impl de trait method,Prefixar con _,Baja,1
+16,utils/cache.rs,15,unused variable,path,C - PREPARATORIO,Stub TODO no implementado,Prefixar con _,Baja,1
+17,utils/cache.rs,21,unused variable,path,C - PREPARATORIO,Stub TODO no implementado,Prefixar con _,Baja,1
+18,utils/cache.rs,21,unused variable,data,C - PREPARATORIO,Stub TODO no implementado,Prefixar con _,Baja,1
+19,cli/output/formatter.rs,954,unused function,has_metadata_changes,D - FALSE POSITIVE,Funcion privada si usada,Mantener,N/A,0
+20,cli/output/formatter.rs,1001,unused function,format_metadata_diff,D - FALSE POSITIVE,Wrapper usado internamente,Mantener,N/A,0
+21,cli/output/formatter.rs,1111,unused function,format_schema_diff_visual,D - FALSE POSITIVE,Helper privado usado,Mantener,N/A,0
+22,cli/output/formatter.rs,1220,unused function,format_metadata_diff_visual,D - FALSE POSITIVE,Helper privado usado,Mantener,N/A,0
+23,cli/output/formatter.rs,?,unused function,format_schema_diff,D - FALSE POSITIVE,Helper privado usado,Mantener,N/A,0
+24,cli/output/formatter.rs,?,unused function,format_column_stats_diff,D - FALSE POSITIVE,Helper privado usado,Mantener,N/A,0
+25,core/formats/iceberg.rs,87,unused function,parse_iceberg_path,C - PREPARATORIO,API de backward compatibility,Agregar #[allow],Baja,1
+26,core/storage/s3.rs,87,unused function,parse_s3_path,C - PREPARATORIO,API de backward compatibility,Agregar #[allow],Baja,1
+27,core/storage/gcs.rs,62,unused function,parse_gcs_path,C - PREPARATORIO,API de backward compatibility,Agregar #[allow],Baja,1
+28,core/storage/azure.rs,65,unused function,parse_azure_path,C - PREPARATORIO,API de backward compatibility,Agregar #[allow],Baja,1
+29,core/storage/object_store_adapter.rs,13,deprecation,PutMultipartOpts,B - NO CONECTADO,API deprecada en object_store crate,Actualizar a PutMultipartOptions,Media,1
+30,core/storage/object_store_adapter.rs,185,deprecation,PutMultipartOpts,B - NO CONECTADO,API deprecada en object_store crate,Actualizar a PutMultipartOptions,Media,1
+31,core/operations/query/operation.rs,58,unnecessary mut,variable,A - CODIGO MUERTO,Variable no se modifica,Eliminar mut,Baja,1
+32,cli/output/box_layout.rs,90,field never read,cross,C - PREPARATORIO,Char para layouts futuros,Mantener,N/A,0
+33,utils/progress.rs,21,field never read,mode,C - PREPARATORIO,Field para introspection,Mantener,N/A,0

@@ -65,7 +65,10 @@ impl QueryTableRegistry {
         let is_parquet = extension == "parquet";
 
         if is_arrow {
-            log::debug!("Using DataFusion native Arrow IPC streaming for: {}", file_ref.path);
+            log::debug!(
+                "Using DataFusion native Arrow IPC streaming for: {}",
+                file_ref.path
+            );
 
             // Create storage backend
             let storage = StorageBackendFactory::create_backend(&file_ref.path).await?;
@@ -73,7 +76,8 @@ impl QueryTableRegistry {
             // For local files, convert to absolute path upfront
             let abs_path_local = if !file_ref.path.starts_with("s3://")
                 && !file_ref.path.starts_with("gs://")
-                && !file_ref.path.starts_with("az://") {
+                && !file_ref.path.starts_with("az://")
+            {
                 Some(if path.is_absolute() {
                     path.to_path_buf()
                 } else {
@@ -88,13 +92,15 @@ impl QueryTableRegistry {
                 let parts: Vec<&str> = file_ref.path.splitn(4, '/').collect();
                 if parts.len() >= 4 {
                     let bucket_url = format!("s3://{}", parts[2]);
-                    (bucket_url.clone(), url::Url::parse(&bucket_url)
-                        .map_err(|e| Error::Configuration {
-                            message: format!("Invalid S3 URL: {}", e)
-                        })?)
+                    (
+                        bucket_url.clone(),
+                        url::Url::parse(&bucket_url).map_err(|e| Error::Configuration {
+                            message: format!("Invalid S3 URL: {}", e),
+                        })?,
+                    )
                 } else {
                     return Err(Error::Configuration {
-                        message: format!("Invalid S3 path: {}", file_ref.path)
+                        message: format!("Invalid S3 path: {}", file_ref.path),
                     });
                 }
             } else if file_ref.path.starts_with("gs://") || file_ref.path.starts_with("az://") {
@@ -102,42 +108,45 @@ impl QueryTableRegistry {
                     feature: "Streaming Arrow IPC from GCS/Azure not yet implemented".to_string(),
                 });
             } else {
-                let abs_path = abs_path_local.as_ref()
+                let abs_path = abs_path_local
+                    .as_ref()
                     .ok_or_else(|| Error::Configuration {
-                        message: "Expected local path but abs_path_local is None".to_string()
+                        message: "Expected local path but abs_path_local is None".to_string(),
                     })?;
 
-                let abs_parent = abs_path.parent()
-                    .ok_or_else(|| Error::Configuration {
-                        message: format!("Cannot determine parent directory for: {}", abs_path.display())
-                    })?;
+                let abs_parent = abs_path.parent().ok_or_else(|| Error::Configuration {
+                    message: format!(
+                        "Cannot determine parent directory for: {}",
+                        abs_path.display()
+                    ),
+                })?;
 
                 let parent_str = abs_parent.to_string_lossy().to_string();
-                let url = url::Url::from_directory_path(abs_parent)
-                    .map_err(|_| Error::Configuration {
-                        message: format!("Invalid local path: {}", parent_str)
-                    })?;
+                let url = url::Url::from_directory_path(abs_parent).map_err(|_| {
+                    Error::Configuration {
+                        message: format!("Invalid local path: {}", parent_str),
+                    }
+                })?;
                 (parent_str, url)
             };
 
             // Create ObjectStore adapter
             use crate::core::storage::ObjectStoreAdapter;
-            let object_store = Arc::new(ObjectStoreAdapter::new(
-                storage,
-                base_path.clone(),
-            ));
+            let object_store = Arc::new(ObjectStoreAdapter::new(storage, base_path.clone()));
 
             // Register the object store with DataFusion
-            self.ctx.register_object_store(&object_store_url, object_store.clone());
+            self.ctx
+                .register_object_store(&object_store_url, object_store.clone());
             log::debug!("Registered ObjectStore for Arrow: {}", object_store_url);
 
             // Use DataFusion's native Arrow IPC streaming with ListingTable
             use datafusion::datasource::file_format::arrow::ArrowFormat;
-            use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+            use datafusion::datasource::listing::{
+                ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+            };
 
             let file_format = Arc::new(ArrowFormat::default());
-            let listing_options = ListingOptions::new(file_format)
-                .with_file_extension(".arrow");
+            let listing_options = ListingOptions::new(file_format).with_file_extension(".arrow");
 
             let abs_file_path = if file_ref.path.starts_with("s3://") {
                 file_ref.path.clone()
@@ -145,7 +154,7 @@ impl QueryTableRegistry {
                 abs_path_local
                     .as_ref()
                     .ok_or_else(|| Error::Configuration {
-                        message: "Expected local path but abs_path_local is None".to_string()
+                        message: "Expected local path but abs_path_local is None".to_string(),
                     })?
                     .to_string_lossy()
                     .to_string()
@@ -159,12 +168,19 @@ impl QueryTableRegistry {
                 .await?;
 
             let listing_table = ListingTable::try_new(config)?;
-            self.ctx.register_table(&file_ref.table_name, Arc::new(listing_table))?;
+            self.ctx
+                .register_table(&file_ref.table_name, Arc::new(listing_table))?;
 
-            log::debug!("Registered Arrow IPC file with streaming: {}", file_ref.path);
+            log::debug!(
+                "Registered Arrow IPC file with streaming: {}",
+                file_ref.path
+            );
             Ok(0)
         } else if is_parquet {
-            log::debug!("Using DataFusion native Parquet streaming for: {}", file_ref.path);
+            log::debug!(
+                "Using DataFusion native Parquet streaming for: {}",
+                file_ref.path
+            );
 
             // Create storage backend
             let storage = StorageBackendFactory::create_backend(&file_ref.path).await?;
@@ -172,7 +188,8 @@ impl QueryTableRegistry {
             // For local files, convert to absolute path upfront
             let abs_path_local = if !file_ref.path.starts_with("s3://")
                 && !file_ref.path.starts_with("gs://")
-                && !file_ref.path.starts_with("az://") {
+                && !file_ref.path.starts_with("az://")
+            {
                 Some(if path.is_absolute() {
                     path.to_path_buf()
                 } else {
@@ -188,13 +205,15 @@ impl QueryTableRegistry {
                 let parts: Vec<&str> = file_ref.path.splitn(4, '/').collect();
                 if parts.len() >= 4 {
                     let bucket_url = format!("s3://{}", parts[2]); // s3://bucket
-                    (bucket_url.clone(), url::Url::parse(&bucket_url)
-                        .map_err(|e| Error::Configuration {
-                            message: format!("Invalid S3 URL: {}", e)
-                        })?)
+                    (
+                        bucket_url.clone(),
+                        url::Url::parse(&bucket_url).map_err(|e| Error::Configuration {
+                            message: format!("Invalid S3 URL: {}", e),
+                        })?,
+                    )
                 } else {
                     return Err(Error::Configuration {
-                        message: format!("Invalid S3 path: {}", file_ref.path)
+                        message: format!("Invalid S3 path: {}", file_ref.path),
                     });
                 }
             } else if file_ref.path.starts_with("gs://") || file_ref.path.starts_with("az://") {
@@ -204,34 +223,36 @@ impl QueryTableRegistry {
                 });
             } else {
                 // Local file - use the absolute path we already calculated
-                let abs_path = abs_path_local.as_ref()
+                let abs_path = abs_path_local
+                    .as_ref()
                     .ok_or_else(|| Error::Configuration {
-                        message: "Expected local path but abs_path_local is None".to_string()
+                        message: "Expected local path but abs_path_local is None".to_string(),
                     })?;
 
                 // Use parent directory as base path
-                let abs_parent = abs_path.parent()
-                    .ok_or_else(|| Error::Configuration {
-                        message: format!("Cannot determine parent directory for: {}", abs_path.display())
-                    })?;
+                let abs_parent = abs_path.parent().ok_or_else(|| Error::Configuration {
+                    message: format!(
+                        "Cannot determine parent directory for: {}",
+                        abs_path.display()
+                    ),
+                })?;
 
                 let parent_str = abs_parent.to_string_lossy().to_string();
-                let url = url::Url::from_directory_path(abs_parent)
-                    .map_err(|_| Error::Configuration {
-                        message: format!("Invalid local path: {}", parent_str)
-                    })?;
+                let url = url::Url::from_directory_path(abs_parent).map_err(|_| {
+                    Error::Configuration {
+                        message: format!("Invalid local path: {}", parent_str),
+                    }
+                })?;
                 (parent_str, url)
             };
 
             // Create ObjectStore adapter
             use crate::core::storage::ObjectStoreAdapter;
-            let object_store = Arc::new(ObjectStoreAdapter::new(
-                storage,
-                base_path.clone(),
-            ));
+            let object_store = Arc::new(ObjectStoreAdapter::new(storage, base_path.clone()));
 
             // Register the object store with DataFusion
-            self.ctx.register_object_store(&object_store_url, object_store.clone());
+            self.ctx
+                .register_object_store(&object_store_url, object_store.clone());
             log::debug!("Registered ObjectStore for: {}", object_store_url);
 
             // Use DataFusion's native Parquet streaming with ListingTable
@@ -241,12 +262,13 @@ impl QueryTableRegistry {
             // - Row group pruning based on statistics
             // - Column pruning
             use datafusion::datasource::file_format::parquet::ParquetFormat;
-            use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+            use datafusion::datasource::listing::{
+                ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+            };
 
             // Create listing options for Parquet format
             let file_format = Arc::new(ParquetFormat::default());
-            let listing_options = ListingOptions::new(file_format)
-                .with_file_extension(".parquet");
+            let listing_options = ListingOptions::new(file_format).with_file_extension(".parquet");
 
             // Create listing table URL from the ABSOLUTE file path
             // (abs_path_local was calculated above for local files)
@@ -256,7 +278,7 @@ impl QueryTableRegistry {
                 abs_path_local
                     .as_ref()
                     .ok_or_else(|| Error::Configuration {
-                        message: "Expected local path but abs_path_local is None".to_string()
+                        message: "Expected local path but abs_path_local is None".to_string(),
                     })?
                     .to_string_lossy()
                     .to_string()
@@ -275,9 +297,13 @@ impl QueryTableRegistry {
             let listing_table = ListingTable::try_new(config)?;
 
             // Register the table
-            self.ctx.register_table(&file_ref.table_name, Arc::new(listing_table))?;
+            self.ctx
+                .register_table(&file_ref.table_name, Arc::new(listing_table))?;
 
-            log::debug!("Registered Parquet file with streaming, predicate pushdown, and row group pruning: {}", file_ref.path);
+            log::debug!(
+                "Registered Parquet file with streaming, predicate pushdown, and row group pruning: {}",
+                file_ref.path
+            );
 
             // Return 0 as we don't know row count without scanning
             Ok(0)
@@ -416,7 +442,10 @@ impl QueryTableRegistry {
 
         // For multi-file queries, use memory-based registration
         // as we may need to join between tables
-        log::debug!("Multi-file query ({} files) - using memory registration", file_refs.len());
+        log::debug!(
+            "Multi-file query ({} files) - using memory registration",
+            file_refs.len()
+        );
         for file_ref in file_refs {
             let rows = self.register_file_memory(file_ref).await?;
             total_rows += rows;
@@ -502,8 +531,6 @@ fn convert_arrow_batch_to_datafusion(
     batch: datafusion::arrow::record_batch::RecordBatch,
     df_schema: &datafusion::arrow::datatypes::Schema,
 ) -> Result<DFRecordBatch> {
-    use datafusion::arrow::array::{ArrayData, make_array};
-
     // Convert each column's ArrayData
     let df_columns: Vec<datafusion::arrow::array::ArrayRef> = (0..batch.num_columns())
         .map(|i| {
@@ -521,9 +548,11 @@ fn convert_arrow_batch_to_datafusion(
 }
 
 /// Convert ArrayData from one Arrow version to another via IPC
-fn convert_array_data(data: datafusion::arrow::array::ArrayData) -> Result<datafusion::arrow::array::ArrayRef> {
-    use datafusion::arrow::ipc::writer::StreamWriter;
+fn convert_array_data(
+    data: datafusion::arrow::array::ArrayData,
+) -> Result<datafusion::arrow::array::ArrayRef> {
     use datafusion::arrow::ipc::reader::StreamReader;
+    use datafusion::arrow::ipc::writer::StreamWriter;
     use std::io::Cursor;
 
     // Create a temporary record batch with the data

@@ -5,8 +5,11 @@ use serde::Serialize;
 /// Telemetry event
 #[derive(Debug, Serialize)]
 pub struct TelemetryEvent {
+    /// The type of event being recorded
     pub event_type: String,
+    /// The UTC timestamp when the event occurred
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Additional properties associated with the event
     pub properties: std::collections::HashMap<String, String>,
 }
 

@@ -28,9 +28,12 @@ pub enum SectionStyle {
     Dimmed,
     /// Color personalizado
     Info, // Cyan
+    /// Success state (rendered in green)
     Success, // Green
+    /// Warning state (rendered in yellow)
     Warning, // Yellow
-    Error,   // Red
+    /// Error state (rendered in red)
+    Error, // Red
 }
 
 /// Una sección dentro de una caja con header opcional

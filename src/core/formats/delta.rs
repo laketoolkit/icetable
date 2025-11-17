@@ -10,9 +10,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
-use deltalake::kernel::StructField;
 use deltalake::DeltaTable;
+use deltalake::kernel::StructField;
 
+use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
 use crate::core::storage::StorageBackend;
 use crate::error::{Error, Result};
@@ -37,7 +38,10 @@ impl DeltaHandler {
         let table_uri = self.path.to_string_lossy().to_string();
 
         // Parse as URL
-        let url = if table_uri.starts_with("s3://") || table_uri.starts_with("gs://") || table_uri.starts_with("az://") {
+        let url = if table_uri.starts_with("s3://")
+            || table_uri.starts_with("gs://")
+            || table_uri.starts_with("az://")
+        {
             url::Url::parse(&table_uri)
                 .map_err(|e| Error::General(format!("Invalid URL: {}", e)))?
         } else {
@@ -83,12 +87,14 @@ impl DeltaHandler {
                     PrimitiveType::Boolean => DataType::Boolean,
                     PrimitiveType::Binary => DataType::Binary,
                     PrimitiveType::Date => DataType::Date32,
-                    PrimitiveType::Timestamp => {
-                        DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
-                    }
-                    PrimitiveType::TimestampNtz => {
-                        DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
-                    }
+                    PrimitiveType::Timestamp => DataType::Timestamp(
+                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    ),
+                    PrimitiveType::TimestampNtz => DataType::Timestamp(
+                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    ),
                     _ => DataType::Utf8, // Fallback for unknown types
                 }
             }
@@ -98,13 +104,18 @@ impl DeltaHandler {
                 DataType::Struct(fields.into())
             }
             DeltaDataType::Array(arr) => {
-                let inner_field = Self::convert_delta_type_to_field("item", arr.element_type(), true);
+                let inner_field =
+                    Self::convert_delta_type_to_field("item", arr.element_type(), true);
                 DataType::List(Arc::new(inner_field))
             }
             DeltaDataType::Map(map) => {
                 // Arrow Map type: Map<K, V>
                 let key_field = Self::convert_delta_type_to_field("key", map.key_type(), false);
-                let value_field = Self::convert_delta_type_to_field("value", map.value_type(), map.value_contains_null());
+                let value_field = Self::convert_delta_type_to_field(
+                    "value",
+                    map.value_type(),
+                    map.value_contains_null(),
+                );
                 let entries = datafusion::arrow::datatypes::Field::new(
                     "entries",
                     DataType::Struct(vec![key_field, value_field].into()),
@@ -144,12 +155,14 @@ impl DeltaHandler {
                     PrimitiveType::Boolean => DataType::Boolean,
                     PrimitiveType::Binary => DataType::Binary,
                     PrimitiveType::Date => DataType::Date32,
-                    PrimitiveType::Timestamp => {
-                        DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
-                    }
-                    PrimitiveType::TimestampNtz => {
-                        DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
-                    }
+                    PrimitiveType::Timestamp => DataType::Timestamp(
+                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    ),
+                    PrimitiveType::TimestampNtz => DataType::Timestamp(
+                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    ),
                     _ => DataType::Utf8,
                 }
             }
@@ -159,12 +172,17 @@ impl DeltaHandler {
                 DataType::Struct(fields.into())
             }
             DeltaDataType::Array(arr) => {
-                let inner_field = Self::convert_delta_type_to_field("item", arr.element_type(), true);
+                let inner_field =
+                    Self::convert_delta_type_to_field("item", arr.element_type(), true);
                 DataType::List(Arc::new(inner_field))
             }
             DeltaDataType::Map(map) => {
                 let key_field = Self::convert_delta_type_to_field("key", map.key_type(), false);
-                let value_field = Self::convert_delta_type_to_field("value", map.value_type(), map.value_contains_null());
+                let value_field = Self::convert_delta_type_to_field(
+                    "value",
+                    map.value_type(),
+                    map.value_contains_null(),
+                );
                 let entries = datafusion::arrow::datatypes::Field::new(
                     "entries",
                     DataType::Struct(vec![key_field, value_field].into()),
@@ -204,7 +222,10 @@ impl FormatHandler for DeltaHandler {
         }
 
         // For cloud storage, try to open the table
-        let url = if table_path.starts_with("s3://") || table_path.starts_with("gs://") || table_path.starts_with("az://") {
+        let url = if table_path.starts_with("s3://")
+            || table_path.starts_with("gs://")
+            || table_path.starts_with("az://")
+        {
             match url::Url::parse(&table_path) {
                 Ok(u) => u,
                 Err(_) => return Ok(false),
@@ -230,7 +251,8 @@ impl FormatHandler for DeltaHandler {
     async fn read_schema(&self) -> Result<Arc<Schema>> {
         let table = self.open_table().await?;
 
-        let snapshot = table.snapshot()
+        let snapshot = table
+            .snapshot()
             .map_err(|e| Error::General(format!("Failed to get snapshot: {}", e)))?;
 
         let delta_schema = snapshot.schema();
@@ -242,17 +264,24 @@ impl FormatHandler for DeltaHandler {
     async fn read_metadata(&self) -> Result<FileMetadata> {
         let table = self.open_table().await?;
 
-        let snapshot = table.snapshot()
+        let snapshot = table
+            .snapshot()
             .map_err(|e| Error::General(format!("Failed to get snapshot: {}", e)))?;
 
         // Get Delta table metadata
         let version = table.version();
-        let file_uris = table.get_file_uris()
+        let file_uris = table
+            .get_file_uris()
             .map_err(|e| Error::General(format!("Failed to get file URIs: {}", e)))?;
         let num_files = file_uris.count();
 
         let mut metadata_map = std::collections::HashMap::new();
-        metadata_map.insert("version".to_string(), version.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string()));
+        metadata_map.insert(
+            "version".to_string(),
+            version
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
         metadata_map.insert("num_files".to_string(), num_files.to_string());
 
         // Get table properties from metadata
@@ -276,24 +305,16 @@ impl FormatHandler for DeltaHandler {
 
     async fn read_batch(&self, options: &ReadOptions) -> Result<RecordBatch> {
         let batches = self.read_batches(options).await?;
-
-        if batches.is_empty() {
-            let schema = self.read_schema().await?;
-            Ok(RecordBatch::new_empty(schema))
-        } else if batches.len() == 1 {
-            Ok(batches.into_iter().next().unwrap())
-        } else {
-            let schema = batches[0].schema();
-            datafusion::arrow::compute::concat_batches(&schema, &batches)
-                .map_err(|e| Error::Arrow(e))
-        }
+        let schema = self.read_schema().await?;
+        table_utils::merge_batches(batches, schema)
     }
 
     async fn read_batches(&self, options: &ReadOptions) -> Result<Vec<RecordBatch>> {
         let table = self.open_table().await?;
 
         // Get the list of active Parquet files in the Delta table
-        let file_uris: Vec<String> = table.get_file_uris()
+        let file_uris: Vec<String> = table
+            .get_file_uris()
             .map_err(|e| Error::General(format!("Failed to get file URIs: {}", e)))?
             .collect();
 
@@ -303,62 +324,30 @@ impl FormatHandler for DeltaHandler {
             return Ok(vec![RecordBatch::new_empty(schema)]);
         }
 
-        // Read each Parquet file and combine results
+        // Read all Parquet files (applying column projection at file level)
         let mut all_batches = Vec::new();
-        let offset = options.offset().unwrap_or(0);
-        let limit = options.limit().unwrap_or(usize::MAX);
-        let mut total_rows_read = 0usize;
 
         for file_uri in file_uris {
-            if total_rows_read >= offset + limit {
-                break;
-            }
-
-            // Parse the file path from the URI
             let file_path = std::path::Path::new(&file_uri);
+            let parquet_handler =
+                crate::core::formats::ParquetHandler::new(file_path, self.storage.clone())?;
 
-            // Create a Parquet handler for this file
-            let parquet_handler = crate::core::formats::ParquetHandler::new(
-                file_path,
-                self.storage.clone()
-            )?;
-
-            // Read batches from this file with adjusted offset/limit
-            let file_offset = if total_rows_read < offset {
-                offset - total_rows_read
-            } else {
-                0
-            };
-
-            let file_limit = if total_rows_read >= offset {
-                limit.saturating_sub(all_batches.iter().map(|b: &RecordBatch| b.num_rows()).sum())
-            } else {
-                usize::MAX
-            };
-
-            let mut file_options_builder = ReadOptions::builder()
-                .offset(file_offset)
-                .limit(file_limit);
+            // Build read options for this file (without offset/limit - we'll apply later)
+            let mut file_options_builder = ReadOptions::builder();
 
             if let Some(columns) = options.columns() {
                 file_options_builder = file_options_builder.columns(columns.to_vec());
             }
 
             let file_options = file_options_builder.build();
-
             let file_batches = parquet_handler.read_batches(&file_options).await?;
-
-            for batch in file_batches {
-                total_rows_read += batch.num_rows();
-                all_batches.push(batch);
-
-                if all_batches.iter().map(|b: &RecordBatch| b.num_rows()).sum::<usize>() >= limit {
-                    return Ok(all_batches);
-                }
-            }
+            all_batches.extend(file_batches);
         }
 
-        Ok(all_batches)
+        // Apply pagination across all batches using table_utils
+        let offset = options.offset().unwrap_or(0);
+        let limit = options.limit().unwrap_or(usize::MAX);
+        table_utils::apply_batch_pagination(all_batches, offset, limit)
     }
 
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>> {
@@ -404,7 +393,9 @@ impl FormatHandler for DeltaHandler {
                 }
             }
             Err(e) => {
-                report.errors.push(format!("Failed to open Delta table: {}", e));
+                report
+                    .errors
+                    .push(format!("Failed to open Delta table: {}", e));
                 report.is_valid = false;
             }
         }

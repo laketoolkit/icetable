@@ -6,7 +6,9 @@ pub enum BoxItem {
 
     /// Par clave-valor con alineación
     KeyValue {
+        /// The key portion of the key-value pair
         key: String,
+        /// The value portion of the key-value pair
         value: String,
         /// Ancho de alineación para la clave (None = sin padding extra)
         key_width: Option<usize>,

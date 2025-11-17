@@ -7,13 +7,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray, StringArray};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int8Type,
     Int16Type, Int32Type, Int64Type, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+use num_traits::ToPrimitive;
 use serde::Serialize;
 
 use crate::core::formats::{FormatHandler, ReadOptions};
@@ -203,44 +204,22 @@ impl StatsOperation {
         Ok(stats)
     }
 
-    /// Convert primitive native type to f64
-    fn native_to_f64<T: ArrowPrimitiveType>(value: T::Native) -> f64 {
-        // Use std::mem::transmute is unsafe, so we use manual conversion
-        // This works for all numeric types
-        use datafusion::arrow::datatypes::*;
-        use std::any::TypeId;
-
-        let type_id = TypeId::of::<T::Native>();
-
-        if type_id == TypeId::of::<i8>() {
-            unsafe { std::mem::transmute_copy::<T::Native, i8>(&value) as f64 }
-        } else if type_id == TypeId::of::<i16>() {
-            unsafe { std::mem::transmute_copy::<T::Native, i16>(&value) as f64 }
-        } else if type_id == TypeId::of::<i32>() {
-            unsafe { std::mem::transmute_copy::<T::Native, i32>(&value) as f64 }
-        } else if type_id == TypeId::of::<i64>() {
-            unsafe { std::mem::transmute_copy::<T::Native, i64>(&value) as f64 }
-        } else if type_id == TypeId::of::<u8>() {
-            unsafe { std::mem::transmute_copy::<T::Native, u8>(&value) as f64 }
-        } else if type_id == TypeId::of::<u16>() {
-            unsafe { std::mem::transmute_copy::<T::Native, u16>(&value) as f64 }
-        } else if type_id == TypeId::of::<u32>() {
-            unsafe { std::mem::transmute_copy::<T::Native, u32>(&value) as f64 }
-        } else if type_id == TypeId::of::<u64>() {
-            unsafe { std::mem::transmute_copy::<T::Native, u64>(&value) as f64 }
-        } else if type_id == TypeId::of::<f32>() {
-            unsafe { std::mem::transmute_copy::<T::Native, f32>(&value) as f64 }
-        } else if type_id == TypeId::of::<f64>() {
-            unsafe { std::mem::transmute_copy::<T::Native, f64>(&value) }
-        } else {
-            0.0 // Fallback for unsupported types
-        }
+    /// Convert primitive native type to f64 using safe trait-based conversion
+    ///
+    /// Uses the `ToPrimitive` trait from num-traits for safe, zero-cost conversion.
+    /// This is the idiomatic Rust way to convert between numeric types.
+    fn native_to_f64<T: ArrowPrimitiveType>(value: T::Native) -> f64
+    where
+        T::Native: ToPrimitive,
+    {
+        value.to_f64().unwrap_or(0.0)
     }
 
     /// Compute numeric statistics using Arrow compute kernels
     fn compute_numeric_stats<T>(arrays: &[ArrayRef], options: &StatsOptions) -> Result<NumericStats>
     where
         T: ArrowPrimitiveType,
+        T::Native: ToPrimitive,
     {
         let mut min_val: Option<f64> = None;
         let mut max_val: Option<f64> = None;
@@ -443,6 +422,7 @@ impl StatsOperation {
     fn compute_temporal_stats<T>(arrays: &[ArrayRef]) -> Result<TemporalStats>
     where
         T: ArrowPrimitiveType,
+        T::Native: ToPrimitive,
     {
         let mut min_val: Option<i64> = None;
         let mut max_val: Option<i64> = None;
@@ -528,35 +508,51 @@ pub struct ColumnStatistics {
 /// Numeric column statistics
 #[derive(Debug, Clone)]
 pub struct NumericStats {
+    /// The minimum value in the numeric column
     pub min: Option<f64>,
+    /// The maximum value in the numeric column
     pub max: Option<f64>,
+    /// The arithmetic mean of all values
     pub mean: Option<f64>,
+    /// The median value (50th percentile)
     pub median: Option<f64>,
+    /// The standard deviation of the values
     pub std_dev: Option<f64>,
+    /// Percentile values (e.g., p25, p75, p90, p99)
     pub percentiles: Option<HashMap<String, f64>>,
 }
 
 /// String column statistics
 #[derive(Debug, Clone)]
 pub struct StringStats {
+    /// The minimum string length found in the column
     pub min_length: Option<usize>,
+    /// The maximum string length found in the column
     pub max_length: Option<usize>,
+    /// The average string length across all values
     pub avg_length: Option<f64>,
+    /// The count of distinct unique values
     pub distinct_count: Option<usize>,
+    /// The most frequently occurring values with their counts
     pub most_common: Option<Vec<(String, usize)>>,
 }
 
 /// Boolean column statistics
 #[derive(Debug, Clone)]
 pub struct BooleanStats {
+    /// The number of true values
     pub true_count: usize,
+    /// The number of false values
     pub false_count: usize,
+    /// The percentage of true values (0.0 to 100.0)
     pub true_percentage: f64,
 }
 
 /// Temporal column statistics (dates, timestamps)
 #[derive(Debug, Clone)]
 pub struct TemporalStats {
+    /// The earliest date/timestamp in the column
     pub min: Option<String>,
+    /// The latest date/timestamp in the column
     pub max: Option<String>,
 }
