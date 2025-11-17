@@ -13,6 +13,66 @@ use crate::error::{Error, Result};
 
 use super::common::*;
 
+/// Wrap text to fit within a maximum width, breaking at word boundaries
+fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    if text.len() <= max_width {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+
+    // Split by whitespace OR commas to handle comma-separated lists
+    let parts: Vec<&str> = if text.contains(',') && !text.contains(' ') {
+        // If it's a comma-separated list without spaces, split by comma
+        text.split(',').collect()
+    } else {
+        // Otherwise, split by whitespace
+        text.split_whitespace().collect()
+    };
+
+    for (i, word) in parts.iter().enumerate() {
+        let separator = if text.contains(',') && !text.contains(' ') {
+            // For comma-separated lists, keep the comma
+            if i < parts.len() - 1 { "," } else { "" }
+        } else {
+            // For space-separated text, use space
+            if i == 0 { "" } else { " " }
+        };
+
+        let word_with_sep = if separator.is_empty() {
+            word.to_string()
+        } else {
+            format!("{}{}", word, separator)
+        };
+
+        // If adding this word would exceed the width
+        if !current_line.is_empty() && current_line.len() + word_with_sep.len() > max_width {
+            lines.push(current_line);
+            current_line = word_with_sep;
+        } else {
+            current_line.push_str(&word_with_sep);
+        }
+    }
+
+    // Add the last line if not empty
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    // If no lines were created (e.g., single very long word), just split it
+    if lines.is_empty() {
+        let mut pos = 0;
+        while pos < text.len() {
+            let end = (pos + max_width).min(text.len());
+            lines.push(text[pos..end].to_string());
+            pos = end;
+        }
+    }
+
+    lines
+}
+
 /// Inspect Parquet file physical layout
 pub async fn inspect_parquet_layout(
     path: &Path,
@@ -106,10 +166,16 @@ fn build_schema_section(metadata: &FileMetaData) -> Vec<BoxItem> {
     // List columns with types
     for (idx, col) in schema.columns().iter().enumerate() {
         let col_type = format!("{:?}", col.physical_type());
-        let logical_type = col
+        let mut logical_type = col
             .logical_type()
             .map(|lt| format!(" ({})", format!("{:?}", lt)))
             .unwrap_or_default();
+
+        // Truncate logical_type if too long to fit in box (max ~40 chars for logical type)
+        if logical_type.len() > 40 {
+            logical_type.truncate(37);
+            logical_type.push_str("...)");
+        }
 
         items.push(text_item(format!(
             "  {:<3} {:<30} {}{}",
@@ -203,8 +269,6 @@ fn build_layout_section(
                             // For other keys, check if it looks like base64
                             if v.len() > 50 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=') {
                                 format!("<base64 data> ({} bytes)", v.len())
-                            } else if v.len() > 80 {
-                                format!("{}... ({} bytes total)", &v[..77], v.len())
                             } else {
                                 v.clone()
                             }
@@ -212,7 +276,19 @@ fn build_layout_section(
                     }
                 }).unwrap_or_else(|| "null".to_string());
 
-                items.push(text_item(format!("    {}: {}", kv.key, value)));
+                // Word wrap long values
+                let prefix = format!("    {}: ", kv.key);
+                let max_width = 94; // Box width (100) - margins (6)
+                let wrapped_lines = wrap_text(&value, max_width - prefix.len());
+
+                // First line with the key
+                items.push(text_item(format!("{}{}", prefix, wrapped_lines[0])));
+
+                // Continuation lines with indentation matching the value start
+                for line in &wrapped_lines[1..] {
+                    let indent = " ".repeat(prefix.len());
+                    items.push(text_item(format!("{}{}", indent, line)));
+                }
             }
 
             if kv_metadata.len() > 5 {
