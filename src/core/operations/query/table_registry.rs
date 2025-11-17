@@ -624,7 +624,7 @@ fn convert_array_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::operations::query::sql_parser::FileReference;
+    
 
     #[tokio::test]
     async fn test_registry_creation() {

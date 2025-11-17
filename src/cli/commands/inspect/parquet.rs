@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use colored::Colorize;
 use datafusion::parquet::file::metadata::FileMetaData;
 use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 
@@ -44,14 +45,14 @@ pub async fn inspect_parquet_layout(
 
     // Build physical layout section if requested
     let layout = if options.show_layout {
-        Some(build_layout_section(metadata, row_groups, file_size, &data, options.verbose))
+        Some(build_layout_section(metadata, row_groups, file_size, &data, options))
     } else {
         None
     };
 
     // Build statistics section if requested
     let statistics = if options.show_stats {
-        Some(build_statistics_section(metadata, row_groups))
+        Some(build_statistics_section(metadata, row_groups, options))
     } else {
         None
     };
@@ -127,12 +128,13 @@ fn build_layout_section(
     row_groups: &[datafusion::parquet::file::metadata::RowGroupMetaData],
     file_size: u64,
     data: &bytes::Bytes,
-    verbose: bool,
+    options: &PhysicalInspectOptions,
 ) -> Vec<BoxItem> {
+    use super::common::VerbosityLevel;
     let mut items = Vec::new();
 
     // File Structure breakdown
-    items.push(text_item("File Structure:"));
+    items.push(text_item(format!("═══ {} ═══", "File Structure".bold())));
     items.push(BoxItem::Empty);
 
     // Parquet format: [4-byte magic "PAR1"][Row Groups][FileMetadata][4-byte length][4-byte magic]
@@ -159,7 +161,8 @@ fn build_layout_section(
     items.push(BoxItem::Empty);
 
     // Footer Contents
-    items.push(text_item("Footer Contents:"));
+    items.push(text_item(format!("───  {} ───", "Footer Contents".bold())));
+    items.push(BoxItem::Empty);
     items.push(kv_item("  Version", metadata.version(), 25));
     items.push(kv_item(
         "  Schema",
@@ -172,17 +175,40 @@ fn build_layout_section(
     if let Some(kv_metadata) = metadata.key_value_metadata() {
         items.push(kv_item("  Key-Value Metadata", format!("{} entries", kv_metadata.len()), 25));
 
-        if verbose && !kv_metadata.is_empty() {
+        if options.verbosity >= VerbosityLevel::Verbose && !kv_metadata.is_empty() {
             items.push(BoxItem::Empty);
             items.push(text_item("  Metadata Entries:"));
 
             // Show first 5 entries
             for kv in kv_metadata.iter().take(5) {
                 let value = kv.value.as_ref().map(|v| {
-                    if v.len() > 50 {
-                        format!("{}...", &v[..47])
-                    } else {
-                        v.clone()
+                    // Special handling for common metadata keys
+                    match kv.key.as_str() {
+                        "ARROW:schema" => {
+                            format!("<Arrow Schema> ({} bytes, base64 encoded)", v.len())
+                        },
+                        "pandas" => {
+                            // Try to show readable pandas metadata
+                            if v.starts_with("{") || v.starts_with("[") {
+                                if v.len() > 100 {
+                                    format!("<JSON metadata> ({} bytes)", v.len())
+                                } else {
+                                    v.clone()
+                                }
+                            } else {
+                                format!("<Pandas metadata> ({} bytes)", v.len())
+                            }
+                        },
+                        _ => {
+                            // For other keys, check if it looks like base64
+                            if v.len() > 50 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=') {
+                                format!("<base64 data> ({} bytes)", v.len())
+                            } else if v.len() > 80 {
+                                format!("{}... ({} bytes total)", &v[..77], v.len())
+                            } else {
+                                v.clone()
+                            }
+                        }
                     }
                 }).unwrap_or_else(|| "null".to_string());
 
@@ -198,7 +224,7 @@ fn build_layout_section(
     items.push(BoxItem::Empty);
 
     // Row group distribution
-    items.push(text_item(format!("Row Groups: {}", row_groups.len())));
+    items.push(text_item(format!("═══ {} ═══", "Row Groups".bold())));
     items.push(BoxItem::Empty);
 
     if row_groups.is_empty() {
@@ -231,11 +257,12 @@ fn build_layout_section(
     items.push(BoxItem::Empty);
 
     // Column chunk information
-    items.push(text_item("Column Encoding & Compression:"));
+    items.push(text_item(format!("═══ {} ═══", "Column Encoding & Compression".bold())));
     items.push(BoxItem::Empty);
 
     if let Some(first_rg) = row_groups.first() {
-        for col_chunk in first_rg.columns() {
+        let num_cols = first_rg.columns().len();
+        for (idx, col_chunk) in first_rg.columns().iter().enumerate() {
             let col_meta = col_chunk.column_descr();
             let compression = format!("{:?}", col_chunk.compression());
             let encodings = col_chunk
@@ -245,48 +272,65 @@ fn build_layout_section(
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            items.push(text_item(format!("  {}", col_meta.name())));
-            items.push(kv_item("    Compression", compression, 20));
-            items.push(kv_item("    Encodings", encodings, 20));
+            items.push(text_item(format!("• {}", col_meta.name().bold())));
+            items.push(kv_item("  Compression", compression, 20));
+            items.push(kv_item("  Encodings", encodings, 20));
 
-            if verbose {
+            if options.verbosity >= VerbosityLevel::Verbose {
                 items.push(kv_item(
-                    "    Compressed Size",
+                    "  Compressed Size",
                     format_size(col_chunk.compressed_size() as u64),
                     20,
                 ));
                 items.push(kv_item(
-                    "    Uncompressed Size",
+                    "  Uncompressed Size",
                     format_size(col_chunk.uncompressed_size() as u64),
                     20,
                 ));
+            }
+
+            if idx < num_cols - 1 {
+                // Add spacing between columns
+                items.push(BoxItem::Empty);
             }
         }
     }
 
     // Verbose: show each row group
-    if verbose && row_groups.len() <= 10 {
+    if options.verbosity >= VerbosityLevel::Verbose && row_groups.len() <= 10 {
         items.push(BoxItem::Empty);
-        items.push(text_item("Row Group Details:"));
+        items.push(text_item(format!("─── {} ───", "Row Group Details".bold())));
         items.push(BoxItem::Empty);
 
         for (idx, rg) in row_groups.iter().enumerate() {
-            items.push(text_item(format!("  Row Group {}:", idx)));
+            items.push(text_item(format!("• {}", format!("Row Group {}", idx).bold())));
             items.push(kv_item(
-                "    Rows",
-                format_number(rg.num_rows()),
+                "  Offset",
+                format_number(rg.file_offset().unwrap_or(0)),
                 20,
             ));
             items.push(kv_item(
-                "    Size",
+                "  Length",
                 format_size(rg.total_byte_size() as u64),
                 20,
             ));
             items.push(kv_item(
-                "    Columns",
+                "  Rows",
+                format_number(rg.num_rows()),
+                20,
+            ));
+            items.push(kv_item(
+                "  Columns",
                 rg.num_columns(),
                 20,
             ));
+
+            // Add separator between row groups
+            if idx < row_groups.len() - 1 {
+                items.push(BoxItem::Empty);
+                items.push(text_item("· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·"));
+            }
+            items.push(BoxItem::Empty);
         }
     }
 
@@ -296,10 +340,14 @@ fn build_layout_section(
 fn build_statistics_section(
     metadata: &FileMetaData,
     row_groups: &[datafusion::parquet::file::metadata::RowGroupMetaData],
+    options: &PhysicalInspectOptions,
 ) -> Vec<BoxItem> {
     let mut items = Vec::new();
 
     // Overall statistics
+    items.push(text_item(format!("─── {} ───", "Overall Compression".bold())));
+    items.push(BoxItem::Empty);
+
     let total_compressed: i64 = row_groups.iter().map(|rg| rg.total_byte_size()).sum();
 
     // Estimate uncompressed size from column chunks
@@ -331,10 +379,11 @@ fn build_statistics_section(
     items.push(BoxItem::Empty);
 
     // Per-column statistics
-    items.push(text_item("Per-Column Statistics:"));
+    items.push(text_item(format!("═══ {} ═══", "Per-Column Statistics".bold())));
     items.push(BoxItem::Empty);
 
     let schema = metadata.schema_descr();
+    let num_cols = schema.columns().len();
     for (col_idx, col_desc) in schema.columns().iter().enumerate() {
         let col_name = col_desc.name();
 
@@ -343,6 +392,9 @@ fn build_statistics_section(
         let mut total_col_uncompressed: i64 = 0;
         let mut total_null_count: i64 = 0;
         let mut has_stats = false;
+        let mut min_value: Option<String> = None;
+        let mut max_value: Option<String> = None;
+        let mut distinct_count: Option<i64> = None;
 
         for rg in row_groups {
             if let Some(col_chunk) = rg.columns().get(col_idx) {
@@ -354,18 +406,30 @@ fn build_statistics_section(
                         total_null_count += null_count as i64;
                         has_stats = true;
                     }
+
+                    // Extract min/max values (only from first row group for simplicity)
+                    if min_value.is_none() && stats.has_min_max_set() {
+                        let physical_type = col_desc.physical_type();
+                        min_value = Some(format_stat_value(stats.min_bytes(), physical_type));
+                        max_value = Some(format_stat_value(stats.max_bytes(), physical_type));
+                    }
+
+                    // Get distinct count if available
+                    if let Some(dc) = stats.distinct_count_opt() {
+                        distinct_count = Some(dc as i64);
+                    }
                 }
             }
         }
 
-        items.push(text_item(format!("  {}", col_name)));
+        items.push(text_item(format!("• {}", col_name.bold())));
         items.push(kv_item(
-            "    Compressed",
+            "  Compressed",
             format_size(total_col_compressed as u64),
             25,
         ));
         items.push(kv_item(
-            "    Uncompressed",
+            "  Uncompressed",
             format_size(total_col_uncompressed as u64),
             25,
         ));
@@ -375,18 +439,131 @@ fn build_statistics_section(
                 total_col_compressed as u64,
                 total_col_uncompressed as u64,
             );
-            items.push(kv_item("    Ratio", ratio, 25));
+            items.push(kv_item("  Ratio", ratio, 25));
         }
 
         if has_stats {
             let null_pct = (total_null_count as f64 / metadata.num_rows() as f64) * 100.0;
             items.push(kv_item(
-                "    Nulls",
+                "  Nulls",
                 format!("{} ({:.2}%)", format_number(total_null_count), null_pct),
                 25,
             ));
         }
+
+        // Show Min/Max and Distinct count in verbose mode
+        use super::common::VerbosityLevel;
+        if options.verbosity >= VerbosityLevel::Verbose {
+            if let Some(min) = &min_value {
+                let min_display = if min.len() > 50 {
+                    format!("{}...", &min[..47])
+                } else {
+                    min.clone()
+                };
+                items.push(kv_item("  Min", min_display, 25));
+            }
+
+            if let Some(max) = &max_value {
+                let max_display = if max.len() > 50 {
+                    format!("{}...", &max[..47])
+                } else {
+                    max.clone()
+                };
+                items.push(kv_item("  Max", max_display, 25));
+            }
+
+            if let Some(dc) = distinct_count {
+                items.push(kv_item("  Distinct", format_number(dc), 25));
+            }
+        }
+
+        if col_idx < num_cols - 1 {
+            items.push(BoxItem::Empty);
+        }
     }
 
     items
+}
+
+/// Format a statistic value based on its physical type
+fn format_stat_value(bytes: &[u8], physical_type: datafusion::parquet::basic::Type) -> String {
+    use datafusion::parquet::basic::Type;
+
+    match physical_type {
+        Type::INT32 => {
+            if bytes.len() >= 4 {
+                let value = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                value.to_string()
+            } else {
+                format!("<invalid i32: {} bytes>", bytes.len())
+            }
+        }
+        Type::INT64 => {
+            if bytes.len() >= 8 {
+                let value = i64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5], bytes[6], bytes[7],
+                ]);
+                value.to_string()
+            } else {
+                format!("<invalid i64: {} bytes>", bytes.len())
+            }
+        }
+        Type::FLOAT => {
+            if bytes.len() >= 4 {
+                let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                format!("{:.2}", value)
+            } else {
+                format!("<invalid f32: {} bytes>", bytes.len())
+            }
+        }
+        Type::DOUBLE => {
+            if bytes.len() >= 8 {
+                let value = f64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5], bytes[6], bytes[7],
+                ]);
+                format!("{:.2}", value)
+            } else {
+                format!("<invalid f64: {} bytes>", bytes.len())
+            }
+        }
+        Type::BYTE_ARRAY => {
+            // Try to decode as UTF-8 string
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(s) => {
+                    if s.len() > 30 {
+                        format!("\"{}...\"", &s[..27])
+                    } else {
+                        format!("\"{}\"", s)
+                    }
+                }
+                Err(_) => {
+                    // Not valid UTF-8, show as hex
+                    if bytes.len() > 16 {
+                        format!("<binary: {} bytes>", bytes.len())
+                    } else {
+                        format!("<hex: {}>", bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                    }
+                }
+            }
+        }
+        Type::BOOLEAN => {
+            if !bytes.is_empty() {
+                if bytes[0] != 0 { "true" } else { "false" }.to_string()
+            } else {
+                "<invalid bool>".to_string()
+            }
+        }
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            if bytes.len() > 16 {
+                format!("<fixed binary: {} bytes>", bytes.len())
+            } else {
+                format!("<hex: {}>", bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+            }
+        }
+        Type::INT96 => {
+            format!("<int96: {} bytes>", bytes.len())
+        }
+    }
 }

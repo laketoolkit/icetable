@@ -105,7 +105,7 @@ impl FormatHandler for JsonHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     #[test]
     fn test_can_handle_json_extension() {

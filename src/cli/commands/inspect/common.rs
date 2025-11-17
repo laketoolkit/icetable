@@ -3,6 +3,15 @@
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use std::path::Path;
 
+/// Verbosity level for inspection output
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VerbosityLevel {
+    /// Normal output
+    Normal = 0,
+    /// Verbose output (-v) - all details
+    Verbose = 1,
+}
+
 /// Options for physical layout inspection
 #[derive(Debug, Clone)]
 pub struct PhysicalInspectOptions {
@@ -12,8 +21,8 @@ pub struct PhysicalInspectOptions {
     pub show_layout: bool,
     /// Show statistics section
     pub show_stats: bool,
-    /// Verbose mode for more detailed information
-    pub verbose: bool,
+    /// Verbosity level
+    pub verbosity: VerbosityLevel,
 }
 
 impl PhysicalInspectOptions {
@@ -22,7 +31,7 @@ impl PhysicalInspectOptions {
         schema: bool,
         layout: bool,
         stats: bool,
-        verbose: bool,
+        verbosity: VerbosityLevel,
     ) -> Self {
         let any_flag = schema || layout || stats;
 
@@ -30,7 +39,7 @@ impl PhysicalInspectOptions {
             show_schema: if any_flag { schema } else { true },
             show_layout: if any_flag { layout } else { true },
             show_stats: if any_flag { stats } else { true },
-            verbose,
+            verbosity,
         }
     }
 }

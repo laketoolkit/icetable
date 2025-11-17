@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use colored::Colorize;
 use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::arrow::ipc::root_as_footer;
 
@@ -33,7 +34,9 @@ pub async fn inspect_arrow_layout(
     let dict_infos = analyze_dictionaries(&data, schema.as_ref())?;
     let batch_analyses = analyze_batches(&data)?;
 
-    let (file_info, schema_section, layout, statistics, stats_title) = if options.verbose {
+    use super::common::VerbosityLevel;
+
+    let (file_info, schema_section, layout, statistics, stats_title) = if options.verbosity >= VerbosityLevel::Verbose {
         build_verbose_output(path, &data, schema.as_ref(), &dict_infos, &batch_analyses, options)?
     } else {
         build_normal_output(&data, schema.as_ref(), &dict_infos, &batch_analyses, options)?
@@ -236,7 +239,7 @@ fn build_statistics_normal(
         let schema = reader.schema();
         if !schema.metadata().is_empty() {
             items.push(BoxItem::Empty);
-            items.push(text_item("═══ Custom Metadata ═══"));
+            items.push(text_item(format!("═══ {} ═══", "Custom Metadata".bold())));
             items.push(BoxItem::Empty);
             for (key, value) in schema.metadata() {
                 items.push(kv_item(key, value, 20));
@@ -250,7 +253,7 @@ fn build_statistics_normal(
 fn build_dictionaries_normal(dict_infos: &[DictionaryInfo]) -> Vec<BoxItem> {
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Dictionaries ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Dictionaries".bold())));
     items.push(BoxItem::Empty);
 
     for dict_info in dict_infos {
@@ -295,7 +298,7 @@ fn build_dictionaries_normal(dict_infos: &[DictionaryInfo]) -> Vec<BoxItem> {
 fn build_batches_table_normal(batch_analyses: &[BatchAnalysis]) -> Vec<BoxItem> {
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Record Batches ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Record Batches".bold())));
     items.push(BoxItem::Empty);
     
     // Table header
@@ -354,7 +357,7 @@ fn build_batches_table_normal(batch_analyses: &[BatchAnalysis]) -> Vec<BoxItem> 
 fn build_memory_breakdown_normal(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Result<Vec<BoxItem>> {
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Memory Breakdown ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Memory Breakdown".bold())));
     items.push(BoxItem::Empty);
 
     let total_size = data.len();
@@ -470,7 +473,7 @@ fn build_statistics_verbose(
 fn build_dictionaries_verbose(dict_infos: &[DictionaryInfo]) -> Vec<BoxItem> {
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Dictionaries ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Dictionaries".bold())));
     items.push(BoxItem::Empty);
 
     for dict_info in dict_infos {
@@ -534,11 +537,11 @@ fn build_batches_verbose(schema: &datafusion::arrow::datatypes::Schema, batch_an
 
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Record Batches ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Record Batches".bold())));
     items.push(BoxItem::Empty);
 
     for (batch_idx, analysis) in batch_analyses.iter().enumerate() {
-        items.push(text_item(format!("• Batch {}", analysis.index)));
+        items.push(text_item(format!("• {}", format!("Batch {}", analysis.index).bold())));
         items.push(kv_item("  Offset", format_number(analysis.offset as i64), 20));
         items.push(kv_item("  Length", format_number(analysis.length as i64), 20));
         items.push(kv_item("  Rows", format_number(analysis.rows as i64), 20));
@@ -634,7 +637,7 @@ fn build_batches_verbose(schema: &datafusion::arrow::datatypes::Schema, batch_an
     }
 
     // Summary
-    items.push(text_item("─── Batches Summary ───"));
+    items.push(text_item(format!("─── {} ───", "Batches Summary".bold())));
     items.push(BoxItem::Empty);
 
     let total_rows: usize = batch_analyses.iter().map(|b| b.rows).sum();
@@ -653,7 +656,7 @@ fn build_batches_verbose(schema: &datafusion::arrow::datatypes::Schema, batch_an
 fn build_physical_layout(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Result<Vec<BoxItem>> {
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Physical File Layout ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Physical File Layout".bold())));
     items.push(BoxItem::Empty);
 
     items.push(text_item("Offset   Component                         Size          Details"));
@@ -662,16 +665,18 @@ fn build_physical_layout(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Resul
     let structure = extract_detailed_structure(data, batch_analyses.len())?;
 
     // Magic number at start
-    items.push(text_item(format!("{:<8} Magic Number                      {:<13} \"ARROW1\" + padding",
+    items.push(text_item(format!("{:<8} {}                      {:<13} \"ARROW1\" + padding",
         "0",
+        "Magic Number".bold(),
         format_size(8)
     )));
     items.push(BoxItem::Empty);
 
     // Schema message
     if let Some(schema_msg) = &structure.schema_message {
-        items.push(text_item(format!("{:<8} Schema Message                    {:<13}",
+        items.push(text_item(format!("{:<8} {}                    {:<13}",
             "8",
+            "Schema Message".bold(),
             format_size(schema_msg.total_size as u64)
         )));
         items.push(text_item(format!("         ├─ Continuation                   {:<13} 0xFFFFFFFF", format_size(4))));
@@ -683,9 +688,9 @@ fn build_physical_layout(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Resul
 
     // Record batches
     for (idx, (analysis, batch_info)) in batch_analyses.iter().zip(structure.record_batches.iter()).enumerate() {
-        items.push(text_item(format!("{:<8} RecordBatch {}                     {:<13}",
+        items.push(text_item(format!("{:<8} {}                     {:<13}",
             format_number(analysis.offset as i64),
-            idx,
+            format!("RecordBatch {}", idx).bold(),
             format_size(batch_info.total_size as u64)
         )));
         items.push(text_item(format!("         ├─ Continuation                   {:<13} 0xFFFFFFFF", format_size(4))));
@@ -699,8 +704,9 @@ fn build_physical_layout(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Resul
     // Footer
     if let Some(footer) = &structure.footer {
         let footer_offset = data.len() - footer.total_size - 6;
-        items.push(text_item(format!("{:<8} Footer                            {:<13}",
+        items.push(text_item(format!("{:<8} {}                            {:<13}",
             format_number(footer_offset as i64),
+            "Footer".bold(),
             format_size(footer.total_size as u64)
         )));
         items.push(text_item(format!("         ├─ Footer Flatbuffer              {:<13}", format_size(footer.flatbuffer_size as u64))));
@@ -710,8 +716,9 @@ fn build_physical_layout(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Resul
 
     // End magic
     let end_offset = data.len() - 6;
-    items.push(text_item(format!("{:<8} End Magic Number                  {:<13} \"ARROW1\"",
+    items.push(text_item(format!("{:<8} {}                  {:<13} \"ARROW1\"",
         format_number(end_offset as i64),
+        "End Magic Number".bold(),
         format_size(6)
     )));
     items.push(BoxItem::Empty);
@@ -724,7 +731,7 @@ fn build_physical_layout(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Resul
 fn build_memory_breakdown_verbose(data: &[u8], batch_analyses: &[BatchAnalysis]) -> Result<Vec<BoxItem>> {
     let mut items = Vec::new();
 
-    items.push(text_item("═══ Memory Breakdown ═══"));
+    items.push(text_item(format!("═══ {} ═══", "Memory Breakdown".bold())));
     items.push(BoxItem::Empty);
 
     let total_size = data.len();

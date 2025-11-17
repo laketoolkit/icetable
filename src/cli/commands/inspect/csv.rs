@@ -34,7 +34,8 @@ pub async fn inspect_csv_layout(
 
     // Build layout section - format detection
     let layout = if options.show_layout {
-        Some(build_layout_section(&preview, options.verbose))
+        use super::common::VerbosityLevel;
+        Some(build_layout_section(&preview, options.verbosity >= VerbosityLevel::Verbose))
     } else {
         None
     };

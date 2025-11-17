@@ -8,10 +8,6 @@ use std::path::PathBuf;
 #[command(name = "tablectl")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    /// Enable verbose logging
-    #[arg(short, long, global = true)]
-    pub verbose: bool,
-
     /// Suppress non-error output
     #[arg(short, long, global = true)]
     pub quiet: bool,

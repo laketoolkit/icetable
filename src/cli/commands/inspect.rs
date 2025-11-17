@@ -13,6 +13,7 @@ use std::path::Path;
 use crate::cli::output::OutputFormatter;
 use crate::cli::parser::InspectArgs;
 use crate::core::formats::FormatHandlerRegistry;
+use common::VerbosityLevel;
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
 use crate::error::Result;
@@ -43,11 +44,16 @@ impl InspectCommand {
         let storage = StorageBackendFactory::create_backend(&args.path).await?;
 
         // 2. Build physical inspect options
+        let verbosity = if args.verbose {
+            VerbosityLevel::Verbose
+        } else {
+            VerbosityLevel::Normal
+        };
         let options = PhysicalInspectOptions::from_cli_args(
             args.schema,
             args.layout,
             args.stats,
-            args.verbose,
+            verbosity,
         );
 
         // 3. Inspect physical layout

@@ -198,9 +198,9 @@ impl<'a> BatchWriter for ArrowBatchWriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{Int32Array, StringArray};
-    use datafusion::arrow::datatypes::{DataType, Field};
-    use std::sync::Arc;
+    
+    
+    
 
     #[test]
     fn test_arrow_reader_strategy_extensions() {

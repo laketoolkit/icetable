@@ -21,6 +21,9 @@ async fn test_inspect_command_basic() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -39,6 +42,9 @@ async fn test_inspect_schema_only() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -57,6 +63,9 @@ async fn test_inspect_with_metadata() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -75,6 +84,9 @@ async fn test_inspect_with_stats() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -93,6 +105,9 @@ async fn test_inspect_all_options() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -111,6 +126,9 @@ async fn test_inspect_column_filtering() {
         output: "table".to_string(),
         columns: Some(vec!["id".to_string(), "name".to_string()]),
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -129,6 +147,9 @@ async fn test_inspect_json_output() {
         output: "json".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -147,6 +168,9 @@ async fn test_inspect_yaml_output() {
         output: "yaml".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -165,6 +189,9 @@ async fn test_inspect_nonexistent_file() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -186,6 +213,9 @@ async fn test_inspect_larger_file() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -204,6 +234,9 @@ async fn test_inspect_limited_rows() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -226,6 +259,8 @@ async fn test_inspect_operation_directly() {
         num_rows: 5,
         columns: None,
         sample: false,
+        show_schema: true,
+        show_data: true,
     };
 
     let result = operation.execute(&options).await;
@@ -258,6 +293,8 @@ async fn test_inspect_operation_schema_only() {
         num_rows: 0,
         columns: None,
         sample: false,
+        show_schema: true,
+        show_data: true,
     };
 
     let result = operation.execute(&options).await;
@@ -286,6 +323,8 @@ async fn test_inspect_operation_with_column_filter() {
         num_rows: 3,
         columns: Some(vec!["id".to_string(), "name".to_string()]),
         sample: false,
+        show_schema: true,
+        show_data: true,
     };
 
     let result = operation.execute(&options).await;
@@ -334,6 +373,9 @@ async fn test_multiple_compression_formats() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(args_snappy).await.is_ok());
 
@@ -348,6 +390,9 @@ async fn test_multiple_compression_formats() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(args_gzip).await.is_ok());
 
@@ -362,6 +407,9 @@ async fn test_multiple_compression_formats() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(args_zstd).await.is_ok());
 }
@@ -378,6 +426,9 @@ async fn test_inspect_with_sample_flag() {
         output: "table".to_string(),
         columns: None,
         sample: true,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
 
     let result = InspectCommand::execute(args).await;
@@ -399,6 +450,9 @@ async fn test_end_to_end_workflow() {
         output: "json".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(schema_args).await.is_ok());
 
@@ -413,6 +467,9 @@ async fn test_end_to_end_workflow() {
         output: "json".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(metadata_args).await.is_ok());
 
@@ -427,6 +484,9 @@ async fn test_end_to_end_workflow() {
         output: "table".to_string(),
         columns: Some(vec!["name".to_string(), "salary".to_string()]),
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(data_args).await.is_ok());
 
@@ -441,6 +501,9 @@ async fn test_end_to_end_workflow() {
         output: "table".to_string(),
         columns: None,
         sample: false,
+        layout: false,
+        preview: false,
+        verbose: false,
     };
     assert!(InspectCommand::execute(full_args).await.is_ok());
 }

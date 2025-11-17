@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate_simple_parquet()?;
     generate_types_parquet()?;
     generate_larger_parquet()?;
+    generate_parquet_with_advanced_features()?;
 
     // Generate Arrow IPC files
     generate_simple_arrow()?;
@@ -423,6 +424,110 @@ fn generate_arrow_with_metadata() -> Result<(), Box<dyn std::error::Error>> {
     println!("  - 3 RecordBatches (3000 rows total)");
     println!("  - 2 Dictionary columns (category, status)");
     println!("  - 4 custom metadata entries");
+
+    Ok(())
+}
+
+/// Generate Parquet file with advanced features (bloom filters, column indexes, etc.)
+fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::Error>> {
+    use datafusion::parquet::file::properties::EnabledStatistics;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("user_id", DataType::Int64, false),
+        Field::new("username", DataType::Utf8, false),
+        Field::new("email", DataType::Utf8, false),
+        Field::new("age", DataType::Int32, true),
+        Field::new("score", DataType::Float64, true),
+        Field::new("active", DataType::Boolean, false),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+    ]));
+
+    // Generate data with patterns that benefit from bloom filters
+    let num_rows = 10000;
+    let mut user_ids = Vec::with_capacity(num_rows);
+    let mut usernames = Vec::with_capacity(num_rows);
+    let mut emails = Vec::with_capacity(num_rows);
+    let mut ages = Vec::with_capacity(num_rows);
+    let mut scores = Vec::with_capacity(num_rows);
+    let mut actives = Vec::with_capacity(num_rows);
+    let mut timestamps = Vec::with_capacity(num_rows);
+
+    for i in 0..num_rows {
+        user_ids.push(i as i64);
+        usernames.push(format!("user_{:06}", i));
+        emails.push(format!("user{}@example{}.com", i, i % 100));
+        ages.push(if i % 10 == 0 { None } else { Some(20 + (i % 50) as i32) });
+        scores.push(if i % 15 == 0 { None } else { Some((i as f64) * 0.123 + 50.0) });
+        actives.push(i % 3 != 0);
+        timestamps.push(1609459200000 + (i as i64) * 86400000); // Daily increments from 2021-01-01
+    }
+
+    let user_id_array = Arc::new(Int64Array::from(user_ids)) as ArrayRef;
+    let username_array = Arc::new(StringArray::from(usernames)) as ArrayRef;
+    let email_array = Arc::new(StringArray::from(emails)) as ArrayRef;
+    let age_array = Arc::new(Int32Array::from(ages)) as ArrayRef;
+    let score_array = Arc::new(Float64Array::from(scores)) as ArrayRef;
+    let active_array = Arc::new(BooleanArray::from(actives)) as ArrayRef;
+    let timestamp_array = Arc::new(TimestampMillisecondArray::from(timestamps)) as ArrayRef;
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            user_id_array,
+            username_array,
+            email_array,
+            age_array,
+            score_array,
+            active_array,
+            timestamp_array,
+        ],
+    )?;
+
+    let file = File::create("tests/fixtures/with_extra_metadata.parquet")?;
+
+    // Create writer properties with advanced features
+    let props = WriterProperties::builder()
+        .set_compression(datafusion::parquet::basic::Compression::ZSTD(datafusion::parquet::basic::ZstdLevel::default()))
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .set_column_bloom_filter_enabled("username".into(), true)
+        .set_column_bloom_filter_enabled("email".into(), true)
+        .set_column_bloom_filter_enabled("user_id".into(), true)
+        .set_max_row_group_size(5000) // Create 2 row groups
+        .set_write_batch_size(1024)
+        .set_data_page_size_limit(8192)
+        .set_dictionary_enabled(true)
+        .set_column_dictionary_enabled("email".into(), true)
+        .set_key_value_metadata(Some(vec![
+            datafusion::parquet::file::metadata::KeyValue::new(
+                "created_by".to_string(),
+                "tabletools advanced test generator".to_string(),
+            ),
+            datafusion::parquet::file::metadata::KeyValue::new(
+                "version".to_string(),
+                "2.0".to_string(),
+            ),
+            datafusion::parquet::file::metadata::KeyValue::new(
+                "description".to_string(),
+                "Parquet file with bloom filters, column indexes, and advanced features".to_string(),
+            ),
+            datafusion::parquet::file::metadata::KeyValue::new(
+                "test_features".to_string(),
+                "bloom_filters,column_indexes,page_statistics,dictionary_encoding,zstd_compression".to_string(),
+            ),
+        ]))
+        .build();
+
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+    writer.write(&batch)?;
+    writer.close()?;
+
+    println!("Created: tests/fixtures/with_extra_metadata.parquet");
+    println!("  - 10,000 rows across 2 row groups");
+    println!("  - Bloom filters on: user_id, username, email");
+    println!("  - ZSTD compression");
+    println!("  - Page-level statistics");
+    println!("  - Dictionary encoding on email column");
+    println!("  - Custom metadata entries");
 
     Ok(())
 }

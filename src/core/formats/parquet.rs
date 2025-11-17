@@ -99,7 +99,7 @@ impl FormatHandler for ParquetHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     #[test]
     fn test_can_handle_parquet_extension() {

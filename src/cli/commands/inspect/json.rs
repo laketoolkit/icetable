@@ -50,7 +50,8 @@ pub async fn inspect_json_layout(
 
     // Build layout section
     let layout = if options.show_layout {
-        Some(build_layout_section(&content, format, options.verbose)?)
+        use super::common::VerbosityLevel;
+        Some(build_layout_section(&content, format, options.verbosity >= VerbosityLevel::Verbose)?)
     } else {
         None
     };
