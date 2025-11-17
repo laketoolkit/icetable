@@ -18,14 +18,13 @@ pub enum DisplayMode {
 /// Progress tracker for operations
 pub struct ProgressTracker {
     bar: Option<ProgressBar>,
-    mode: DisplayMode,
 }
 
 impl ProgressTracker {
     /// Create a new progress tracker with specified display mode
     pub fn with_mode(mode: DisplayMode, message: &str, total: Option<u64>) -> Self {
         match mode {
-            DisplayMode::Silent => Self { bar: None, mode },
+            DisplayMode::Silent => Self { bar: None },
             DisplayMode::Spinner => {
                 let bar = ProgressBar::new_spinner();
                 bar.set_style(
@@ -36,10 +35,7 @@ impl ProgressTracker {
                 );
                 bar.set_message(message.to_string());
                 bar.enable_steady_tick(std::time::Duration::from_millis(80));
-                Self {
-                    bar: Some(bar),
-                    mode,
-                }
+                Self { bar: Some(bar) }
             }
             DisplayMode::Bar => {
                 let bar = ProgressBar::new(total.unwrap_or(0));
@@ -50,10 +46,7 @@ impl ProgressTracker {
                         .progress_chars("█▓▒░ "),
                 );
                 bar.set_message(message.to_string());
-                Self {
-                    bar: Some(bar),
-                    mode,
-                }
+                Self { bar: Some(bar) }
             }
             DisplayMode::BarWithThroughput => {
                 let bar = ProgressBar::new(total.unwrap_or(0));
@@ -64,10 +57,7 @@ impl ProgressTracker {
                         .progress_chars("█▓▒░ "),
                 );
                 bar.set_message(message.to_string());
-                Self {
-                    bar: Some(bar),
-                    mode,
-                }
+                Self { bar: Some(bar) }
             }
         }
     }

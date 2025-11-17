@@ -56,15 +56,6 @@ impl AzureBackend {
             inner: BaseStorageBackend::new(Arc::new(store), AzurePathParser, "azure"),
         })
     }
-
-    /// Parse Azure path to extract container and blob (for backward compatibility)
-    ///
-    /// Expected formats:
-    /// - az://container/blob/path
-    /// - azure://container/blob/path
-    pub(crate) fn parse_azure_path(path: &str) -> Result<(String, String)> {
-        AzurePathParser.parse(path)
-    }
 }
 
 // Delegate all StorageBackend methods to the inner BaseStorageBackend
@@ -112,32 +103,5 @@ impl StorageBackend for AzureBackend {
 
     fn supports_multipart(&self) -> bool {
         self.inner.supports_multipart()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_azure_path_az() {
-        let (container, blob) =
-            AzureBackend::parse_azure_path("az://my-container/path/to/file.parquet").unwrap();
-        assert_eq!(container, "my-container");
-        assert_eq!(blob, "path/to/file.parquet");
-    }
-
-    #[test]
-    fn test_parse_azure_path_azure() {
-        let (container, blob) =
-            AzureBackend::parse_azure_path("azure://my-container/path/to/file.parquet").unwrap();
-        assert_eq!(container, "my-container");
-        assert_eq!(blob, "path/to/file.parquet");
-    }
-
-    #[test]
-    fn test_parse_azure_path_invalid() {
-        assert!(AzureBackend::parse_azure_path("az://container-only").is_err());
-        assert!(AzureBackend::parse_azure_path("/local/path").is_err());
     }
 }

@@ -60,7 +60,6 @@ impl BoxLayout {
                 vertical: '│',
                 left_t: '├',
                 right_t: '┤',
-                cross: '┼',
             },
             BoxStyle::Square => BoxChars {
                 top_left: '┌',
@@ -71,7 +70,6 @@ impl BoxLayout {
                 vertical: '│',
                 left_t: '├',
                 right_t: '┤',
-                cross: '┼',
             },
         }
     }
@@ -87,5 +85,4 @@ pub(crate) struct BoxChars {
     pub(crate) vertical: char,
     pub(crate) left_t: char,
     pub(crate) right_t: char,
-    pub(crate) cross: char,
 }

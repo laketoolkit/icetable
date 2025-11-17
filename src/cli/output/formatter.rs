@@ -950,19 +950,6 @@ impl OutputFormatter {
         output.join("\n")
     }
 
-    /// Check if there are metadata changes worth displaying
-    fn has_metadata_changes(meta_diff: &crate::core::operations::diff::MetadataDiff) -> bool {
-        meta_diff
-            .compression
-            .as_ref()
-            .map_or(false, |(l, r)| l != r)
-            || !meta_diff.custom_metadata.is_empty()
-            || meta_diff
-                .format_version
-                .as_ref()
-                .map_or(false, |(l, r)| l != r)
-    }
-
     /// Format ROWS section content (returns lines for box)
     fn format_rows_diff_content(
         meta_diff: &crate::core::operations::diff::MetadataDiff,
@@ -995,11 +982,6 @@ impl OutputFormatter {
         }
 
         output
-    }
-
-    /// Format metadata differences (old style, kept for backward compatibility)
-    fn format_metadata_diff(meta_diff: &crate::core::operations::diff::MetadataDiff) -> String {
-        Self::format_metadata_diff_visual(meta_diff)
     }
 
     /// Format a number with thousands separator
@@ -1106,16 +1088,6 @@ impl OutputFormatter {
         output
     }
 
-    /// Format schema differences with visual style (wrapper for backward compat)
-    fn format_schema_diff_visual(
-        schema_diff: &crate::core::operations::diff::SchemaDiff,
-    ) -> String {
-        let mut lines = vec![format!("{} {}", "📋", "SCHEMA".bold())];
-        lines.push(String::new());
-        lines.extend(Self::format_schema_diff_content(schema_diff));
-        lines.join("\n")
-    }
-
     /// Format metadata diff content (returns lines for box)
     fn format_metadata_diff_content(
         meta_diff: &crate::core::operations::diff::MetadataDiff,
@@ -1207,21 +1179,6 @@ impl OutputFormatter {
         }
 
         output
-    }
-
-    /// Format metadata differences with visual style (wrapper for backward compat)
-    fn format_metadata_diff_visual(
-        meta_diff: &crate::core::operations::diff::MetadataDiff,
-    ) -> String {
-        let mut lines = vec![format!("{} {}", "📦", "METADATA".bold())];
-        lines.push(String::new());
-        lines.extend(Self::format_metadata_diff_content(meta_diff));
-        lines.join("\n")
-    }
-
-    /// Format schema differences (old style, kept for backward compatibility)
-    fn format_schema_diff(schema_diff: &crate::core::operations::diff::SchemaDiff) -> String {
-        Self::format_schema_diff_visual(schema_diff)
     }
 
     /// Format column stats content (returns lines for box)
@@ -1316,12 +1273,4 @@ impl OutputFormatter {
         output
     }
 
-    /// Format column statistics differences (wrapper for backward compat)
-    fn format_column_stats_diff(
-        stats_diff: &[crate::core::operations::diff::ColumnStatsDiff],
-    ) -> String {
-        let mut lines = vec![format!("{}", "COLUMN STATISTICS".bold().underline())];
-        lines.extend(Self::format_column_stats_content(stats_diff));
-        lines.join("\n")
-    }
 }

@@ -78,60 +78,6 @@ impl IcebergHandler {
         Ok(table)
     }
 
-    /// Parse Iceberg table path to extract warehouse, namespace, and table name
-    ///
-    /// Supports multiple path formats:
-    /// 1. warehouse/namespace/table_name
-    /// 2. warehouse/db.schema/table_name
-    /// 3. /path/to/table_name (assumes warehouse=/path/to, namespace=default, table=table_name)
-    fn parse_iceberg_path(path: &str) -> Result<(String, String, String)> {
-        // Remove trailing slashes
-        let path = path.trim_end_matches('/');
-
-        // If path contains /metadata/, extract the table path before it
-        let table_path = if path.contains("/metadata/") {
-            let parts: Vec<&str> = path.splitn(2, "/metadata/").collect();
-            parts[0]
-        } else {
-            path
-        };
-
-        // Split path into components
-        let components: Vec<&str> = table_path.split('/').filter(|s| !s.is_empty()).collect();
-
-        if components.is_empty() {
-            return Err(Error::General(
-                "Invalid Iceberg path: empty path".to_string(),
-            ));
-        }
-
-        // Try to parse path structure
-        // Common patterns:
-        // - warehouse/namespace/table
-        // - warehouse/table (namespace = default)
-        // - /absolute/path/to/table (warehouse = parent, namespace = default)
-
-        let (warehouse, namespace, table_name) = if components.len() >= 3 {
-            // Format: warehouse/namespace/table
-            let warehouse = components[..components.len() - 2].join("/");
-            let namespace = components[components.len() - 2].to_string();
-            let table = components[components.len() - 1].to_string();
-            (warehouse, namespace, table)
-        } else if components.len() == 2 {
-            // Format: warehouse/table or namespace/table
-            // Assume the first part is warehouse, use default namespace
-            let warehouse = components[0].to_string();
-            let table = components[1].to_string();
-            (warehouse, "default".to_string(), table)
-        } else {
-            // Single component - use it as table name with defaults
-            let table = components[0].to_string();
-            (".".to_string(), "default".to_string(), table)
-        };
-
-        Ok((warehouse, namespace, table_name))
-    }
-
     /// Convert Iceberg schema to Arrow schema
     fn iceberg_schema_to_arrow(iceberg_schema: &iceberg::spec::Schema) -> Result<ArrowSchema> {
         // Get the struct representation of the schema

@@ -55,13 +55,6 @@ impl GcsBackend {
             inner: BaseStorageBackend::new(Arc::new(store), GcsPathParser, "gcs"),
         })
     }
-
-    /// Parse GCS path to extract bucket and key (for backward compatibility)
-    ///
-    /// Expected format: gs://bucket/key/path
-    pub(crate) fn parse_gcs_path(path: &str) -> Result<(String, String)> {
-        GcsPathParser.parse(path)
-    }
 }
 
 // Delegate all StorageBackend methods to the inner BaseStorageBackend
@@ -109,24 +102,5 @@ impl StorageBackend for GcsBackend {
 
     fn supports_multipart(&self) -> bool {
         self.inner.supports_multipart()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_gcs_path() {
-        let (bucket, key) =
-            GcsBackend::parse_gcs_path("gs://my-bucket/path/to/file.parquet").unwrap();
-        assert_eq!(bucket, "my-bucket");
-        assert_eq!(key, "path/to/file.parquet");
-    }
-
-    #[test]
-    fn test_parse_gcs_path_invalid() {
-        assert!(GcsBackend::parse_gcs_path("gs://bucket-only").is_err());
-        assert!(GcsBackend::parse_gcs_path("/local/path").is_err());
     }
 }

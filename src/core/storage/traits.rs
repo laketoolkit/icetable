@@ -128,17 +128,6 @@ pub trait StorageBackend: Send + Sync {
     /// Copy an object within the same storage backend
     async fn copy(&self, from: &str, to: &str) -> Result<()>;
 
-    /// Get a URL for the object (if supported)
-    ///
-    /// This returns a presigned URL for cloud storage or a file:// URL
-    /// for local storage. The URL may have limited validity.
-    async fn get_url(&self, path: &str, expires_in: Option<std::time::Duration>) -> Result<String> {
-        // Default implementation for storage backends that don't support URLs
-        Err(crate::error::Error::UnsupportedFeature {
-            feature: format!("get_url not supported for {}", self.storage_type()),
-        })
-    }
-
     /// Check if this backend supports multipart uploads
     fn supports_multipart(&self) -> bool {
         false

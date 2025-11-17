@@ -80,13 +80,6 @@ impl S3Backend {
             inner: BaseStorageBackend::new(Arc::new(store), S3PathParser, "s3"),
         })
     }
-
-    /// Parse S3 path to extract bucket and key (for backward compatibility)
-    ///
-    /// Expected format: s3://bucket/key/path
-    pub(crate) fn parse_s3_path(path: &str) -> Result<(String, String)> {
-        S3PathParser.parse(path)
-    }
 }
 
 // Delegate all StorageBackend methods to the inner BaseStorageBackend
@@ -134,24 +127,5 @@ impl StorageBackend for S3Backend {
 
     fn supports_multipart(&self) -> bool {
         self.inner.supports_multipart()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_s3_path() {
-        let (bucket, key) =
-            S3Backend::parse_s3_path("s3://my-bucket/path/to/file.parquet").unwrap();
-        assert_eq!(bucket, "my-bucket");
-        assert_eq!(key, "path/to/file.parquet");
-    }
-
-    #[test]
-    fn test_parse_s3_path_invalid() {
-        assert!(S3Backend::parse_s3_path("s3://bucket-only").is_err());
-        assert!(S3Backend::parse_s3_path("/local/path").is_err());
     }
 }
