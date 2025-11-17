@@ -32,15 +32,15 @@ use crate::error::{Error, Result};
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::arrow_strategy::ArrowReaderStrategy;
-/// use tabletools::core::formats::strategies::ReaderStrategy;
+/// use tablectl::core::formats::arrow_strategy::ArrowReaderStrategy;
+/// use tablectl::core::formats::strategies::ReaderStrategy;
 /// use bytes::Bytes;
 ///
 /// let strategy = ArrowReaderStrategy::new();
 /// let data: Bytes = /* read Arrow IPC file */
 /// # Bytes::new();
 /// let schema = strategy.extract_schema(data)?;
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct ArrowReaderStrategy;
 
@@ -132,9 +132,9 @@ impl BatchReader for ArrowBatchReader {
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::arrow_strategy::ArrowWriterStrategy;
-/// use tabletools::core::formats::strategies::WriterStrategy;
-/// use tabletools::core::formats::traits::WriteOptions;
+/// use tablectl::core::formats::arrow_strategy::ArrowWriterStrategy;
+/// use tablectl::core::formats::strategies::WriterStrategy;
+/// use tablectl::core::formats::traits::WriteOptions;
 /// use datafusion::arrow::datatypes::{Schema, Field, DataType};
 /// use std::sync::Arc;
 ///
@@ -144,7 +144,7 @@ impl BatchReader for ArrowBatchReader {
 /// let options = WriteOptions::default();
 ///
 /// let writer = strategy.create_batch_writer(&mut buffer, &schema, &options)?;
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct ArrowWriterStrategy;
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// TableTools - Universal CLI for tabular data
 #[derive(Parser, Debug)]
-#[command(name = "tabletools")]
+#[command(name = "tablectl")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// Enable verbose logging

@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use tabletools::core::formats::{ArrowHandler, FormatHandler, ReadOptions};
-use tabletools::core::storage::{LocalBackend, StorageBackend};
+use tablectl::core::formats::{ArrowHandler, FormatHandler, ReadOptions};
+use tablectl::core::storage::{LocalBackend, StorageBackend};
 
 async fn create_arrow_handler(path: &str) -> ArrowHandler {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());
@@ -287,6 +287,6 @@ async fn test_write_and_read_roundtrip() {
     assert_eq!(read_batch.num_columns(), 2);
 
     // Clean up
-    use tabletools::core::storage::StorageBackend;
+    use tablectl::core::storage::StorageBackend;
     storage.delete(test_path).await.ok();
 }

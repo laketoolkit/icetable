@@ -3,10 +3,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tabletools::core::formats::{ArrowHandler, FormatHandler, ParquetHandler, WriteOptions};
-use tabletools::core::operations::convert::ConvertOperation;
-use tabletools::core::operations::validate::ValidateOperation;
-use tabletools::core::storage::{LocalBackend, StorageBackend};
+use tablectl::core::formats::{ArrowHandler, FormatHandler, ParquetHandler, WriteOptions};
+use tablectl::core::operations::convert::ConvertOperation;
+use tablectl::core::operations::validate::ValidateOperation;
+use tablectl::core::storage::{LocalBackend, StorageBackend};
 
 // ========== ValidateOperation Tests ==========
 

@@ -148,18 +148,34 @@ impl QueryTableRegistry {
             let file_format = Arc::new(ArrowFormat::default());
             let listing_options = ListingOptions::new(file_format).with_file_extension(".arrow");
 
-            let abs_file_path = if file_ref.path.starts_with("s3://") {
+            // Extract filename and construct proper URL relative to base_path
+            let table_url_str = if file_ref.path.starts_with("s3://") {
                 file_ref.path.clone()
             } else {
-                abs_path_local
+                let abs_path = abs_path_local
                     .as_ref()
                     .ok_or_else(|| Error::Configuration {
                         message: "Expected local path but abs_path_local is None".to_string(),
+                    })?;
+
+                // Extract just the filename
+                let filename = abs_path
+                    .file_name()
+                    .ok_or_else(|| Error::Configuration {
+                        message: format!("Cannot extract filename from: {}", abs_path.display()),
                     })?
-                    .to_string_lossy()
-                    .to_string()
+                    .to_string_lossy();
+
+                log::debug!("[Arrow] base_path: {}", base_path);
+                log::debug!("[Arrow] object_store_url: {}", object_store_url);
+                log::debug!("[Arrow] filename: {}", filename);
+
+                // Construct full URL: base + filename
+                format!("{}/{}", object_store_url.as_str().trim_end_matches('/'), filename)
             };
-            let table_path = ListingTableUrl::parse(&abs_file_path)?;
+
+            log::debug!("[Arrow] table_url_str passed to ListingTableUrl: {}", table_url_str);
+            let table_path = ListingTableUrl::parse(&table_url_str)?;
 
             log::debug!("Creating ListingTable for Arrow IPC");
             let config = ListingTableConfig::new(table_path)
@@ -270,20 +286,34 @@ impl QueryTableRegistry {
             let file_format = Arc::new(ParquetFormat::default());
             let listing_options = ListingOptions::new(file_format).with_file_extension(".parquet");
 
-            // Create listing table URL from the ABSOLUTE file path
-            // (abs_path_local was calculated above for local files)
-            let abs_file_path = if file_ref.path.starts_with("s3://") {
+            // Extract filename and construct proper URL relative to base_path
+            let table_url_str = if file_ref.path.starts_with("s3://") {
                 file_ref.path.clone()
             } else {
-                abs_path_local
+                let abs_path = abs_path_local
                     .as_ref()
                     .ok_or_else(|| Error::Configuration {
                         message: "Expected local path but abs_path_local is None".to_string(),
+                    })?;
+
+                // Extract just the filename
+                let filename = abs_path
+                    .file_name()
+                    .ok_or_else(|| Error::Configuration {
+                        message: format!("Cannot extract filename from: {}", abs_path.display()),
                     })?
-                    .to_string_lossy()
-                    .to_string()
+                    .to_string_lossy();
+
+                log::debug!("[Parquet] base_path: {}", base_path);
+                log::debug!("[Parquet] object_store_url: {}", object_store_url);
+                log::debug!("[Parquet] filename: {}", filename);
+
+                // Construct full URL: base + filename
+                format!("{}/{}", object_store_url.as_str().trim_end_matches('/'), filename)
             };
-            let table_path = ListingTableUrl::parse(&abs_file_path)?;
+
+            log::debug!("[Parquet] table_url_str passed to ListingTableUrl: {}", table_url_str);
+            let table_path = ListingTableUrl::parse(&table_url_str)?;
 
             // Create listing table configuration
             // ParquetFormat will efficiently read metadata from footer (row groups, statistics, schema)

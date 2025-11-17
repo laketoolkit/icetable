@@ -131,6 +131,8 @@ impl QueryOperation {
 
         // Rewrite SQL to replace file paths with table names
         let rewritten_sql = SqlPathExtractor::rewrite_sql(sql, &file_refs);
+        log::debug!("[QueryOperation] Original SQL: {}", sql);
+        log::debug!("[QueryOperation] Rewritten SQL: {}", rewritten_sql);
 
         // Execute the query
         let ctx = self.registry.context();

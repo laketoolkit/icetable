@@ -33,13 +33,13 @@ use crate::error::{Error, Result};
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::csv_strategy::CsvReaderStrategy;
-/// use tabletools::core::formats::strategies::ReaderStrategy;
+/// use tablectl::core::formats::csv_strategy::CsvReaderStrategy;
+/// use tablectl::core::formats::strategies::ReaderStrategy;
 ///
 /// let strategy = CsvReaderStrategy::new()
 ///     .with_batch_size(4096)
 ///     .with_header(true);
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct CsvReaderStrategy {
     batch_size: usize,
@@ -156,12 +156,12 @@ impl<R: std::io::Read + Send> BatchReader for CsvBatchReader<R> {
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::csv_strategy::CsvWriterStrategy;
-/// use tabletools::core::formats::strategies::WriterStrategy;
+/// use tablectl::core::formats::csv_strategy::CsvWriterStrategy;
+/// use tablectl::core::formats::strategies::WriterStrategy;
 ///
 /// let strategy = CsvWriterStrategy::new()
 ///     .with_header(true);
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct CsvWriterStrategy {
     has_header: bool,

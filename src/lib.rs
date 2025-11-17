@@ -16,9 +16,9 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use tabletools::v1::formats::{FormatHandlerRegistry, ReadOptions};
-//! use tabletools::v1::storage::StorageBackendFactory;
-//! use tabletools::v1::Result;
+//! use tablectl::v1::formats::{FormatHandlerRegistry, ReadOptions};
+//! use tablectl::v1::storage::StorageBackendFactory;
+//! use tablectl::v1::Result;
 //! use std::path::Path;
 //!
 //! #[tokio::main]
@@ -46,7 +46,7 @@
 //! # Extending with Custom Formats
 //!
 //! ```rust,ignore
-//! use tabletools::v1::formats::{FormatHandler, FormatHandlerRegistry};
+//! use tablectl::v1::formats::{FormatHandler, FormatHandlerRegistry};
 //!
 //! // Register a custom format handler
 //! FormatHandlerRegistry::global().register("xml", 75, |path, storage| {
@@ -57,7 +57,7 @@
 //! # Custom Transformations
 //!
 //! ```rust,ignore
-//! use tabletools::v1::transform::{TransformPipeline, FilterStep, CustomTransformStep};
+//! use tablectl::v1::transform::{TransformPipeline, FilterStep, CustomTransformStep};
 //!
 //! let pipeline = TransformPipeline::new()
 //!     .add_step(FilterStep::new("age > 18"))

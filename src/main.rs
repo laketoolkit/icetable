@@ -4,8 +4,8 @@ use clap::Parser;
 use colored::Colorize;
 use std::process;
 
-use tabletools::cli::commands::*;
-use tabletools::cli::parser::{Cli, Commands};
+use tablectl::cli::commands::*;
+use tablectl::cli::parser::{Cli, Commands};
 
 #[tokio::main]
 async fn main() {
@@ -13,7 +13,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize logger with settings from CLI
-    tabletools::utils::init_logger(cli.log_level);
+    tablectl::utils::init_logger(cli.log_level);
 
     // Execute command and handle errors
     let result = match cli.command {

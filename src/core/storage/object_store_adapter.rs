@@ -57,16 +57,31 @@ impl ObjectStoreAdapter {
     fn to_storage_path(&self, location: &ObjectPath) -> String {
         let path_str = location.as_ref();
 
+        log::debug!("[ObjectStoreAdapter] to_storage_path called");
+        log::debug!("[ObjectStoreAdapter]   incoming location.as_ref(): '{}'", path_str);
+        log::debug!("[ObjectStoreAdapter]   self.base_path: '{}'", self.base_path);
+
         // Local filesystem: DataFusion may pass paths with or without leading slash
         // Example: location = "home/user/data/file.parquet" (slash removed by DataFusion)
         // We need to ensure it's an absolute path
-        if self.base_path.starts_with('/') {
+        let result = if self.base_path.starts_with('/') {
+            log::debug!("[ObjectStoreAdapter]   branch: local filesystem");
             if path_str.starts_with('/') {
                 // Path is already absolute
+                log::debug!("[ObjectStoreAdapter]   sub-branch: path already absolute");
                 path_str.to_string()
             } else {
-                // Relative path - concatenate with base_path
-                format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
+                // DataFusion removed leading slash - check if it's actually an absolute path
+                let base_path_no_slash = self.base_path.trim_start_matches('/');
+                if path_str.starts_with(base_path_no_slash) {
+                    // It's an absolute path without leading slash - just add it back
+                    log::debug!("[ObjectStoreAdapter]   sub-branch: absolute path without leading slash, adding it back");
+                    format!("/{}", path_str)
+                } else {
+                    // Truly relative path - concatenate with base_path
+                    log::debug!("[ObjectStoreAdapter]   sub-branch: truly relative path, concatenating with base_path");
+                    format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
+                }
             }
         }
         // Cloud storage (S3/GCS/Azure): DataFusion passes paths relative to bucket
@@ -76,12 +91,17 @@ impl ObjectStoreAdapter {
             || self.base_path.starts_with("gs://")
             || self.base_path.starts_with("az://")
         {
+            log::debug!("[ObjectStoreAdapter]   branch: cloud storage (S3/GCS/Azure)");
             format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
         }
         // Fallback: return as-is
         else {
+            log::debug!("[ObjectStoreAdapter]   branch: fallback (return as-is)");
             path_str.to_string()
-        }
+        };
+
+        log::debug!("[ObjectStoreAdapter]   final path returned: '{}'", result);
+        result
     }
 
     /// Convert our ObjectMetadata to ObjectStore's ObjectMeta

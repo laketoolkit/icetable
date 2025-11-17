@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use tabletools::core::formats::{FormatHandler, ParquetHandler, ReadOptions};
-use tabletools::core::storage::{LocalBackend, StorageBackend};
+use tablectl::core::formats::{FormatHandler, ParquetHandler, ReadOptions};
+use tablectl::core::storage::{LocalBackend, StorageBackend};
 
 async fn create_parquet_handler(path: &str) -> ParquetHandler {
     let storage: Arc<dyn StorageBackend> = Arc::new(LocalBackend::new().unwrap());

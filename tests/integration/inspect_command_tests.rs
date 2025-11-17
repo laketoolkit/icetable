@@ -3,11 +3,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tabletools::cli::commands::InspectCommand;
-use tabletools::cli::parser::InspectArgs;
-use tabletools::core::formats::FormatHandlerFactory;
-use tabletools::core::operations::inspect::{InspectOperation, InspectOptions};
-use tabletools::core::storage::{LocalBackend, StorageBackend};
+use tablectl::cli::commands::InspectCommand;
+use tablectl::cli::parser::InspectArgs;
+use tablectl::core::formats::FormatHandlerFactory;
+use tablectl::core::operations::inspect::{InspectOperation, InspectOptions};
+use tablectl::core::storage::{LocalBackend, StorageBackend};
 
 #[tokio::test]
 async fn test_inspect_command_basic() {

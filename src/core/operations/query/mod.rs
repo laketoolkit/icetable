@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use tabletools::core::operations::query::QueryOperation;
+//! use tablectl::core::operations::query::QueryOperation;
 //!
 //! let operation = QueryOperation::new();
 //! let result = operation.execute(

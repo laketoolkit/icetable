@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use arrow::array::Array;
-use tabletools::core::operations::query::{QueryOperation, SqlPathExtractor};
+use tablectl::core::operations::query::{QueryOperation, SqlPathExtractor};
 
 #[tokio::test]
 async fn test_extract_single_file_path() {

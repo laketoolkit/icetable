@@ -1,6 +1,6 @@
 //! Stable Public API (v1.x)
 //!
-//! This module contains the stable public API for tabletools that follows
+//! This module contains the stable public API for tablectl that follows
 //! semantic versioning guarantees. Items in this module are considered stable
 //! and breaking changes will only occur in major version bumps.
 //!
@@ -14,9 +14,9 @@
 //! # Usage
 //!
 //! ```ignore
-//! use tabletools::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
-//! use tabletools::v1::storage::StorageBackendFactory;
-//! use tabletools::v1::Result;
+//! use tablectl::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
+//! use tablectl::v1::storage::StorageBackendFactory;
+//! use tablectl::v1::Result;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {

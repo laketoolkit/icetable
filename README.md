@@ -1,4 +1,4 @@
-# TableTools
+# TableCtl
 
 Universal CLI for inspecting, validating, converting, and managing tabular data files.
 
@@ -23,22 +23,22 @@ This project is currently in the architectural phase. The complete module struct
 cargo build --release
 
 # Inspect a Parquet file
-tabletools inspect data.parquet
+tablectl inspect data.parquet
 
 # Validate a file
-tabletools validate s3://bucket/data.parquet
+tablectl validate s3://bucket/data.parquet
 
 # Compare two tables
-tabletools diff old.parquet new.parquet
+tablectl diff old.parquet new.parquet
 
 # Convert formats
-tabletools convert data.csv -o data.parquet
+tablectl convert data.csv -o data.parquet
 
 # Compute statistics
-tabletools stats data.parquet --histogram
+tablectl stats data.parquet --histogram
 
 # Query with SQL
-tabletools query "SELECT * FROM data.parquet WHERE age > 30"
+tablectl query "SELECT * FROM data.parquet WHERE age > 30"
 ```
 
 ## Architecture
@@ -54,7 +54,7 @@ Key architectural decisions:
 ## Project Structure
 
 ```
-tabletools/
+tablectl/
 ├── src/
 │   ├── main.rs              # CLI entry point
 │   ├── lib.rs               # Library interface

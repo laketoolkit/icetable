@@ -39,12 +39,12 @@ use crate::error::{Error, Result};
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::parquet_strategy::ParquetReaderStrategy;
-/// use tabletools::core::formats::strategies::ReaderStrategy;
+/// use tablectl::core::formats::parquet_strategy::ParquetReaderStrategy;
+/// use tablectl::core::formats::strategies::ReaderStrategy;
 ///
 /// let strategy = ParquetReaderStrategy::new()
 ///     .with_batch_size(2048);
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct ParquetReaderStrategy {
     batch_size: usize,
@@ -308,12 +308,12 @@ impl BatchReader for ParquetBatchReader {
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::parquet_strategy::ParquetWriterStrategy;
-/// use tabletools::core::formats::strategies::WriterStrategy;
+/// use tablectl::core::formats::parquet_strategy::ParquetWriterStrategy;
+/// use tablectl::core::formats::strategies::WriterStrategy;
 ///
 /// let strategy = ParquetWriterStrategy::new()
 ///     .with_compression(Some("zstd".to_string()));
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct ParquetWriterStrategy {
     compression: Option<String>,

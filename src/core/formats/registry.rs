@@ -26,7 +26,7 @@ pub type FormatHandlerFactoryFn =
 /// # Example
 ///
 /// ```ignore
-/// use tabletools::core::formats::FormatHandlerRegistry;
+/// use tablectl::core::formats::FormatHandlerRegistry;
 ///
 /// // Register a custom format
 /// FormatHandlerRegistry::global().register("xml", 75, |path, storage| {

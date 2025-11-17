@@ -33,12 +33,12 @@ use crate::error::{Error, Result};
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::json_strategy::JsonReaderStrategy;
-/// use tabletools::core::formats::strategies::ReaderStrategy;
+/// use tablectl::core::formats::json_strategy::JsonReaderStrategy;
+/// use tablectl::core::formats::strategies::ReaderStrategy;
 ///
 /// let strategy = JsonReaderStrategy::new()
 ///     .with_batch_size(4096);
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct JsonReaderStrategy {
     batch_size: usize,
@@ -141,11 +141,11 @@ impl<R: std::io::BufRead + Send> BatchReader for JsonBatchReader<R> {
 /// # Example
 ///
 /// ```no_run
-/// use tabletools::core::formats::json_strategy::JsonWriterStrategy;
-/// use tabletools::core::formats::strategies::WriterStrategy;
+/// use tablectl::core::formats::json_strategy::JsonWriterStrategy;
+/// use tablectl::core::formats::strategies::WriterStrategy;
 ///
 /// let strategy = JsonWriterStrategy::new();
-/// # Ok::<(), tabletools::error::Error>(())
+/// # Ok::<(), tablectl::error::Error>(())
 /// ```
 pub struct JsonWriterStrategy {
     line_delimited: bool,

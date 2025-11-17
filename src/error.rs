@@ -225,7 +225,7 @@ impl Error {
             }
             Error::CorruptedFile { path, reason } => {
                 format!(
-                    "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: tabletools validate {}\n  3. Check file type: file {}",
+                    "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: tablectl validate {}\n  3. Check file type: file {}",
                     path.display(),
                     reason,
                     path.display(),

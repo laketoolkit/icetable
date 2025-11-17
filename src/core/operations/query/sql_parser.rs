@@ -56,8 +56,8 @@ impl SqlPathExtractor {
             // - Case-insensitive FROM or JOIN
             // - Followed by whitespace
             // - Single or double quoted file path
-            // - Optional AS keyword with alias OR just identifier (capture both)
-            Regex::new(r#"(?i)(FROM|JOIN)\s+['"]([^'"]+)['"]\s*(?:AS\s+)?(\w+)?"#)
+            // - Optional AS keyword with alias (only captures alias if AS is present)
+            Regex::new(r#"(?i)(FROM|JOIN)\s+['"]([^'"]+)['"]\s*(?:AS\s+(\w+))?"#)
                 .expect("Failed to compile SQL path extraction regex")
         })
     }
@@ -91,10 +91,14 @@ impl SqlPathExtractor {
 
             let alias = cap.get(3).map(|m| m.as_str().to_string());
 
+            log::debug!("[SqlPathExtractor] Extracted: path='{}', alias={:?}", path, alias);
+
             // Only add unique paths (same path can appear multiple times in complex queries)
             if !seen_paths.contains(&path) {
                 seen_paths.insert(path.clone());
-                references.push(FileReference::new(path, alias));
+                let file_ref = FileReference::new(path, alias);
+                log::debug!("[SqlPathExtractor] Created FileReference: table_name='{}'", file_ref.table_name);
+                references.push(file_ref);
             }
         }
 
@@ -160,9 +164,19 @@ impl SqlPathExtractor {
                 format!("\"{}\"", file_ref.path),
             ];
 
+            // Quote the table name if it contains special characters (-, ., etc.)
+            let table_name = if file_ref.table_name.contains('-')
+                || file_ref.table_name.contains('.')
+                || file_ref.table_name.contains('/')
+            {
+                format!("\"{}\"", file_ref.table_name)
+            } else {
+                file_ref.table_name.clone()
+            };
+
             for pattern in &patterns {
                 // Replace quoted path with table name
-                rewritten = rewritten.replace(pattern, &file_ref.table_name);
+                rewritten = rewritten.replace(pattern, &table_name);
             }
         }
 
@@ -187,13 +201,14 @@ mod tests {
 
     #[test]
     fn test_extract_with_alias() {
+        // Without AS keyword, no alias should be captured
         let sql = "SELECT * FROM 'data/flights.parquet' f";
         let refs = SqlPathExtractor::extract_file_paths(sql).unwrap();
 
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].path, "data/flights.parquet");
-        assert_eq!(refs[0].alias, Some("f".to_string()));
-        assert_eq!(refs[0].table_name, "f");
+        assert_eq!(refs[0].alias, None);
+        assert_eq!(refs[0].table_name, "flights");
     }
 
     #[test]
@@ -211,7 +226,7 @@ mod tests {
     fn test_extract_join() {
         let sql = r#"
             SELECT f.*, a.name
-            FROM "data/flights.parquet" f
+            FROM "data/flights.parquet" AS f
             JOIN 'data/airlines.csv' AS a
             ON f.airline_id = a.id
         "#;
@@ -302,18 +317,18 @@ mod tests {
 
     #[test]
     fn test_rewrite_sql_with_alias() {
-        let sql = "SELECT * FROM 'data/flights.parquet' f WHERE f.year > 2020";
+        let sql = "SELECT * FROM 'data/flights.parquet' AS f WHERE f.year > 2020";
         let refs = vec![FileReference::new(
             "data/flights.parquet".to_string(),
             Some("f".to_string()),
         )];
         let rewritten = SqlPathExtractor::rewrite_sql(sql, &refs);
-        assert_eq!(rewritten, "SELECT * FROM f f WHERE f.year > 2020");
+        assert_eq!(rewritten, "SELECT * FROM f AS f WHERE f.year > 2020");
     }
 
     #[test]
     fn test_rewrite_sql_join() {
-        let sql = r#"SELECT f.*, a.name FROM 'data/flights.parquet' f JOIN "data/airlines.csv" a ON f.id = a.id"#;
+        let sql = r#"SELECT f.*, a.name FROM 'data/flights.parquet' AS f JOIN "data/airlines.csv" AS a ON f.id = a.id"#;
         let refs = vec![
             FileReference::new("data/flights.parquet".to_string(), Some("f".to_string())),
             FileReference::new("data/airlines.csv".to_string(), Some("a".to_string())),
@@ -321,7 +336,7 @@ mod tests {
         let rewritten = SqlPathExtractor::rewrite_sql(sql, &refs);
         assert_eq!(
             rewritten,
-            "SELECT f.*, a.name FROM f f JOIN a a ON f.id = a.id"
+            "SELECT f.*, a.name FROM f AS f JOIN a AS a ON f.id = a.id"
         );
     }
 }

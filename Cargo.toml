@@ -1,11 +1,11 @@
 [package]
-name = "tabletools"
+name = "tablectl"
 version = "0.1.0"
 edition = "2024"
-authors = ["TableTools Contributors"]
+authors = ["TableCtl Contributors"]
 description = "Universal CLI for inspecting, validating, converting and managing tabular data files"
 license = "Apache-2.0"
-repository = "https://github.com/datatools-hub/tabletools"
+repository = "https://github.com/datatools-hub/tablectl"
 keywords = ["parquet", "arrow", "iceberg", "delta-lake", "cli"]
 categories = ["command-line-utilities", "database"]
 
@@ -80,7 +80,7 @@ tui = ["dep:ratatui", "dep:crossterm"]
 all = ["delta", "iceberg", "tui"]
 
 [[bin]]
-name = "tabletools"
+name = "tablectl"
 path = "src/main.rs"
 
 [[bin]]
@@ -88,7 +88,7 @@ name = "build_fixtures"
 path = "build_fixtures.rs"
 
 [lib]
-name = "tabletools"
+name = "tablectl"
 path = "src/lib.rs"
 
 [[bench]]

@@ -1,7 +1,7 @@
 //! Unit tests for LocalStorageBackend
 
 use bytes::Bytes;
-use tabletools::core::storage::{
+use tablectl::core::storage::{
     GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend,
 };
 
