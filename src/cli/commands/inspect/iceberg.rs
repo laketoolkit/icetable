@@ -248,14 +248,80 @@ fn build_current_snapshot_section(metadata: &serde_json::Value, _options: &Physi
 }
 
 #[cfg(feature = "iceberg")]
-fn build_statistics_section(_metadata: &serde_json::Value, _options: &PhysicalInspectOptions) -> Result<Vec<BoxItem>> {
-    let items = vec![
+fn build_statistics_section(metadata: &serde_json::Value, _options: &PhysicalInspectOptions) -> Result<Vec<BoxItem>> {
+    let mut items = vec![
         text_item(format!("═══ {} ═══", "Summary Statistics".bold())),
         BoxItem::Empty,
-        text_item("  (Detailed statistics require reading manifest files)"),
-        text_item("  (Not yet implemented)"),
     ];
 
+    // Get current snapshot if available
+    let current_snapshot_id = metadata.get("current-snapshot-id")
+        .and_then(|id| id.as_i64())
+        .unwrap_or(-1);
+
+    if current_snapshot_id == -1 {
+        items.push(text_item("  No data yet (empty table)"));
+        return Ok(items);
+    }
+
+    // Try to find the current snapshot in the snapshots array
+    if let Some(snapshots) = metadata.get("snapshots").and_then(|s| s.as_array()) {
+        if let Some(snapshot) = snapshots.iter().find(|s| {
+            s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_snapshot_id)
+        }) {
+            // Extract summary statistics from snapshot
+            if let Some(summary) = snapshot.get("summary").and_then(|s| s.as_object()) {
+                // Total records
+                if let Some(total_records) = summary.get("total-records")
+                    .and_then(|r| r.as_str())
+                    .and_then(|r| r.parse::<i64>().ok())
+                {
+                    items.push(kv_item("Total Records", format_number(total_records), 20));
+                }
+
+                // Total data files
+                if let Some(total_files) = summary.get("total-data-files")
+                    .and_then(|f| f.as_str())
+                    .and_then(|f| f.parse::<i64>().ok())
+                {
+                    items.push(kv_item("Total Data Files", format_number(total_files), 20));
+                }
+
+                // Total size
+                if let Some(total_size) = summary.get("total-files-size")
+                    .and_then(|s| s.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    items.push(kv_item("Total Size", format_bytes(total_size), 20));
+                }
+
+                // Total position deletes
+                if let Some(total_deletes) = summary.get("total-position-deletes")
+                    .and_then(|d| d.as_str())
+                    .and_then(|d| d.parse::<i64>().ok())
+                {
+                    if total_deletes > 0 {
+                        items.push(kv_item("Position Deletes", format_number(total_deletes), 20));
+                    }
+                }
+
+                // Total equality deletes
+                if let Some(total_eq_deletes) = summary.get("total-equality-deletes")
+                    .and_then(|d| d.as_str())
+                    .and_then(|d| d.parse::<i64>().ok())
+                {
+                    if total_eq_deletes > 0 {
+                        items.push(kv_item("Equality Deletes", format_number(total_eq_deletes), 20));
+                    }
+                }
+
+                return Ok(items);
+            }
+        }
+    }
+
+    // If no summary available
+    items.push(text_item("  No statistics available in snapshot"));
     Ok(items)
 }
 

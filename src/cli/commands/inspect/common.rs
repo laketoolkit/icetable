@@ -134,6 +134,11 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Alias for format_size
+pub fn format_bytes(bytes: u64) -> String {
+    format_size(bytes)
+}
+
 /// Format number with thousands separators
 pub fn format_number(n: i64) -> String {
     let s = n.to_string();

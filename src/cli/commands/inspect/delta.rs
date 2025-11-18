@@ -76,21 +76,21 @@ pub async fn inspect_delta_layout(
 
     // Build version history (verbose only)
     let history_items = if options.verbosity >= VerbosityLevel::Verbose {
-        Some(build_version_history())
+        Some(build_version_history(&table)?)
     } else {
         None
     };
 
     // Build table features (verbose only)
     let features_items = if options.verbosity >= VerbosityLevel::Verbose {
-        Some(build_table_features())
+        Some(build_table_features(&table)?)
     } else {
         None
     };
 
     // Build table properties (verbose only)
     let properties_items = if options.verbosity >= VerbosityLevel::Verbose {
-        Some(build_table_properties())
+        Some(build_table_properties(&table)?)
     } else {
         None
     };
@@ -235,8 +235,10 @@ fn build_statistics_section(
 ) -> Result<Vec<BoxItem>> {
     let snapshot = table.snapshot()
         .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
-    let files: Vec<_> = snapshot.file_paths_iter().collect();
-    let file_count = files.len();
+
+    // Get file count using file_paths_iter
+    let file_paths: Vec<_> = snapshot.file_paths_iter().collect();
+    let file_count = file_paths.len();
 
     let mut items = vec![
         text_item(format!("═══ {} ═══", "Summary Statistics".bold())),
@@ -244,54 +246,146 @@ fn build_statistics_section(
         kv_item("Total Files", format_number(file_count as i64), 20),
     ];
 
-    // Verbose additions
+    // Get partition columns to check if table is partitioned
+    let partition_columns = snapshot.metadata().partition_columns();
+
+    // Verbose additions - show partition information if table is partitioned
     if options.verbosity >= VerbosityLevel::Verbose {
-        items.push(BoxItem::Empty);
-        items.push(text_item(format!("─── {} ───", "Per-Partition Statistics (Top 5)".bold())));
-        items.push(BoxItem::Empty);
-        items.push(text_item("  (Not yet implemented)"));
+        if !partition_columns.is_empty() {
+            items.push(BoxItem::Empty);
+            items.push(text_item(format!("─── {} ───", "Partition Information".bold())));
+            items.push(BoxItem::Empty);
+            items.push(text_item(format!(
+                "  Table is partitioned by {} column{}",
+                partition_columns.len(),
+                if partition_columns.len() > 1 { "s" } else { "" }
+            )));
+            for col in partition_columns {
+                items.push(text_item(format!("    - {}", col.bold())));
+            }
+        }
     }
 
     Ok(items)
 }
 
 #[cfg(feature = "delta")]
-fn build_version_history() -> Vec<BoxItem> {
-    vec![
+fn build_version_history(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>> {
+    let mut items = vec![
         text_item(format!("═══ {} ═══", "Version History".bold())),
         BoxItem::Empty,
         text_item("Recent Versions (last 5):"),
         BoxItem::Empty,
-        text_item("  (Not yet implemented)"),
-    ]
+    ];
+
+    // Get the current version
+    let current_version = table.version().unwrap_or(0);
+
+    // Show last 5 versions (or fewer if table is younger)
+    let start_version = if current_version >= 4 {
+        current_version - 4
+    } else {
+        0
+    };
+
+    for version in start_version..=current_version {
+        let marker = if version == current_version {
+            "→".to_string()
+        } else {
+            " ".to_string()
+        };
+
+        items.push(text_item(format!(
+            "  {} Version {:<5}",
+            marker,
+            format!("{}", version).bold()
+        )));
+    }
+
+    Ok(items)
 }
 
 #[cfg(feature = "delta")]
-fn build_table_features() -> Vec<BoxItem> {
-    vec![
+fn build_table_features(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>> {
+    let mut items = vec![
         text_item(format!("═══ {} ═══", "Table Features".bold())),
         BoxItem::Empty,
-        text_item("✓ Column Mapping"),
-        text_item("✓ Deletion Vectors"),
-        text_item("✓ Change Data Feed"),
-        text_item("✗ Identity Columns"),
-        text_item("✗ Timestamp Without Timezone"),
-    ]
+    ];
+
+    // Get table configuration
+    let snapshot = table.snapshot()
+        .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
+    let metadata = snapshot.metadata();
+    let config = metadata.configuration();
+
+    // Check for various Delta features based on configuration
+    let has_column_mapping = config.get("delta.columnMapping.mode").is_some();
+    let has_deletion_vectors = config.get("delta.enableDeletionVectors")
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(false);
+    let has_change_data_feed = config.get("delta.enableChangeDataFeed")
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(false);
+
+    // Get protocol version to check for advanced features
+    let protocol = snapshot.protocol();
+    let reader_version = protocol.min_reader_version();
+    let writer_version = protocol.min_writer_version();
+
+    // Display features
+    items.push(text_item(format!(
+        "{} Column Mapping",
+        if has_column_mapping { "✓" } else { "✗" }
+    )));
+    items.push(text_item(format!(
+        "{} Deletion Vectors",
+        if has_deletion_vectors { "✓" } else { "✗" }
+    )));
+    items.push(text_item(format!(
+        "{} Change Data Feed",
+        if has_change_data_feed { "✓" } else { "✗" }
+    )));
+    items.push(text_item(format!(
+        "{} Advanced Protocol (Reader v{}, Writer v{})",
+        if reader_version >= 2 || writer_version >= 2 { "✓" } else { "✗" },
+        reader_version,
+        writer_version
+    )));
+
+    Ok(items)
 }
 
 #[cfg(feature = "delta")]
-fn build_table_properties() -> Vec<BoxItem> {
-    vec![
+fn build_table_properties(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>> {
+    let mut items = vec![
         text_item(format!("═══ {} ═══", "Table Properties".bold())),
         BoxItem::Empty,
-        kv_item("delta.minReaderVersion", "1", 35),
-        kv_item("delta.minWriterVersion", "2", 35),
-        kv_item("delta.enableChangeDataFeed", "true", 35),
-        kv_item("delta.deletedFileRetentionDuration", "interval 1 week", 35),
-        kv_item("delta.logRetentionDuration", "interval 30 days", 35),
-        kv_item("delta.autoOptimize.optimizeWrite", "true", 35),
-        kv_item("delta.autoOptimize.autoCompact", "false", 35),
-    ]
+    ];
+
+    // Get table configuration
+    let snapshot = table.snapshot()
+        .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
+    let metadata = snapshot.metadata();
+    let config = metadata.configuration();
+
+    // Get protocol versions
+    let protocol = snapshot.protocol();
+    items.push(kv_item("delta.minReaderVersion", protocol.min_reader_version(), 35));
+    items.push(kv_item("delta.minWriterVersion", protocol.min_writer_version(), 35));
+
+    // Show all configuration properties (sorted)
+    if config.is_empty() {
+        items.push(text_item("  No additional properties set"));
+    } else {
+        let mut config_items: Vec<_> = config.iter().collect();
+        config_items.sort_by_key(|(k, _)| *k);
+
+        for (key, value) in config_items {
+            items.push(kv_item(key, value, 35));
+        }
+    }
+
+    Ok(items)
 }
 
 #[cfg(not(feature = "delta"))]
