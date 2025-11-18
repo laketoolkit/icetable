@@ -10,11 +10,14 @@ use crate::error::Result;
 
 use super::common::*;
 
+#[cfg(feature = "delta")]
+use serde_json::Value as JsonValue;
+
 /// Inspect Delta Lake table
 #[cfg(feature = "delta")]
 pub async fn inspect_delta_layout(
     path: &Path,
-    _storage: Arc<dyn StorageBackend>,
+    storage: Arc<dyn StorageBackend>,
     options: &PhysicalInspectOptions,
 ) -> Result<PhysicalInspectResult> {
     use deltalake::DeltaTableBuilder;
@@ -45,13 +48,40 @@ pub async fn inspect_delta_layout(
         .await
         .map_err(|e| crate::error::Error::General(format!("Failed to load Delta table: {}", e)))?;
 
+    // Get snapshot for metadata
+    let snapshot = table.snapshot()
+        .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
+    let metadata = snapshot.metadata();
+
+    // Get protocol versions
+    let protocol = snapshot.protocol();
+
     // Build file info section
     let mut file_info = vec![
         kv_item("Path", path.display().to_string(), 20),
         kv_item("Format", "Delta Lake", 20),
-        kv_item("Protocol Version", "Reader: 1, Writer: 2", 20),
+        kv_item("Protocol Version", format!("Reader: {}, Writer: {}", protocol.min_reader_version(), protocol.min_writer_version()), 20),
         kv_item("Current Version", table.version().unwrap_or(0), 20),
     ];
+
+    // Add Created At (timestamp from version 0)
+    if let Ok(Some(commit_0)) = read_commit_info(storage.clone(), path.to_str().unwrap_or(""), 0).await {
+        if let Some(timestamp_ms) = commit_0.timestamp {
+            if let Some(dt) = chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                file_info.push(kv_item("Created At", dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(), 20));
+            }
+        }
+    }
+
+    // Add Last Modified (timestamp from current version)
+    let current_version = table.version().unwrap_or(0) as i64;
+    if let Ok(Some(commit_latest)) = read_commit_info(storage.clone(), path.to_str().unwrap_or(""), current_version).await {
+        if let Some(timestamp_ms) = commit_latest.timestamp {
+            if let Some(dt) = chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                file_info.push(kv_item("Last Modified", dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(), 20));
+            }
+        }
+    }
 
     // Add verbose info
     if options.verbosity >= VerbosityLevel::Verbose {
@@ -60,6 +90,9 @@ pub async fn inspect_delta_layout(
             format!("{}/_delta_log", path.display()),
             20,
         ));
+
+        // Add Table ID in verbose mode
+        file_info.push(kv_item("Table ID", metadata.id(), 20));
     }
 
     // Build schema section
@@ -69,14 +102,21 @@ pub async fn inspect_delta_layout(
     let partition_items = build_partitioning_section(&table, options)?;
 
     // Build current state section
-    let state_items = build_current_state_section(&table, options)?;
+    let state_items = build_current_state_section(&table, storage.clone(), path.to_str().unwrap_or(""), options).await?;
 
     // Build statistics section
-    let stats_items = build_statistics_section(&table, options)?;
+    let stats_items = build_statistics_section(&table, storage.clone(), path.to_str().unwrap_or(""), options).await?;
 
     // Build version history (verbose only)
     let history_items = if options.verbosity >= VerbosityLevel::Verbose {
-        Some(build_version_history(&table)?)
+        Some(build_version_history(&table, storage.clone(), path.to_str().unwrap_or("")).await?)
+    } else {
+        None
+    };
+
+    // Build checkpoint info (verbose only)
+    let checkpoint_items = if options.verbosity >= VerbosityLevel::Verbose {
+        Some(build_checkpoint_info(&table)?)
     } else {
         None
     };
@@ -107,6 +147,11 @@ pub async fn inspect_delta_layout(
     if let Some(history) = history_items {
         all_items.push(BoxItem::Empty);
         all_items.extend(history);
+    }
+
+    if let Some(checkpoint) = checkpoint_items {
+        all_items.push(BoxItem::Empty);
+        all_items.extend(checkpoint);
     }
 
     all_items.push(BoxItem::Empty);
@@ -197,56 +242,161 @@ fn build_partitioning_section(
 }
 
 #[cfg(feature = "delta")]
-fn build_current_state_section(
+async fn build_current_state_section(
     table: &deltalake::DeltaTable,
+    storage: Arc<dyn StorageBackend>,
+    table_path: &str,
     options: &PhysicalInspectOptions,
 ) -> Result<Vec<BoxItem>> {
+    let current_version = table.version().unwrap_or(0);
+
     let mut items = vec![
         text_item(format!("═══ {} ═══", "Current State".bold())),
         BoxItem::Empty,
-        kv_item("Version", table.version().unwrap_or(0), 20),
+        kv_item("Version", current_version, 20),
     ];
 
-    // Get file count
+    // Get snapshot and files info
     let snapshot = table.snapshot()
         .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
-    let file_count = snapshot.file_paths_iter().count();
+
+    // Collect file information to calculate stats
+    let file_paths: Vec<_> = snapshot.file_paths_iter().collect();
+    let file_count = file_paths.len();
+
+    // Try to read commit info for the current version
+    let commit_info = read_commit_info(storage.clone(), table_path, current_version as i64).await?;
+
+    // Add timestamp if available
+    if let Some(ref ci) = commit_info {
+        if let Some(timestamp_ms) = ci.timestamp {
+            let timestamp_dt = chrono::DateTime::from_timestamp_millis(timestamp_ms)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+            items.push(kv_item("Timestamp", timestamp_dt, 20));
+        }
+
+        // Add operation
+        if let Some(ref operation) = ci.operation {
+            items.push(kv_item("Operation", operation, 20));
+        }
+    }
 
     items.push(kv_item("Files", format_number(file_count as i64), 20));
 
-    // Verbose mode additions
+    // Try to get total rows and size from file stats
+    let file_stats = read_file_stats(storage, table_path, current_version as i64).await?;
+    if let Some(records) = file_stats.total_records {
+        items.push(kv_item("Rows", format_number(records), 20));
+    }
+    items.push(kv_item("Size", format_bytes(file_stats.total_size as u64), 20));
+
+    // Fallback: Add rows and size from operation metrics if file stats didn't have them
+    if file_stats.total_records.is_none() {
+        if let Some(ref ci) = commit_info {
+            if let Some(ref metrics) = ci.operation_metrics {
+                if let Some(rows) = metrics.get("numOutputRows").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()) {
+                    items.push(kv_item("Rows", format_number(rows), 20));
+                }
+            }
+        }
+    }
+
+    // Add is blind append
+    if let Some(ref ci) = commit_info {
+        if let Some(is_blind) = ci.is_blind_append {
+            items.push(kv_item("Is Blind Append", is_blind, 20));
+        }
+    }
+
+    // Verbose mode additions - show operation details
     if options.verbosity >= VerbosityLevel::Verbose {
-        items.push(kv_item("Is Blind Append", "false", 20));
-        items.push(BoxItem::Empty);
-        items.push(text_item("Operation Parameters:"));
-        items.push(text_item("  mode                       Append"));
-        items.push(BoxItem::Empty);
-        items.push(text_item("Operation Metrics:"));
-        items.push(text_item(format!("  numFiles                   {}", file_count)));
+        if let Some(ref ci) = commit_info {
+            items.push(BoxItem::Empty);
+            items.push(text_item("Operation Parameters:"));
+
+            if let Some(ref params) = ci.operation_parameters {
+                for (key, value) in params.iter() {
+                    let value_str = match value {
+                        JsonValue::String(s) => s.clone(),
+                        JsonValue::Number(n) => n.to_string(),
+                        JsonValue::Bool(b) => b.to_string(),
+                        _ => format!("{:?}", value),
+                    };
+                    items.push(text_item(format!("  {:<25} {}", key, value_str)));
+                }
+            } else {
+                items.push(text_item("  No parameters available"));
+            }
+
+            items.push(BoxItem::Empty);
+            items.push(text_item("Operation Metrics:"));
+
+            if let Some(ref metrics) = ci.operation_metrics {
+                for (key, value) in metrics.iter() {
+                    let value_str = match value {
+                        JsonValue::String(s) => s.clone(),
+                        JsonValue::Number(n) => n.to_string(),
+                        _ => format!("{:?}", value),
+                    };
+                    items.push(text_item(format!("  {:<25} {}", key, value_str)));
+                }
+            } else {
+                items.push(text_item("  No metrics available"));
+            }
+        }
     }
 
     Ok(items)
 }
 
 #[cfg(feature = "delta")]
-fn build_statistics_section(
+async fn build_statistics_section(
     table: &deltalake::DeltaTable,
+    storage: Arc<dyn StorageBackend>,
+    table_path: &str,
     options: &PhysicalInspectOptions,
 ) -> Result<Vec<BoxItem>> {
-    let snapshot = table.snapshot()
-        .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
+    let current_version = table.version().unwrap_or(0);
 
-    // Get file count using file_paths_iter
-    let file_paths: Vec<_> = snapshot.file_paths_iter().collect();
-    let file_count = file_paths.len();
+    // Read file statistics from the transaction log
+    let file_stats = read_file_stats(storage, table_path, current_version as i64).await?;
 
     let mut items = vec![
         text_item(format!("═══ {} ═══", "Summary Statistics".bold())),
         BoxItem::Empty,
-        kv_item("Total Files", format_number(file_count as i64), 20),
+        kv_item("Total Files", format_number(file_stats.total_files as i64), 20),
     ];
 
+    // Add total records if available
+    if let Some(total) = file_stats.total_records {
+        items.push(kv_item("Total Records", format_number(total), 20));
+    }
+
+    // Add total size
+    items.push(kv_item("Total Size", format_bytes(file_stats.total_size as u64), 20));
+
+    // Add average file size
+    if file_stats.total_files > 0 {
+        let avg_size = file_stats.total_size / file_stats.total_files as i64;
+        items.push(kv_item("Avg File Size", format_bytes(avg_size as u64), 20));
+    }
+
+    // Verbose additions - show min/max sizes
+    if options.verbosity >= VerbosityLevel::Verbose {
+        items.push(BoxItem::Empty);
+
+        if let Some(min) = file_stats.min_size {
+            items.push(kv_item("Min File Size", format_bytes(min as u64), 20));
+        }
+        if let Some(max) = file_stats.max_size {
+            items.push(kv_item("Max File Size", format_bytes(max as u64), 20));
+        }
+    }
+
     // Get partition columns to check if table is partitioned
+    let snapshot = table.snapshot()
+        .map_err(|e| crate::error::Error::General(format!("Failed to get snapshot: {}", e)))?;
     let partition_columns = snapshot.metadata().partition_columns();
 
     // Verbose additions - show partition information if table is partitioned
@@ -270,23 +420,33 @@ fn build_statistics_section(
 }
 
 #[cfg(feature = "delta")]
-fn build_version_history(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>> {
+async fn build_version_history(
+    table: &deltalake::DeltaTable,
+    storage: Arc<dyn StorageBackend>,
+    table_path: &str,
+) -> Result<Vec<BoxItem>> {
     let mut items = vec![
         text_item(format!("═══ {} ═══", "Version History".bold())),
-        BoxItem::Empty,
-        text_item("Recent Versions (last 5):"),
         BoxItem::Empty,
     ];
 
     // Get the current version
     let current_version = table.version().unwrap_or(0);
 
-    // Show last 5 versions (or fewer if table is younger)
-    let start_version = if current_version >= 4 {
-        current_version - 4
+    // Show last 5-10 versions (limit to 10)
+    let start_version = if current_version >= 9 {
+        current_version - 9
     } else {
         0
     };
+
+    let num_versions = (current_version - start_version + 1).min(10);
+    items.push(text_item(format!(
+        "Recent Versions (showing {} of {}):",
+        num_versions,
+        current_version + 1
+    )));
+    items.push(BoxItem::Empty);
 
     for version in start_version..=current_version {
         let marker = if version == current_version {
@@ -295,11 +455,119 @@ fn build_version_history(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>> 
             " ".to_string()
         };
 
-        items.push(text_item(format!(
-            "  {} Version {:<5}",
-            marker,
-            format!("{}", version).bold()
-        )));
+        // Read commit info for this version
+        let commit_info = read_commit_info(storage.clone(), table_path, version as i64).await?;
+
+        if let Some(ci) = commit_info {
+            let timestamp_str = if let Some(ts) = ci.timestamp {
+                chrono::DateTime::from_timestamp_millis(ts)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|| "Unknown".to_string())
+            } else {
+                "Unknown".to_string()
+            };
+
+            let operation = ci.operation.as_deref().unwrap_or("UNKNOWN");
+
+            items.push(text_item(format!(
+                "  {} Version {} - {} - {}",
+                marker,
+                format!("{}", version).bold(),
+                timestamp_str,
+                operation
+            )));
+
+            // Add metrics - use operationMetrics if available, otherwise calculate from actions
+            let (added_files, removed_files, added_records, removed_records, added_bytes, removed_bytes) =
+                if let Some(ref metrics) = ci.operation_metrics {
+                    // Use operationMetrics if available
+                    let added = metrics.get("numAddedFiles").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    let removed = metrics.get("numRemovedFiles").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    let rows = metrics.get("numOutputRows").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    let bytes = metrics.get("numOutputBytes").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                    (added, removed, rows, 0, bytes, 0)
+                } else {
+                    // Calculate from add/remove actions
+                    if let Ok(stats) = read_file_stats(storage.clone(), table_path, version as i64).await {
+                        (stats.added_files, stats.removed_files, stats.added_records, stats.removed_records, stats.added_bytes, stats.removed_bytes)
+                    } else {
+                        (0, 0, 0, 0, 0, 0)
+                    }
+                };
+
+            // Show file deltas
+            if added_files != 0 || removed_files != 0 {
+                if removed_files == 0 {
+                    items.push(text_item(format!("      Files: +{}", added_files)));
+                } else if added_files == 0 {
+                    items.push(text_item(format!("      Files: -{}", removed_files)));
+                } else {
+                    // Both added and removed - show net
+                    let net = added_files - removed_files;
+                    items.push(text_item(format!("      Files: +{}, -{} (net: {:+})", added_files, removed_files, net)));
+                }
+            }
+
+            // Show rows delta
+            if added_records != 0 || removed_records != 0 {
+                if removed_records == 0 && added_records != 0 {
+                    items.push(text_item(format!("      Rows: +{}", format_number(added_records))));
+                } else if added_records == 0 && removed_records != 0 {
+                    items.push(text_item(format!("      Rows: -{}", format_number(removed_records))));
+                } else if added_records != 0 && removed_records != 0 {
+                    let net = added_records - removed_records;
+                    items.push(text_item(format!("      Rows: +{}, -{} (net: {:+})",
+                        format_number(added_records), format_number(removed_records), format_number(net))));
+                }
+            }
+
+            // Show size delta
+            if added_bytes != 0 || removed_bytes != 0 {
+                if removed_bytes == 0 && added_bytes != 0 {
+                    items.push(text_item(format!("      Size: +{}", format_bytes(added_bytes as u64))));
+                } else if added_bytes == 0 && removed_bytes != 0 {
+                    items.push(text_item(format!("      Size: -{}", format_bytes(removed_bytes as u64))));
+                } else if added_bytes != 0 && removed_bytes != 0 {
+                    let net = added_bytes - removed_bytes;
+                    let net_sign = if net >= 0 { "+" } else { "-" };
+                    items.push(text_item(format!("      Size: +{}, -{} (net: {}{})",
+                        format_bytes(added_bytes as u64), format_bytes(removed_bytes as u64),
+                        net_sign, format_bytes(net.abs() as u64))));
+                }
+            }
+        } else {
+            // No commit info available for this version
+            items.push(text_item(format!(
+                "  {} Version {}",
+                marker,
+                format!("{}", version).bold()
+            )));
+        }
+    }
+
+    Ok(items)
+}
+
+#[cfg(feature = "delta")]
+fn build_checkpoint_info(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>> {
+    let mut items = vec![
+        text_item(format!("═══ {} ═══", "Checkpoint Information".bold())),
+        BoxItem::Empty,
+    ];
+
+    // Get current version for checkpoint calculation
+    let current_version = table.version().unwrap_or(0);
+
+    // Delta Lake typically checkpoints every 10 commits by default
+    let checkpoint_interval = 10;
+    let last_checkpoint_version = (current_version / checkpoint_interval) * checkpoint_interval;
+
+    if last_checkpoint_version > 0 {
+        items.push(kv_item("Last Checkpoint", last_checkpoint_version, 25));
+        items.push(kv_item("Next Checkpoint (expected)", last_checkpoint_version + checkpoint_interval, 25));
+        items.push(kv_item("Commits since checkpoint", current_version - last_checkpoint_version, 25));
+    } else {
+        items.push(text_item("  No checkpoints yet (table version < 10)"));
     }
 
     Ok(items)
@@ -386,6 +654,211 @@ fn build_table_properties(table: &deltalake::DeltaTable) -> Result<Vec<BoxItem>>
     }
 
     Ok(items)
+}
+
+#[cfg(feature = "delta")]
+#[derive(Debug)]
+struct CommitInfo {
+    timestamp: Option<i64>,
+    operation: Option<String>,
+    operation_parameters: Option<serde_json::Map<String, JsonValue>>,
+    operation_metrics: Option<serde_json::Map<String, JsonValue>>,
+    is_blind_append: Option<bool>,
+}
+
+#[cfg(feature = "delta")]
+#[derive(Debug)]
+struct FileStats {
+    total_files: usize,
+    total_size: i64,
+    total_records: Option<i64>,
+    min_size: Option<i64>,
+    max_size: Option<i64>,
+    added_files: i64,
+    removed_files: i64,
+    added_records: i64,
+    removed_records: i64,
+    added_bytes: i64,
+    removed_bytes: i64,
+}
+
+#[cfg(feature = "delta")]
+async fn read_commit_info(
+    storage: Arc<dyn StorageBackend>,
+    table_path: &str,
+    version: i64,
+) -> Result<Option<CommitInfo>> {
+    use crate::core::storage::traits::GetOptions;
+
+    // Build the log file path for this version
+    let log_file = format!("{}/_delta_log/{:020}.json", table_path, version);
+
+    // Try to read the file
+    let get_opts = GetOptions {
+        range: None,
+        if_modified_since: None,
+        if_none_match: None,
+    };
+
+    let content = match storage.get(&log_file, &get_opts).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None), // File doesn't exist
+    };
+
+    // Parse the content - it's newline-delimited JSON
+    let content_str = String::from_utf8(content.to_vec())
+        .map_err(|e| crate::error::Error::General(format!("Invalid UTF-8 in log file: {}", e)))?;
+
+    // Find the commitInfo action
+    for line in content_str.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let action: JsonValue = serde_json::from_str(line)
+            .map_err(|e| crate::error::Error::General(format!("Failed to parse log action: {}", e)))?;
+
+        if let Some(commit_info) = action.get("commitInfo").and_then(|ci| ci.as_object()) {
+            let timestamp = commit_info.get("timestamp")
+                .and_then(|t| t.as_i64());
+
+            let operation = commit_info.get("operation")
+                .and_then(|o| o.as_str())
+                .map(|s| s.to_string());
+
+            let operation_parameters = commit_info.get("operationParameters")
+                .and_then(|op| op.as_object())
+                .cloned();
+
+            let operation_metrics = commit_info.get("operationMetrics")
+                .and_then(|om| om.as_object())
+                .cloned();
+
+            let is_blind_append = operation_parameters.as_ref()
+                .and_then(|params| params.get("isBlindAppend"))
+                .and_then(|v| v.as_bool());
+
+            return Ok(Some(CommitInfo {
+                timestamp,
+                operation,
+                operation_parameters,
+                operation_metrics,
+                is_blind_append,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+#[cfg(feature = "delta")]
+async fn read_file_stats(
+    storage: Arc<dyn StorageBackend>,
+    table_path: &str,
+    version: i64,
+) -> Result<FileStats> {
+    use crate::core::storage::traits::GetOptions;
+
+    // Build the log file path for this version
+    let log_file = format!("{}/_delta_log/{:020}.json", table_path, version);
+
+    // Try to read the file
+    let get_opts = GetOptions {
+        range: None,
+        if_modified_since: None,
+        if_none_match: None,
+    };
+
+    let content = storage.get(&log_file, &get_opts).await
+        .map_err(|e| crate::error::Error::General(format!("Failed to read log file: {}", e)))?;
+
+    // Parse the content - it's newline-delimited JSON
+    let content_str = String::from_utf8(content.to_vec())
+        .map_err(|e| crate::error::Error::General(format!("Invalid UTF-8 in log file: {}", e)))?;
+
+    let mut total_files = 0;
+    let mut total_size: i64 = 0;
+    let mut total_records: Option<i64> = Some(0);
+    let mut min_size: Option<i64> = None;
+    let mut max_size: Option<i64> = None;
+    let mut added_files: i64 = 0;
+    let mut removed_files: i64 = 0;
+    let mut added_records: i64 = 0;
+    let mut removed_records: i64 = 0;
+    let mut added_bytes: i64 = 0;
+    let mut removed_bytes: i64 = 0;
+
+    // Parse all Add and Remove actions
+    for line in content_str.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let action: JsonValue = serde_json::from_str(line)
+            .map_err(|e| crate::error::Error::General(format!("Failed to parse log action: {}", e)))?;
+
+        // Look for "add" actions
+        if let Some(add) = action.get("add").and_then(|a| a.as_object()) {
+            total_files += 1;
+            added_files += 1;
+
+            // Get file size
+            if let Some(size) = add.get("size").and_then(|s| s.as_i64()) {
+                total_size += size;
+                added_bytes += size;
+                min_size = Some(min_size.map_or(size, |min| min.min(size)));
+                max_size = Some(max_size.map_or(size, |max| max.max(size)));
+            }
+
+            // Get num_records from stats if available
+            if let Some(stats_str) = add.get("stats").and_then(|s| s.as_str()) {
+                if let Ok(stats) = serde_json::from_str::<JsonValue>(stats_str) {
+                    if let Some(num_records) = stats.get("numRecords").and_then(|n| n.as_i64()) {
+                        if let Some(ref mut total) = total_records {
+                            *total += num_records;
+                        }
+                        added_records += num_records;
+                    }
+                }
+            } else {
+                // If any file doesn't have stats, we can't calculate total records
+                total_records = None;
+            }
+        }
+
+        // Look for "remove" actions
+        if let Some(remove) = action.get("remove").and_then(|r| r.as_object()) {
+            removed_files += 1;
+
+            // Get file size
+            if let Some(size) = remove.get("size").and_then(|s| s.as_i64()) {
+                removed_bytes += size;
+            }
+
+            // Get num_records from stats if available
+            if let Some(stats_str) = remove.get("stats").and_then(|s| s.as_str()) {
+                if let Ok(stats) = serde_json::from_str::<JsonValue>(stats_str) {
+                    if let Some(num_records) = stats.get("numRecords").and_then(|n| n.as_i64()) {
+                        removed_records += num_records;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(FileStats {
+        total_files,
+        total_size,
+        total_records,
+        min_size,
+        max_size,
+        added_files,
+        removed_files,
+        added_records,
+        removed_records,
+        added_bytes,
+        removed_bytes,
+    })
 }
 
 #[cfg(not(feature = "delta"))]
