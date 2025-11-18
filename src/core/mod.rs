@@ -5,10 +5,12 @@
 
 pub mod arrow_compat;
 pub mod formats;
+pub mod inspection;
 pub mod operations;
 pub mod storage;
 pub mod validation;
 
 // Re-export commonly used types
 pub use formats::{FormatHandler, FormatHandlerFactory};
+pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
 pub use storage::{StorageBackend, StorageBackendFactory};

@@ -1,0 +1,241 @@
+//! Traits and types for physical inspection of table formats
+
+use crate::error::Result;
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// Verbosity level for inspection output
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VerbosityLevel {
+    /// Normal output
+    Normal = 0,
+    /// Verbose output (-v) - all details
+    Verbose = 1,
+}
+
+/// Options for physical layout inspection
+#[derive(Debug, Clone)]
+pub struct PhysicalInspectOptions {
+    /// Show schema section
+    pub show_schema: bool,
+    /// Show physical layout section
+    pub show_layout: bool,
+    /// Show statistics section
+    pub show_stats: bool,
+    /// Verbosity level
+    pub verbosity: VerbosityLevel,
+}
+
+impl PhysicalInspectOptions {
+    /// Create options from CLI args
+    pub fn from_cli_args(
+        schema: bool,
+        layout: bool,
+        stats: bool,
+        verbosity: VerbosityLevel,
+    ) -> Self {
+        let any_flag = schema || layout || stats;
+
+        Self {
+            show_schema: if any_flag { schema } else { true },
+            show_layout: if any_flag { layout } else { true },
+            show_stats: if any_flag { stats } else { true },
+            verbosity,
+        }
+    }
+}
+
+/// Complete metadata extracted from physical inspection
+#[derive(Debug, Clone)]
+pub struct PhysicalMetadata {
+    /// Format name (e.g., "Apache Parquet")
+    pub format_name: String,
+    /// File-level information
+    pub file_info: FileInfo,
+    /// Schema information (optional)
+    pub schema: Option<SchemaInfo>,
+    /// Physical layout information (optional)
+    pub layout: Option<LayoutInfo>,
+    /// Statistics information (optional)
+    pub statistics: Option<StatisticsInfo>,
+}
+
+/// File-level information
+#[derive(Debug, Clone)]
+pub struct FileInfo {
+    /// File path
+    pub path: String,
+    /// File size in bytes
+    pub file_size: u64,
+    /// Format version
+    pub format_version: String,
+    /// Creator/writer information
+    pub created_by: Option<String>,
+    /// Additional metadata as key-value pairs
+    pub metadata: HashMap<String, String>,
+}
+
+/// Schema information (format-agnostic)
+#[derive(Debug, Clone)]
+pub struct SchemaInfo {
+    /// Number of columns
+    pub num_columns: usize,
+    /// Column definitions
+    pub columns: Vec<ColumnInfo>,
+}
+
+/// Column information
+#[derive(Debug, Clone)]
+pub struct ColumnInfo {
+    /// Column name
+    pub name: String,
+    /// Column type (format-specific representation)
+    pub column_type: String,
+    /// Whether column is nullable
+    pub nullable: bool,
+    /// Column index/position
+    pub index: usize,
+}
+
+/// Physical layout information (varies by format)
+#[derive(Debug, Clone)]
+pub enum LayoutInfo {
+    /// Row group-based layout (Parquet)
+    RowGroupBased(RowGroupLayout),
+    /// Batch-based layout (Arrow IPC)
+    BatchBased(BatchLayout),
+    /// File-based layout (Delta Lake, Iceberg)
+    FileBased(FileBasedLayout),
+    /// Unstructured layout (CSV, JSON)
+    Unstructured(UnstructuredLayout),
+}
+
+/// Row group layout for Parquet
+#[derive(Debug, Clone)]
+pub struct RowGroupLayout {
+    /// Number of row groups
+    pub num_row_groups: usize,
+    /// Row group metadata
+    pub row_groups: Vec<RowGroupMetadata>,
+}
+
+/// Row group metadata
+#[derive(Debug, Clone)]
+pub struct RowGroupMetadata {
+    /// Row group index
+    pub index: usize,
+    /// Number of rows
+    pub num_rows: i64,
+    /// Total compressed size
+    pub total_compressed_size: i64,
+    /// Total uncompressed size
+    pub total_uncompressed_size: i64,
+    /// Column chunks
+    pub columns: Vec<ColumnChunkMetadata>,
+}
+
+/// Column chunk metadata
+#[derive(Debug, Clone)]
+pub struct ColumnChunkMetadata {
+    /// Column name
+    pub column_name: String,
+    /// Compression codec
+    pub compression: String,
+    /// Compressed size
+    pub compressed_size: i64,
+    /// Uncompressed size
+    pub uncompressed_size: i64,
+    /// Encoding
+    pub encoding: String,
+}
+
+/// Batch layout for Arrow IPC
+#[derive(Debug, Clone)]
+pub struct BatchLayout {
+    /// Number of record batches
+    pub num_batches: usize,
+    /// Batch metadata
+    pub batches: Vec<BatchMetadata>,
+}
+
+/// Batch metadata
+#[derive(Debug, Clone)]
+pub struct BatchMetadata {
+    /// Batch index
+    pub index: usize,
+    /// Number of rows
+    pub num_rows: u64,
+    /// Metadata length
+    pub metadata_length: u64,
+    /// Body length
+    pub body_length: u64,
+}
+
+/// File-based layout (Delta/Iceberg)
+#[derive(Debug, Clone)]
+pub struct FileBasedLayout {
+    /// Number of data files
+    pub num_files: usize,
+    /// Total size of all files
+    pub total_size: u64,
+    /// Partitioning information
+    pub partitioning: Option<String>,
+    /// Additional layout-specific info
+    pub details: HashMap<String, String>,
+}
+
+/// Unstructured layout (CSV/JSON)
+#[derive(Debug, Clone)]
+pub struct UnstructuredLayout {
+    /// Estimated number of records
+    pub estimated_records: Option<i64>,
+    /// Delimiter (for CSV)
+    pub delimiter: Option<char>,
+    /// Has header row (for CSV)
+    pub has_header: Option<bool>,
+}
+
+/// Statistics information
+#[derive(Debug, Clone)]
+pub struct StatisticsInfo {
+    /// Total number of rows
+    pub total_rows: i64,
+    /// Compressed size
+    pub compressed_size: u64,
+    /// Uncompressed size
+    pub uncompressed_size: u64,
+    /// Per-column statistics
+    pub column_stats: Vec<ColumnStatistics>,
+}
+
+/// Column statistics
+#[derive(Debug, Clone)]
+pub struct ColumnStatistics {
+    /// Column name
+    pub column_name: String,
+    /// Number of null values
+    pub null_count: Option<i64>,
+    /// Minimum value (as string)
+    pub min_value: Option<String>,
+    /// Maximum value (as string)
+    pub max_value: Option<String>,
+    /// Distinct count (if available)
+    pub distinct_count: Option<i64>,
+}
+
+/// Core trait for physical inspection of table formats
+#[async_trait]
+pub trait PhysicalInspector: Send + Sync {
+    /// Extract metadata from physical structure
+    async fn extract_metadata(
+        &self,
+        options: &PhysicalInspectOptions,
+    ) -> Result<PhysicalMetadata>;
+
+    /// Get format name
+    fn format_name(&self) -> &str;
+
+    /// Quick detection (fast, based on extension/magic bytes)
+    fn can_inspect(&self, path: &Path) -> bool;
+}
