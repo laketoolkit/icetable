@@ -15,6 +15,14 @@ async fn main() {
     // Initialize logger with settings from CLI
     tablectl::utils::init_logger(cli.log_level);
 
+    // Register cloud storage handlers (required for Delta Lake S3/GCS/Azure support)
+    #[cfg(feature = "delta")]
+    {
+        deltalake::aws::register_handlers(None);
+        deltalake::gcp::register_handlers(None);
+        deltalake::azure::register_handlers(None);
+    }
+
     // Execute command and handle errors
     let result = match cli.command {
         Commands::Inspect(args) => InspectCommand::execute(args).await,

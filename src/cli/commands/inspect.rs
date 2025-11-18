@@ -193,18 +193,50 @@ async fn inspect_physical_layout(
         _ => {
             // Try Delta Lake (directory-based) - check for _delta_log
             let path_str = path.to_str().unwrap_or("");
-            let delta_log_path = format!("{}/_delta_log", path_str);
+            let delta_log_prefix = format!("{}/_delta_log/", path_str);
 
-            if storage.exists(&delta_log_path).await.unwrap_or(false) {
-                let result = delta::inspect_delta_layout(path, storage, options).await?;
-                return Ok(result.render("Delta Lake Table"));
+            // Check if there are any files in _delta_log/ directory
+            log::debug!("Checking for Delta Lake at prefix: {}", delta_log_prefix);
+            let delta_list_opts = crate::core::storage::traits::ListOptions {
+                prefix: Some(delta_log_prefix),
+                delimiter: None,
+                max_results: Some(1),  // We only need to know if there's at least one file
+                continuation_token: None,
+            };
+            match storage.list(&delta_list_opts).await {
+                Ok(delta_files) => {
+                    log::debug!("Delta list returned {} files", delta_files.objects.len());
+                    if !delta_files.objects.is_empty() {
+                        let result = delta::inspect_delta_layout(path, storage, options).await?;
+                        return Ok(result.render("Delta Lake Table"));
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Delta list failed: {}", e);
+                }
             }
 
             // Check for Iceberg metadata
-            let metadata_path = format!("{}/metadata", path_str);
-            if storage.exists(&metadata_path).await.unwrap_or(false) {
-                let result = iceberg::inspect_iceberg_layout(path, storage, options).await?;
-                return Ok(result.render("Apache Iceberg Table"));
+            let metadata_prefix = format!("{}/metadata/", path_str);
+            log::debug!("Checking for Iceberg at prefix: {}", metadata_prefix);
+            let metadata_list_opts = crate::core::storage::traits::ListOptions {
+                prefix: Some(metadata_prefix),
+                delimiter: None,
+                max_results: Some(1),  // We only need to know if there's at least one file
+                continuation_token: None,
+            };
+
+            match storage.list(&metadata_list_opts).await {
+                Ok(metadata_files) => {
+                    log::debug!("Iceberg list returned {} files", metadata_files.objects.len());
+                    if !metadata_files.objects.is_empty() {
+                        let result = iceberg::inspect_iceberg_layout(path, storage, options).await?;
+                        return Ok(result.render("Apache Iceberg Table"));
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Iceberg list failed: {}", e);
+                }
             }
 
             return Err(crate::error::Error::InvalidFormat {

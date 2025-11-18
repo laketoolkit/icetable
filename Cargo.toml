@@ -18,7 +18,7 @@ arrow-csv = "55.2.0"
 arrow-json = "55.2.0"
 
 # Table formats
-deltalake = { version = "0.28.0", features = ["s3", "gcs", "azure"], optional = true }
+deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"], optional = true }
 iceberg = { version = "0.7", optional = true }
 
 # Cloud storage abstraction
@@ -74,7 +74,7 @@ tokio-test = "0.4"
 
 [features]
 default = ["delta", "iceberg", "tui"]
-delta = ["dep:deltalake"]
+delta = ["dep:deltalake", "deltalake/s3", "deltalake/gcs", "deltalake/azure"]
 iceberg = ["dep:iceberg"]
 tui = ["dep:ratatui", "dep:crossterm"]
 all = ["delta", "iceberg", "tui"]

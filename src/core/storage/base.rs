@@ -165,12 +165,11 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
     async fn list(&self, options: &ListOptions) -> Result<ListResult> {
         let prefix = options.prefix.as_deref().unwrap_or("");
 
-        // Parse prefix to extract key (if it's a full cloud path)
-        let key = if prefix.starts_with(self.parser.scheme()) {
-            let (_, k) = self.parse_path(prefix)?;
-            k
+        // Parse prefix to extract bucket and key (if it's a full cloud path)
+        let (bucket_name, key) = if prefix.starts_with(self.parser.scheme()) {
+            self.parse_path(prefix)?
         } else {
-            prefix.to_string()
+            (String::new(), prefix.to_string())
         };
 
         let obj_path = if key.is_empty() {
@@ -190,8 +189,12 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
                 ))
             })?;
 
-            // Reconstruct full cloud path
-            let full_path = format!("{}{}", self.parser.scheme(), meta.location);
+            // Reconstruct full cloud path including bucket
+            let full_path = if !bucket_name.is_empty() {
+                self.parser.build_path(&bucket_name, meta.location.as_ref())
+            } else {
+                format!("{}{}", self.parser.scheme(), meta.location)
+            };
 
             objects.push(ObjectMetadata {
                 path: full_path,
