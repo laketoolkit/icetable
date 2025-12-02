@@ -75,7 +75,7 @@ impl VacuumService {
         }
 
         // Scan filesystem for all parquet files
-        let scanned_files = scan_parquet_files(&data_dir, &scan_config);
+        let scanned_files = scan_parquet_files(&data_dir, &scan_config)?;
 
         // Filter to orphan files (not referenced)
         let orphan_files: Vec<OrphanFile> = scanned_files

@@ -47,7 +47,7 @@ impl RepairService {
             .collect();
 
         // Scan filesystem for parquet files
-        let fs_files = self.scan_data_files(&data_dir);
+        let fs_files = self.scan_data_files(&data_dir)?;
 
         // Find orphan files (on disk but not in metadata)
         let orphan_files: Vec<DataFileInfo> = fs_files
@@ -150,14 +150,14 @@ impl RepairService {
     }
 
     /// Scan data directory for parquet files
-    fn scan_data_files(&self, data_dir: &Path) -> Vec<DataFileInfo> {
+    fn scan_data_files(&self, data_dir: &Path) -> Result<Vec<DataFileInfo>> {
         let scan_config = ScanConfig::parquet();
-        let scanned_files = scan_parquet_files(data_dir, &scan_config);
+        let scanned_files = scan_parquet_files(data_dir, &scan_config)?;
 
-        scanned_files
+        Ok(scanned_files
             .into_iter()
             .filter_map(|f| self.to_data_file_info(&f.path))
-            .collect()
+            .collect())
     }
 
     /// Convert a file path to DataFileInfo
