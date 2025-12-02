@@ -1,7 +1,7 @@
 //! Column renaming operations
 
-use datafusion::arrow::datatypes::{Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
+use arrow::datatypes::{Field, Schema};
+use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 use std::sync::Arc;
 

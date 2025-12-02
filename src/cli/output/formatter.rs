@@ -2,8 +2,8 @@
 
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets};
-use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Schema};
+use arrow::record_batch::RecordBatch;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::formats::{ColumnStats, FileMetadata};
@@ -679,7 +679,7 @@ impl OutputFormatter {
                     row_data.push(cell);
                 } else {
                     let value =
-                        datafusion::arrow::util::display::array_value_to_string(col, row_idx)
+                        arrow::util::display::array_value_to_string(col, row_idx)
                             .unwrap_or_else(|_| "Error".to_string());
                     row_data.push(Cell::new(value));
                 }

@@ -344,3 +344,141 @@ impl Default for InspectionViewBuilder {
         Self::new()
     }
 }
+
+/// Convert InspectionView to CLI BoxItems for rendering
+pub fn view_to_box_items(view: &InspectionView) -> Vec<crate::cli::output::BoxItem> {
+    use crate::cli::output::BoxItem;
+
+    let mut items = Vec::new();
+
+    for section in &view.sections {
+        // Add section title
+        items.push(BoxItem::Text(format!("══════ {} ══════", section.title)));
+        items.push(BoxItem::Empty);
+
+        // Add section items
+        for item in &section.items {
+            match item {
+                ViewItem::KeyValue { key, value, key_width } => {
+                    items.push(BoxItem::KeyValue {
+                        key: key.clone(),
+                        value: value.clone(),
+                        key_width: *key_width,
+                    });
+                }
+                ViewItem::Text(text) => {
+                    items.push(BoxItem::Text(text.clone()));
+                }
+                ViewItem::Empty => {
+                    items.push(BoxItem::Empty);
+                }
+                ViewItem::List(list_items) => {
+                    for list_item in list_items {
+                        items.push(BoxItem::Text(format!("  • {}", list_item)));
+                    }
+                }
+                ViewItem::Table { headers, rows } => {
+                    // Create table header
+                    let header_text = headers.join("  ");
+                    items.push(BoxItem::Text(header_text));
+                    items.push(BoxItem::Separator);
+
+                    // Create table rows
+                    for row in rows {
+                        let row_text = row.join("  ");
+                        items.push(BoxItem::Text(row_text));
+                    }
+                }
+            }
+        }
+
+        items.push(BoxItem::Empty);
+    }
+
+    items
+}
+
+/// Convert InspectionView to PhysicalInspectResult for CLI rendering
+pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::inspect::common::PhysicalInspectResult {
+    use crate::cli::output::BoxItem;
+
+    let mut file_info = Vec::new();
+    let mut schema = None;
+    let mut layout = None;
+    let mut statistics = None;
+
+    for section in &view.sections {
+        let mut section_items = Vec::new();
+
+        // Convert section items to BoxItems
+        for item in &section.items {
+            match item {
+                ViewItem::KeyValue { key, value, key_width } => {
+                    section_items.push(BoxItem::KeyValue {
+                        key: key.clone(),
+                        value: value.clone(),
+                        key_width: *key_width,
+                    });
+                }
+                ViewItem::Text(text) => {
+                    section_items.push(BoxItem::Text(text.clone()));
+                }
+                ViewItem::Empty => {
+                    section_items.push(BoxItem::Empty);
+                }
+                ViewItem::List(list_items) => {
+                    for list_item in list_items {
+                        section_items.push(BoxItem::Text(format!("  • {}", list_item)));
+                    }
+                }
+                ViewItem::Table { headers, rows } => {
+                    // Create table header
+                    let header_text = headers.join("  ");
+                    section_items.push(BoxItem::Text(header_text));
+                    section_items.push(BoxItem::Separator);
+
+                    // Create table rows
+                    for row in rows {
+                        let row_text = row.join("  ");
+                        section_items.push(BoxItem::Text(row_text));
+                    }
+                }
+            }
+        }
+
+        // Assign to appropriate section
+        match section.title.as_str() {
+            "File Information" => {
+                file_info = section_items;
+            }
+            "Schema" => {
+                schema = Some(section_items);
+            }
+            "Physical Layout" | "Layout" => {
+                layout = Some(section_items);
+            }
+            "Statistics" | "File Contents" => {
+                statistics = Some(section_items);
+            }
+            _ => {
+                // Unknown section - add to statistics
+                if statistics.is_none() {
+                    statistics = Some(Vec::new());
+                }
+                if let Some(ref mut stats) = statistics {
+                    stats.push(BoxItem::Text(format!("══════ {} ══════", section.title)));
+                    stats.push(BoxItem::Empty);
+                    stats.extend(section_items);
+                }
+            }
+        }
+    }
+
+    crate::cli::commands::inspect::common::PhysicalInspectResult {
+        file_info,
+        schema,
+        layout,
+        statistics,
+        stats_title: None,
+    }
+}

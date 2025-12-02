@@ -1,4 +1,6 @@
 //! Validate command implementation
+//!
+//! This command validates table formats (Delta Lake, Iceberg).
 
 use std::path::Path;
 
@@ -23,13 +25,11 @@ impl ValidateCommand {
         let path = Path::new(&args.path);
         let handler: Box<dyn FormatHandler> = if let Some(format) = &args.format {
             // Force specific format
-            use crate::core::formats::{ArrowHandler, CsvHandler, JsonHandler, ParquetHandler};
-
             match format.to_lowercase().as_str() {
-                "arrow" | "ipc" => Box::new(ArrowHandler::new(path, storage.clone())?),
-                "parquet" => Box::new(ParquetHandler::new(path, storage.clone())?),
-                "csv" => Box::new(CsvHandler::new(path, storage.clone())?),
-                "json" | "ndjson" => Box::new(JsonHandler::new(path, storage.clone())?),
+                #[cfg(feature = "delta")]
+                "delta" => Box::new(crate::core::formats::DeltaHandler::new(path, storage.clone())?),
+                #[cfg(feature = "iceberg")]
+                "iceberg" => Box::new(crate::core::formats::IcebergHandler::new(path, storage.clone())?),
                 _ => {
                     return Err(crate::error::Error::InvalidFormat {
                         message: format!("Unsupported format: {}", format),
@@ -46,7 +46,7 @@ impl ValidateCommand {
         // 3. Execute basic validation
         let show_progress = !args.quiet && args.output != "json";
         let progress = if show_progress {
-            Some(ProgressTracker::spinner("Validating file structure..."))
+            Some(ProgressTracker::spinner("Validating table structure..."))
         } else {
             None
         };
@@ -151,14 +151,14 @@ impl ValidateCommand {
 
             if overall_valid {
                 println!(
-                    "{} {} is a valid {} file",
+                    "{} {} is a valid {} table",
                     "✓".green(),
                     filename,
                     result.format_name
                 );
             } else {
                 println!(
-                    "{} {} is an invalid {} file",
+                    "{} {} is an invalid {} table",
                     "✗".red(),
                     filename,
                     result.format_name

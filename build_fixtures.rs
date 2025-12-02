@@ -1,15 +1,15 @@
 //! Generate test fixture Parquet and Arrow files
 //! Run with: cargo run --bin build_fixtures
 
-use datafusion::arrow::array::{
+use arrow::array::{
     ArrayRef, BooleanArray, DictionaryArray, Float64Array, Int32Array, Int64Array, StringArray,
     TimestampMillisecondArray, UInt16Array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UInt16Type};
-use datafusion::arrow::ipc::writer::FileWriter as ArrowFileWriter;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::parquet::file::properties::WriterProperties;
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit, UInt16Type};
+use arrow::ipc::writer::FileWriter as ArrowFileWriter;
+use arrow::record_batch::RecordBatch;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
@@ -80,7 +80,7 @@ fn generate_simple_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/sample.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
+        .set_compression(parquet::basic::Compression::SNAPPY)
         .build();
 
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
@@ -133,10 +133,10 @@ fn generate_types_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/types.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::GZIP(
+        .set_compression(parquet::basic::Compression::GZIP(
             Default::default(),
         ))
-        .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page)
+        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
         .build();
 
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
@@ -186,10 +186,10 @@ fn generate_larger_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/larger.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::ZSTD(
+        .set_compression(parquet::basic::Compression::ZSTD(
             Default::default(),
         ))
-        .set_statistics_enabled(datafusion::parquet::file::properties::EnabledStatistics::Page)
+        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
         .build();
 
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
@@ -434,7 +434,7 @@ fn generate_arrow_with_metadata() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Generate Parquet file with advanced features (bloom filters, column indexes, etc.)
 fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::Error>> {
-    use datafusion::parquet::file::properties::EnabledStatistics;
+    use parquet::file::properties::EnabledStatistics;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("user_id", DataType::Int64, false),
@@ -491,7 +491,7 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
 
     // Create writer properties with advanced features
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::ZSTD(datafusion::parquet::basic::ZstdLevel::default()))
+        .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()))
         .set_statistics_enabled(EnabledStatistics::Page)
         .set_column_bloom_filter_enabled("username".into(), true)
         .set_column_bloom_filter_enabled("email".into(), true)
@@ -502,19 +502,19 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
         .set_dictionary_enabled(true)
         .set_column_dictionary_enabled("email".into(), true)
         .set_key_value_metadata(Some(vec![
-            datafusion::parquet::file::metadata::KeyValue::new(
+            parquet::file::metadata::KeyValue::new(
                 "created_by".to_string(),
                 "tabletools advanced test generator".to_string(),
             ),
-            datafusion::parquet::file::metadata::KeyValue::new(
+            parquet::file::metadata::KeyValue::new(
                 "version".to_string(),
                 "2.0".to_string(),
             ),
-            datafusion::parquet::file::metadata::KeyValue::new(
+            parquet::file::metadata::KeyValue::new(
                 "description".to_string(),
                 "Parquet file with bloom filters, column indexes, and advanced features".to_string(),
             ),
-            datafusion::parquet::file::metadata::KeyValue::new(
+            parquet::file::metadata::KeyValue::new(
                 "test_features".to_string(),
                 "bloom_filters,column_indexes,page_statistics,dictionary_encoding,zstd_compression".to_string(),
             ),
@@ -603,7 +603,7 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     let data_file_path = format!("{}/data/00000-0-data.parquet", table_dir);
     let file = File::create(&data_file_path)?;
     let props = WriterProperties::builder()
-        .set_compression(datafusion::parquet::basic::Compression::SNAPPY)
+        .set_compression(parquet::basic::Compression::SNAPPY)
         .build();
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
     writer.write(&batch)?;

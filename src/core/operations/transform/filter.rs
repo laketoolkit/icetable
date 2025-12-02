@@ -1,9 +1,9 @@
 //! Row filtering operations
 
-use datafusion::arrow::array::{Array, BooleanArray};
-use datafusion::arrow::compute;
-use datafusion::arrow::compute::kernels::cmp;
-use datafusion::arrow::record_batch::RecordBatch;
+use arrow::array::{Array, BooleanArray};
+use arrow::compute;
+use arrow::compute::kernels::cmp;
+use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
@@ -80,8 +80,8 @@ fn evaluate_simple_comparison(batch: &RecordBatch, expr: &str) -> Result<Boolean
 
 /// Apply comparison operation on a column
 fn apply_comparison(column: &Arc<dyn Array>, op: &str, value_str: &str) -> Result<BooleanArray> {
-    use datafusion::arrow::array::*;
-    use datafusion::arrow::datatypes::*;
+    use arrow::array::*;
+    use arrow::datatypes::*;
 
     match column.data_type() {
         DataType::Int64 => {

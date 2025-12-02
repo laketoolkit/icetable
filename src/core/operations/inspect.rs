@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::record_batch::RecordBatch;
+use arrow::datatypes::Schema;
+use arrow::record_batch::RecordBatch;
 use serde::Serialize;
 
 use crate::core::formats::{ColumnStats, FileMetadata, FormatHandler, ReadOptions};

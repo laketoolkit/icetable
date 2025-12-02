@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::Schema;
+use arrow::array::Array;
+use arrow::datatypes::Schema;
 use regex::Regex;
 
 use super::rules::{RuleResult, RuleType, Severity, ValidationRule, ValidationRules};

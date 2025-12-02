@@ -4,12 +4,12 @@ use std::path::Path;
 
 use crate::cli::output::{SeverityIcon, StatusIcon};
 use crate::cli::parser::ConvertArgs;
-use crate::core::formats::{FormatHandlerRegistry, WriteOptions};
+use crate::core::formats::{FormatHandler, FormatHandlerRegistry, WriteOptions};
 use crate::core::operations::convert::ConvertOperation;
 use crate::core::operations::transform::TransformConfig;
 use crate::core::storage::StorageBackendFactory;
 use crate::error::{Error, Result};
-use crate::utils::{ProgressTracker, parse_data_type};
+use crate::utils::{parse_data_type, ProgressTracker};
 
 /// Handler for convert command
 pub struct ConvertCommand;
@@ -17,40 +17,44 @@ pub struct ConvertCommand;
 impl ConvertCommand {
     /// Execute convert command
     pub async fn execute(args: ConvertArgs) -> Result<()> {
-        // 1. Check if output file exists and handle overwrite
-        if !args.overwrite && std::path::Path::new(&args.file).exists() {
-            return Err(Error::General(format!(
-                "Output file '{}' already exists. Use --overwrite to replace it.",
-                args.file
-            )));
-        }
-
-        // 2. Check for partitioning (not yet supported)
+        // 1. Check for partitioning (not yet supported)
         if args.partition_by.is_some() {
             return Err(Error::General(
                 "Partitioning is not yet implemented. Coming soon!".to_string(),
             ));
         }
 
-        // 3. Build transform configuration from CLI args
+        // 2. Build transform configuration from CLI args
         let transform_config = Self::build_transform_config(&args)?;
 
-        // 4. Create storage backends
+        // 3. Create source storage and handler
         let source_storage = StorageBackendFactory::create_backend(&args.input).await?;
-        let target_storage = StorageBackendFactory::create_backend(&args.file).await?;
-
-        // 5. Create format handlers using registry
         let source_path = Path::new(&args.input);
         let source_handler = FormatHandlerRegistry::global()
             .create_handler(source_path, source_storage)
             .await?;
 
-        let target_path = Path::new(&args.file);
-        let target_handler = FormatHandlerRegistry::global()
-            .create_handler(target_path, target_storage)
-            .await?;
+        // 4. Handle target - check if it's a table-to-table conversion
+        let target_handler: Box<dyn FormatHandler> =
+            if let Some(target_format) = &args.target_format {
+                // Table-to-table conversion (Delta <-> Iceberg)
+                Self::create_or_open_table_handler(&args, &source_handler, target_format).await?
+            } else {
+                // File format conversion - target must exist or be creatable
+                if !args.overwrite && std::path::Path::new(&args.file).exists() {
+                    return Err(Error::General(format!(
+                        "Output file '{}' already exists. Use --overwrite to replace it.",
+                        args.file
+                    )));
+                }
+                let target_storage = StorageBackendFactory::create_backend(&args.file).await?;
+                let target_path = Path::new(&args.file);
+                FormatHandlerRegistry::global()
+                    .create_handler(target_path, target_storage)
+                    .await?
+            };
 
-        // 6. Build write options
+        // 5. Build write options
         let mut write_options_builder = WriteOptions::builder()
             .enable_dictionary(true)
             .enable_statistics(true)
@@ -66,16 +70,12 @@ impl ConvertCommand {
 
         let write_options = write_options_builder.build();
 
-        // 7. Execute conversion
+        // 6. Execute conversion
         let progress =
             ProgressTracker::spinner(&format!("Converting {} to {}...", args.input, args.file));
 
         let operation = if transform_config.has_transforms() {
-            ConvertOperation::with_transforms(
-                source_handler.into(),
-                target_handler.into(),
-                transform_config,
-            )
+            ConvertOperation::with_transforms(source_handler.into(), target_handler.into(), transform_config)
         } else {
             ConvertOperation::new(source_handler.into(), target_handler.into())
         };
@@ -107,8 +107,9 @@ impl ConvertCommand {
             use crate::core::operations::validate::ValidateOperation;
 
             let validate_storage = StorageBackendFactory::create_backend(&args.file).await?;
+            let validate_path = Path::new(&args.file);
             let validate_handler = FormatHandlerRegistry::global()
-                .create_handler(target_path, validate_storage)
+                .create_handler(validate_path, validate_storage)
                 .await?;
 
             let validate_op = ValidateOperation::new(validate_handler.into());
@@ -181,4 +182,135 @@ impl ConvertCommand {
 
         Ok(config)
     }
+
+    /// Create or open a table handler for table-to-table conversion
+    async fn create_or_open_table_handler(
+        args: &ConvertArgs,
+        source_handler: &Box<dyn FormatHandler>,
+        target_format: &str,
+    ) -> Result<Box<dyn FormatHandler>> {
+        use crate::cli::commands::init::InitCommand;
+        use crate::cli::parser::InitArgs;
+
+        let target_path = Path::new(&args.file);
+
+        // Check if table already exists
+        let table_exists = match target_format {
+            "delta" => target_path.join("_delta_log").exists(),
+            "iceberg" => target_path.join("metadata").exists(),
+            _ => false,
+        };
+
+        if table_exists {
+            if !args.overwrite {
+                return Err(Error::General(format!(
+                    "Target table '{}' already exists. Use --overwrite to replace it.",
+                    args.file
+                )));
+            }
+            // Clean up existing table
+            std::fs::remove_dir_all(target_path).map_err(|e| {
+                Error::General(format!("Failed to remove existing table: {}", e))
+            })?;
+        }
+
+        // Get schema from source
+        let source_schema = source_handler.read_schema().await?;
+
+        // Create schema JSON for init command
+        let schema_def = Self::arrow_schema_to_init_schema(&source_schema)?;
+        let schema_json = serde_json::to_string(&schema_def)
+            .map_err(|e| Error::General(format!("Failed to serialize schema: {}", e)))?;
+
+        // Write temporary schema file
+        let schema_file = std::env::temp_dir().join(format!(
+            "tablectl_schema_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&schema_file, &schema_json)
+            .map_err(|e| Error::General(format!("Failed to write schema file: {}", e)))?;
+
+        // Create init args
+        let init_args = InitArgs {
+            format: target_format.to_string(),
+            path: args.file.clone(),
+            schema: Some(schema_file.clone()),
+            name: None,
+            description: Some(format!(
+                "Converted from {} table",
+                source_handler.format_name()
+            )),
+            partition_by: None,
+            properties: None,
+        };
+
+        // Create the table
+        InitCommand::execute(init_args).await?;
+
+        // Clean up schema file
+        let _ = std::fs::remove_file(&schema_file);
+
+        // Now open the created table
+        let target_storage = StorageBackendFactory::create_backend(&args.file).await?;
+        FormatHandlerRegistry::global()
+            .create_handler(target_path, target_storage)
+            .await
+    }
+
+    /// Convert Arrow schema to init schema definition
+    fn arrow_schema_to_init_schema(
+        schema: &arrow::datatypes::Schema,
+    ) -> Result<InitSchemaDefinition> {
+        let columns: Vec<InitColumnDefinition> = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let type_str = Self::arrow_type_to_string(field.data_type());
+                InitColumnDefinition {
+                    name: field.name().clone(),
+                    data_type: type_str,
+                    nullable: Some(field.is_nullable()),
+                }
+            })
+            .collect();
+
+        Ok(InitSchemaDefinition { columns })
+    }
+
+    /// Convert Arrow DataType to string for init schema
+    fn arrow_type_to_string(dt: &arrow::datatypes::DataType) -> String {
+        use arrow::datatypes::DataType;
+
+        match dt {
+            DataType::Boolean => "boolean".to_string(),
+            DataType::Int8 => "byte".to_string(),
+            DataType::Int16 => "short".to_string(),
+            DataType::Int32 => "integer".to_string(),
+            DataType::Int64 => "long".to_string(),
+            DataType::Float32 => "float".to_string(),
+            DataType::Float64 => "double".to_string(),
+            DataType::Utf8 | DataType::LargeUtf8 => "string".to_string(),
+            DataType::Binary | DataType::LargeBinary => "binary".to_string(),
+            DataType::Date32 | DataType::Date64 => "date".to_string(),
+            DataType::Timestamp(_, _) => "timestamp".to_string(),
+            DataType::Time32(_) | DataType::Time64(_) => "time".to_string(),
+            DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => "double".to_string(),
+            _ => "string".to_string(), // Fallback
+        }
+    }
+}
+
+/// Schema definition for init command (matches init.rs)
+#[derive(serde::Serialize)]
+struct InitSchemaDefinition {
+    columns: Vec<InitColumnDefinition>,
+}
+
+/// Column definition for init schema
+#[derive(serde::Serialize)]
+struct InitColumnDefinition {
+    name: String,
+    #[serde(rename = "type")]
+    data_type: String,
+    nullable: Option<bool>,
 }

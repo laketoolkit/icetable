@@ -2,7 +2,7 @@
 name = "tablectl"
 version = "0.1.0"
 edition = "2024"
-authors = ["TableCtl Contributors"]
+authors = ["Juan José de las Heras Herrera"]
 description = "Universal CLI for inspecting, validating, converting and managing tabular data files"
 license = "Apache-2.0"
 repository = "https://github.com/datatools-hub/tablectl"
@@ -10,12 +10,16 @@ keywords = ["parquet", "arrow", "iceberg", "delta-lake", "cli"]
 categories = ["command-line-utilities", "database"]
 
 [dependencies]
-# Apache Arrow ecosystem - use DataFusion's re-exported arrow
-datafusion = { version = "49.0.2", features = ["parquet"] }
-
-# Arrow CSV/JSON readers - must match DataFusion's arrow version (55.2.0)
+# Apache Arrow ecosystem (direct, without DataFusion)
+arrow = { version = "55.2.0", features = ["chrono-tz"] }
+arrow-array = "55.2.0"
+arrow-schema = "55.2.0"
+arrow-select = "55.2.0"
+arrow-cast = "55.2.0"
 arrow-csv = "55.2.0"
 arrow-json = "55.2.0"
+arrow-ipc = "55.2.0"
+parquet = { version = "55.2.0", features = ["arrow", "async"] }
 
 # Table formats
 deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"], optional = true }

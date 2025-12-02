@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use arrow::datatypes::DataType;
 
 use crate::core::formats::{ColumnStats, FileMetadata, FormatHandler};
 use crate::error::Result;
@@ -151,8 +151,8 @@ impl DiffOperation {
 
     /// Compute schema differences
     fn compute_schema_diff(
-        left: &datafusion::arrow::datatypes::Schema,
-        right: &datafusion::arrow::datatypes::Schema,
+        left: &arrow::datatypes::Schema,
+        right: &arrow::datatypes::Schema,
     ) -> SchemaDiff {
         let mut columns_added = Vec::new();
         let mut columns_removed = Vec::new();
@@ -471,7 +471,7 @@ pub struct DiffResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema};
+    use arrow::datatypes::{Field, Schema as ArrowSchema};
     use std::sync::Arc;
 
     #[test]

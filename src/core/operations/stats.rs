@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
-use datafusion::arrow::compute;
-use datafusion::arrow::datatypes::{
+use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
+use arrow::compute;
+use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int8Type,
     Int16Type, Int32Type, Int64Type, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
@@ -448,16 +448,16 @@ impl StatsOperation {
     /// Compute timestamp statistics
     fn compute_timestamp_stats(arrays: &[ArrayRef], data_type: &DataType) -> Result<TemporalStats> {
         match data_type {
-            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Second, _) => {
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
                 Self::compute_temporal_stats::<TimestampSecondType>(arrays)
             }
-            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Millisecond, _) => {
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
                 Self::compute_temporal_stats::<TimestampMillisecondType>(arrays)
             }
-            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, _) => {
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
                 Self::compute_temporal_stats::<TimestampMicrosecondType>(arrays)
             }
-            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Nanosecond, _) => {
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
                 Self::compute_temporal_stats::<TimestampNanosecondType>(arrays)
             }
             _ => Err(Error::General("Invalid timestamp type".to_string())),

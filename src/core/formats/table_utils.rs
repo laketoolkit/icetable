@@ -14,9 +14,9 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::compute;
-use datafusion::arrow::datatypes::Schema;
+use arrow::array::RecordBatch;
+use arrow::compute;
+use arrow::datatypes::Schema;
 
 use crate::core::formats::traits::ColumnStats;
 use crate::error::{Error, Result};
@@ -233,8 +233,8 @@ pub fn calculate_basic_statistics(batches: &[RecordBatch]) -> Result<Vec<ColumnS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{Int32Array, StringArray};
-    use datafusion::arrow::datatypes::{DataType, Field};
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field};
 
     fn create_test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![

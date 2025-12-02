@@ -1,4 +1,4 @@
-//! Physical inspection subsystem for table formats
+//! Physical inspection subsystem for table formats (Delta Lake, Iceberg)
 //!
 //! This module provides a clean separation between metadata extraction (core)
 //! and presentation (CLI). It defines:
@@ -10,11 +10,16 @@
 //! - `PhysicalInspectorRegistry` for dynamic inspector discovery
 
 pub mod formatters;
-pub mod parquet;
 pub mod registry;
 pub mod service;
 pub mod traits;
 pub mod view_builder;
+
+#[cfg(feature = "delta")]
+pub mod delta;
+
+#[cfg(feature = "iceberg")]
+pub mod iceberg;
 
 // Re-export commonly used types
 pub use formatters::*;
@@ -26,4 +31,4 @@ pub use traits::{
     PhysicalMetadata, RowGroupLayout, RowGroupMetadata, SchemaInfo, StatisticsInfo,
     UnstructuredLayout, VerbosityLevel,
 };
-pub use view_builder::{InspectionView, InspectionViewBuilder, ViewItem, ViewSection};
+pub use view_builder::{view_to_box_items, view_to_inspect_result, InspectionView, InspectionViewBuilder, ViewItem, ViewSection};

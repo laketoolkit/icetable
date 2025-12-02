@@ -28,6 +28,9 @@ pub struct Cli {
 /// Available commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Create a new empty table
+    Init(InitArgs),
+
     /// Inspect table contents and metadata
     Inspect(InspectArgs),
 
@@ -43,12 +46,58 @@ pub enum Commands {
     /// Compute statistics
     Stats(StatsArgs),
 
-    /// Execute SQL queries
-    Query(QueryArgs),
+    /// View table version history
+    History(HistoryArgs),
+
+    /// Remove old files no longer referenced by the table
+    Vacuum(VacuumArgs),
+
+    /// Compact small files into larger ones
+    Optimize(OptimizeArgs),
+
+    /// Restore table to a previous version
+    Restore(RestoreArgs),
+
+    /// Create a checkpoint/snapshot of the current state
+    Snapshot(SnapshotArgs),
+
+    /// Repair table metadata and fix inconsistencies
+    Repair(RepairArgs),
 
     /// Interactive Terminal UI
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
+}
+
+/// Arguments for init command
+#[derive(Parser, Debug)]
+pub struct InitArgs {
+    /// Table format: delta or iceberg
+    #[arg(value_parser = ["delta", "iceberg"])]
+    pub format: String,
+
+    /// Path where the table will be created
+    pub path: String,
+
+    /// Schema definition file (JSON)
+    #[arg(long)]
+    pub schema: Option<PathBuf>,
+
+    /// Table name
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Table description
+    #[arg(long)]
+    pub description: Option<String>,
+
+    /// Partition columns (comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    pub partition_by: Option<Vec<String>>,
+
+    /// Table properties (key=value, comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    pub properties: Option<Vec<String>>,
 }
 
 /// Arguments for inspect command
@@ -100,6 +149,14 @@ pub struct InspectArgs {
     /// Use random sampling instead of first rows
     #[arg(long)]
     pub sample: bool,
+
+    /// Read table at specific version (Delta) or snapshot ID (Iceberg)
+    #[arg(long)]
+    pub version: Option<i64>,
+
+    /// Read table as of a specific timestamp (format: "2024-01-15" or "2024-01-15T10:30:00")
+    #[arg(long)]
+    pub as_of: Option<String>,
 }
 
 /// Arguments for validate command
@@ -173,7 +230,11 @@ pub struct ConvertArgs {
     #[arg(short = 'F', long)]
     pub file: String,
 
-    /// Output format (parquet, arrow, csv, json)
+    /// Target table format for table-to-table conversion (delta, iceberg)
+    #[arg(long, value_parser = ["delta", "iceberg"])]
+    pub target_format: Option<String>,
+
+    /// Output format (parquet, arrow, csv, json) - for file formats only
     #[arg(short, long)]
     pub format: Option<String>,
 
@@ -241,29 +302,6 @@ pub struct StatsArgs {
     pub output: String,
 }
 
-/// Arguments for query command
-#[derive(Parser, Debug)]
-pub struct QueryArgs {
-    /// SQL query to execute (file paths in query should be quoted, e.g., "SELECT * FROM 'data.parquet'")
-    pub sql: String,
-
-    /// Output file path (requires --format to be specified)
-    #[arg(short = 'F', long, requires = "format")]
-    pub file: Option<PathBuf>,
-
-    /// Output format when saving to file (parquet, arrow, csv, json)
-    #[arg(short, long)]
-    pub format: Option<String>,
-
-    /// Display format for stdout (table, json)
-    #[arg(short, long, default_value = "table")]
-    pub output: String,
-
-    /// Limit number of result rows to display or save
-    #[arg(long)]
-    pub limit: Option<usize>,
-}
-
 /// Arguments for tui command
 #[cfg(feature = "tui")]
 #[derive(Parser, Debug)]
@@ -278,6 +316,144 @@ pub struct TuiArgs {
     /// Refresh interval in seconds
     #[arg(short, long, default_value = "5")]
     pub refresh: u64,
+}
+
+/// Arguments for history command
+#[derive(Parser, Debug)]
+pub struct HistoryArgs {
+    /// Path to table
+    pub path: String,
+
+    /// Maximum number of versions to show
+    #[arg(short = 'n', long, default_value = "10")]
+    pub limit: usize,
+
+    /// Show all versions (no limit)
+    #[arg(long)]
+    pub all: bool,
+
+    /// Output format (table, json)
+    #[arg(short, long, default_value = "table")]
+    pub output: String,
+}
+
+/// Arguments for vacuum command
+#[derive(Parser, Debug)]
+pub struct VacuumArgs {
+    /// Path to table
+    pub path: String,
+
+    /// Retention period in hours (default: 168 = 7 days)
+    #[arg(short, long, default_value = "168")]
+    pub retention_hours: u64,
+
+    /// Dry run - show what would be deleted without actually deleting
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Force vacuum even if retention is below safety threshold
+    #[arg(long)]
+    pub force: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for optimize command
+#[derive(Parser, Debug)]
+pub struct OptimizeArgs {
+    /// Path to table
+    pub path: String,
+
+    /// Target file size in bytes (default: 256MB)
+    #[arg(long, default_value = "268435456")]
+    pub target_size: u64,
+
+    /// Maximum number of concurrent tasks
+    #[arg(long, default_value = "4")]
+    pub max_concurrent_tasks: usize,
+
+    /// Only optimize files smaller than this size (bytes)
+    #[arg(long)]
+    pub min_file_size: Option<u64>,
+
+    /// Filter to specific partitions (key=value, comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    pub partitions: Option<Vec<String>>,
+
+    /// Enable Z-ordering on specified columns
+    #[arg(long, value_delimiter = ',')]
+    pub zorder: Option<Vec<String>>,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for restore command
+#[derive(Parser, Debug)]
+pub struct RestoreArgs {
+    /// Path to table
+    pub path: String,
+
+    /// Version to restore to
+    #[arg(long, conflicts_with = "as_of")]
+    pub version: Option<i64>,
+
+    /// Restore to state as of timestamp (format: "2024-01-15" or "2024-01-15T10:30:00")
+    #[arg(long, conflicts_with = "version")]
+    pub as_of: Option<String>,
+
+    /// Dry run - show what would change without actually restoring
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for snapshot command
+#[derive(Parser, Debug)]
+pub struct SnapshotArgs {
+    /// Path to table
+    pub path: String,
+
+    /// Force checkpoint creation even if not needed
+    #[arg(long)]
+    pub force: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for repair command
+#[derive(Parser, Debug)]
+pub struct RepairArgs {
+    /// Path to table
+    pub path: String,
+
+    /// Dry run - show what would be repaired without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Sync metadata with actual files on disk
+    #[arg(long)]
+    pub sync_metadata: bool,
+
+    /// Remove references to missing files
+    #[arg(long)]
+    pub remove_missing: bool,
+
+    /// Add untracked parquet files to the table
+    #[arg(long)]
+    pub add_orphans: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
 }
 
 /// Parse log level from string

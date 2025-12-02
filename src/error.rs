@@ -126,15 +126,11 @@ pub enum Error {
 
     /// Arrow-specific errors
     #[error("Arrow error: {0}")]
-    Arrow(#[from] datafusion::arrow::error::ArrowError),
+    Arrow(#[from] arrow::error::ArrowError),
 
     /// Parquet-specific errors
     #[error("Parquet error: {0}")]
-    Parquet(#[from] datafusion::parquet::errors::ParquetError),
-
-    /// DataFusion SQL errors
-    #[error("SQL error: {0}")]
-    DataFusion(#[from] datafusion::error::DataFusionError),
+    Parquet(#[from] parquet::errors::ParquetError),
 
     /// Object store errors (S3, GCS, Azure)
     #[error("Storage error: {0}")]

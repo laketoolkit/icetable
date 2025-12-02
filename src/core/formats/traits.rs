@@ -1,18 +1,35 @@
 //! Core traits for format handlers
 //!
 //! Defines the FormatHandler trait that all format implementations must satisfy.
-//! This provides a unified interface for working with different table formats
-//! (Parquet, Arrow, Iceberg, Delta Lake, etc.)
+//! This provides a unified interface for working with table formats
+//! (Delta Lake, Iceberg).
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::record_batch::RecordBatch;
+use arrow::datatypes::Schema;
+use arrow::record_batch::RecordBatch;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::error::Result;
 
-/// Metadata about a table file
+/// Options for time-travel queries
+#[derive(Debug, Clone, Default)]
+pub struct TimeTravelOptions {
+    /// Specific version number (Delta) or snapshot ID (Iceberg)
+    pub version: Option<i64>,
+
+    /// Timestamp for as-of queries (format: "2024-01-15" or "2024-01-15T10:30:00")
+    pub as_of: Option<String>,
+}
+
+impl TimeTravelOptions {
+    /// Check if any time-travel option is set
+    pub fn is_set(&self) -> bool {
+        self.version.is_some() || self.as_of.is_some()
+    }
+}
+
+/// Metadata about a table
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
     /// Total number of rows (may be estimated)
@@ -63,17 +80,6 @@ pub struct ColumnStats {
 }
 
 /// Options for reading data
-///
-/// Use `ReadOptions::builder()` to construct instances.
-///
-/// # Example
-///
-/// ```ignore
-/// let options = ReadOptions::builder()
-///     .columns(vec!["col1".to_string(), "col2".to_string()])
-///     .limit(100)
-///     .build();
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct ReadOptions {
     columns: Option<Vec<String>>,
@@ -169,18 +175,6 @@ impl ReadOptionsBuilder {
 }
 
 /// Options for writing data
-///
-/// Use `WriteOptions::builder()` to construct instances.
-///
-/// # Example
-///
-/// ```ignore
-/// let options = WriteOptions::builder()
-///     .compression("snappy".to_string())
-///     .enable_dictionary(true)
-///     .overwrite(true)
-///     .build();
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct WriteOptions {
     compression: Option<String>,
@@ -275,7 +269,7 @@ impl WriteOptionsBuilder {
     }
 }
 
-/// Validation report for a file
+/// Validation report for a table
 #[derive(Debug, Clone)]
 pub struct ValidationReport {
     /// Overall validation status
@@ -331,57 +325,33 @@ impl ValidationReport {
 #[async_trait]
 pub trait FormatHandler: Send + Sync {
     /// Detect if this handler can process the given path
-    ///
-    /// This should be a fast check based on file extension, magic bytes, or
-    /// the presence of specific metadata files.
     async fn can_handle(&self, path: &Path) -> Result<bool>;
 
-    /// Get the format name (e.g., "Parquet", "Arrow IPC", "Iceberg")
+    /// Get the format name (e.g., "Delta Lake", "Iceberg")
     fn format_name(&self) -> &str;
 
     /// Read the schema without loading data
-    ///
-    /// This should be fast and not require reading the entire file.
     async fn read_schema(&self) -> Result<Arc<Schema>>;
 
-    /// Read metadata about the file
-    ///
-    /// This should extract metadata without reading the actual data rows.
+    /// Read metadata about the table
     async fn read_metadata(&self) -> Result<FileMetadata>;
 
     /// Read a batch of data
-    ///
-    /// This supports streaming and pagination through the offset/limit options.
     async fn read_batch(&self, options: &ReadOptions) -> Result<RecordBatch>;
 
     /// Read multiple batches as a stream
-    ///
-    /// This is more efficient for large files as it doesn't load everything
-    /// into memory at once.
     async fn read_batches(&self, options: &ReadOptions) -> Result<Vec<RecordBatch>>;
 
     /// Get statistics for all columns
-    ///
-    /// This should use format-native statistics when available (e.g., Parquet
-    /// column statistics) to avoid reading the actual data.
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>>;
 
-    /// Validate the file structure and data
-    ///
-    /// This performs comprehensive validation including:
-    /// - File structure integrity
-    /// - Schema validity
-    /// - Data quality checks (if quick=false)
+    /// Validate the table structure and data
     async fn validate(&self, quick: bool) -> Result<ValidationReport>;
 
-    /// Write data to a new file
-    ///
-    /// This creates a new file in the format handled by this implementation.
+    /// Write data to the table
     async fn write(&self, data: Vec<RecordBatch>, options: &WriteOptions) -> Result<()>;
 
     /// Estimate the number of rows
-    ///
-    /// This should be fast and can return an estimate based on metadata.
     async fn estimate_row_count(&self) -> Result<Option<i64>> {
         let metadata = self.read_metadata().await?;
         Ok(metadata.num_rows)
@@ -398,43 +368,17 @@ pub trait FormatHandler: Send + Sync {
     }
 }
 
-/// Factory for creating format handlers
+/// Factory for creating table format handlers (Delta Lake, Iceberg)
 pub struct FormatHandlerFactory;
 
 impl FormatHandlerFactory {
-    /// Detect the format and create an appropriate handler
-    ///
-    /// This tries each registered handler's `can_handle` method until one
-    /// returns true. The order of checking is optimized for common formats.
+    /// Detect the table format and create an appropriate handler
+    #[allow(unused_variables)]
     pub async fn create_handler(
         path: &Path,
         storage: Arc<dyn crate::core::storage::StorageBackend>,
     ) -> Result<Box<dyn FormatHandler>> {
-        // Try Parquet first (most common in data engineering)
-        let parquet_handler = crate::core::formats::ParquetHandler::new(path, storage.clone())?;
-        if parquet_handler.can_handle(path).await? {
-            return Ok(Box::new(parquet_handler));
-        }
-
-        // Try Arrow IPC
-        let arrow_handler = crate::core::formats::ArrowHandler::new(path, storage.clone())?;
-        if arrow_handler.can_handle(path).await? {
-            return Ok(Box::new(arrow_handler));
-        }
-
-        // Try CSV
-        let csv_handler = crate::core::formats::CsvHandler::new(path, storage.clone())?;
-        if csv_handler.can_handle(path).await? {
-            return Ok(Box::new(csv_handler));
-        }
-
-        // Try JSON/NDJSON
-        let json_handler = crate::core::formats::JsonHandler::new(path, storage.clone())?;
-        if json_handler.can_handle(path).await? {
-            return Ok(Box::new(json_handler));
-        }
-
-        // Try table formats (Delta, Iceberg) - these check for metadata directories
+        // Try Delta Lake first
         #[cfg(feature = "delta")]
         {
             let delta_handler = crate::core::formats::DeltaHandler::new(path, storage.clone())?;
@@ -443,6 +387,7 @@ impl FormatHandlerFactory {
             }
         }
 
+        // Try Iceberg
         #[cfg(feature = "iceberg")]
         {
             let iceberg_handler = crate::core::formats::IcebergHandler::new(path, storage)?;
@@ -452,7 +397,10 @@ impl FormatHandlerFactory {
         }
 
         Err(crate::error::Error::InvalidFormat {
-            message: format!("Could not detect format for path: {}", path.display()),
+            message: format!(
+                "Could not detect table format for path: {}",
+                path.display()
+            ),
         })
     }
 }

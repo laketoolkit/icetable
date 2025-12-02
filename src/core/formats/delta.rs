@@ -8,20 +8,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::record_batch::RecordBatch;
+use bytes::Bytes;
+use arrow::datatypes::Schema;
+use arrow::record_batch::RecordBatch;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use deltalake::DeltaTable;
 use deltalake::kernel::StructField;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::{GetOptions, StorageBackend};
 use crate::error::{Error, Result};
 
 /// Handler for Delta Lake tables
 pub struct DeltaHandler {
     path: PathBuf,
     storage: Arc<dyn StorageBackend>,
+    time_travel: TimeTravelOptions,
 }
 
 impl DeltaHandler {
@@ -30,11 +33,27 @@ impl DeltaHandler {
         Ok(Self {
             path: path.to_path_buf(),
             storage,
+            time_travel: TimeTravelOptions::default(),
         })
     }
 
-    /// Open the Delta table
+    /// Create a new Delta Lake handler with time-travel options
+    pub fn with_time_travel(
+        path: &Path,
+        storage: Arc<dyn StorageBackend>,
+        time_travel: TimeTravelOptions,
+    ) -> Result<Self> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            storage,
+            time_travel,
+        })
+    }
+
+    /// Open the Delta table (with time-travel support)
     async fn open_table(&self) -> Result<DeltaTable> {
+        use deltalake::DeltaTableBuilder;
+
         let table_uri = self.path.to_string_lossy().to_string();
 
         // Parse as URL
@@ -50,8 +69,21 @@ impl DeltaHandler {
                 .map_err(|_| Error::General(format!("Invalid path: {}", table_uri)))?
         };
 
-        // Open the Delta table
-        let table = deltalake::open_table(url)
+        // Build the Delta table with time-travel options
+        let mut builder = DeltaTableBuilder::from_uri(url);
+
+        // Apply time-travel options
+        if let Some(version) = self.time_travel.version {
+            builder = builder.with_version(version);
+        } else if let Some(ref as_of) = self.time_travel.as_of {
+            builder = builder
+                .with_datestring(as_of)
+                .map_err(|e| Error::General(format!("Invalid timestamp '{}': {}", as_of, e)))?;
+        }
+
+        // Load the table
+        let table = builder
+            .load()
             .await
             .map_err(|e| Error::General(format!("Failed to open Delta table: {}", e)))?;
 
@@ -60,7 +92,7 @@ impl DeltaHandler {
 
     /// Convert Delta schema to Arrow schema
     fn delta_schema_to_arrow(delta_schema: &deltalake::kernel::StructType) -> Schema {
-        let fields: Vec<datafusion::arrow::datatypes::Field> = delta_schema
+        let fields: Vec<arrow::datatypes::Field> = delta_schema
             .fields()
             .map(|field| Self::convert_field(field))
             .collect();
@@ -69,8 +101,8 @@ impl DeltaHandler {
     }
 
     /// Convert a single Delta field to Arrow field
-    fn convert_field(field: &StructField) -> datafusion::arrow::datatypes::Field {
-        use datafusion::arrow::datatypes::DataType;
+    fn convert_field(field: &StructField) -> arrow::datatypes::Field {
+        use arrow::datatypes::DataType;
         use deltalake::kernel::DataType as DeltaDataType;
 
         let arrow_type = match field.data_type() {
@@ -88,18 +120,18 @@ impl DeltaHandler {
                     PrimitiveType::Binary => DataType::Binary,
                     PrimitiveType::Date => DataType::Date32,
                     PrimitiveType::Timestamp => DataType::Timestamp(
-                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        arrow::datatypes::TimeUnit::Microsecond,
                         None,
                     ),
                     PrimitiveType::TimestampNtz => DataType::Timestamp(
-                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        arrow::datatypes::TimeUnit::Microsecond,
                         None,
                     ),
                     _ => DataType::Utf8, // Fallback for unknown types
                 }
             }
             DeltaDataType::Struct(s) => {
-                let fields: Vec<datafusion::arrow::datatypes::Field> =
+                let fields: Vec<arrow::datatypes::Field> =
                     s.fields().map(Self::convert_field).collect();
                 DataType::Struct(fields.into())
             }
@@ -116,7 +148,7 @@ impl DeltaHandler {
                     map.value_type(),
                     map.value_contains_null(),
                 );
-                let entries = datafusion::arrow::datatypes::Field::new(
+                let entries = arrow::datatypes::Field::new(
                     "entries",
                     DataType::Struct(vec![key_field, value_field].into()),
                     false,
@@ -129,7 +161,7 @@ impl DeltaHandler {
             }
         };
 
-        datafusion::arrow::datatypes::Field::new(field.name(), arrow_type, field.is_nullable())
+        arrow::datatypes::Field::new(field.name(), arrow_type, field.is_nullable())
     }
 
     /// Helper to convert Delta DataType to Arrow Field
@@ -137,8 +169,8 @@ impl DeltaHandler {
         name: &str,
         data_type: &deltalake::kernel::DataType,
         nullable: bool,
-    ) -> datafusion::arrow::datatypes::Field {
-        use datafusion::arrow::datatypes::DataType;
+    ) -> arrow::datatypes::Field {
+        use arrow::datatypes::DataType;
         use deltalake::kernel::DataType as DeltaDataType;
 
         let arrow_type = match data_type {
@@ -156,18 +188,18 @@ impl DeltaHandler {
                     PrimitiveType::Binary => DataType::Binary,
                     PrimitiveType::Date => DataType::Date32,
                     PrimitiveType::Timestamp => DataType::Timestamp(
-                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        arrow::datatypes::TimeUnit::Microsecond,
                         None,
                     ),
                     PrimitiveType::TimestampNtz => DataType::Timestamp(
-                        datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                        arrow::datatypes::TimeUnit::Microsecond,
                         None,
                     ),
                     _ => DataType::Utf8,
                 }
             }
             DeltaDataType::Struct(s) => {
-                let fields: Vec<datafusion::arrow::datatypes::Field> =
+                let fields: Vec<arrow::datatypes::Field> =
                     s.fields().map(Self::convert_field).collect();
                 DataType::Struct(fields.into())
             }
@@ -183,7 +215,7 @@ impl DeltaHandler {
                     map.value_type(),
                     map.value_contains_null(),
                 );
-                let entries = datafusion::arrow::datatypes::Field::new(
+                let entries = arrow::datatypes::Field::new(
                     "entries",
                     DataType::Struct(vec![key_field, value_field].into()),
                     false,
@@ -196,7 +228,7 @@ impl DeltaHandler {
             }
         };
 
-        datafusion::arrow::datatypes::Field::new(name, arrow_type, nullable)
+        arrow::datatypes::Field::new(name, arrow_type, nullable)
     }
 }
 
@@ -324,24 +356,52 @@ impl FormatHandler for DeltaHandler {
             return Ok(vec![RecordBatch::new_empty(schema)]);
         }
 
-        // Read all Parquet files (applying column projection at file level)
+        // Read all Parquet files directly (applying column projection at file level)
         let mut all_batches = Vec::new();
 
         for file_uri in file_uris {
-            let file_path = std::path::Path::new(&file_uri);
-            let parquet_handler =
-                crate::core::formats::ParquetHandler::new(file_path, self.storage.clone())?;
+            // Read parquet file content using storage backend
+            let data: Bytes = self
+                .storage
+                .get(&file_uri, &GetOptions::default())
+                .await
+                .map_err(|e| Error::General(format!("Failed to read parquet file: {}", e)))?;
 
-            // Build read options for this file (without offset/limit - we'll apply later)
-            let mut file_options_builder = ReadOptions::builder();
+            // Build parquet reader
+            let mut builder = ParquetRecordBatchReaderBuilder::try_new(data)
+                .map_err(|e| Error::General(format!("Failed to create parquet reader: {}", e)))?;
 
+            // Apply column projection if specified
             if let Some(columns) = options.columns() {
-                file_options_builder = file_options_builder.columns(columns.to_vec());
+                let arrow_schema = builder.schema().clone();
+                let mut projection_indices = Vec::new();
+                for col_name in columns {
+                    for (idx, field) in arrow_schema.fields().iter().enumerate() {
+                        if field.name() == col_name {
+                            projection_indices.push(idx);
+                            break;
+                        }
+                    }
+                }
+                if !projection_indices.is_empty() {
+                    let mask = parquet::arrow::ProjectionMask::roots(
+                        builder.parquet_schema(),
+                        projection_indices,
+                    );
+                    builder = builder.with_projection(mask);
+                }
             }
 
-            let file_options = file_options_builder.build();
-            let file_batches = parquet_handler.read_batches(&file_options).await?;
-            all_batches.extend(file_batches);
+            let reader = builder
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build parquet reader: {}", e)))?;
+
+            // Read all batches from this file
+            for batch_result in reader {
+                let batch = batch_result
+                    .map_err(|e| Error::General(format!("Failed to read batch: {}", e)))?;
+                all_batches.push(batch);
+            }
         }
 
         // Apply pagination across all batches using table_utils
@@ -403,12 +463,72 @@ impl FormatHandler for DeltaHandler {
         Ok(report)
     }
 
-    async fn write(&self, _data: Vec<RecordBatch>, _options: &WriteOptions) -> Result<()> {
-        // Writing to Delta Lake requires transaction handling
-        // This is more complex and would use DeltaOps::write
-        Err(Error::UnsupportedFeature {
-            feature: "Writing to Delta Lake not yet implemented".to_string(),
-        })
+    async fn write(&self, data: Vec<RecordBatch>, _options: &WriteOptions) -> Result<()> {
+        use deltalake::kernel::transaction::CommitBuilder;
+        use deltalake::protocol::{DeltaOperation, SaveMode};
+        use deltalake::writer::{DeltaWriter, RecordBatchWriter};
+
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // Get schema from data
+        let schema = data[0].schema();
+
+        // Open or verify the table exists
+        let table = self.open_table().await?;
+        let table_path = self.path.to_string_lossy().to_string();
+
+        // Create a RecordBatchWriter
+        let mut writer = RecordBatchWriter::try_new(
+            &table_path,
+            schema,
+            None, // no partitions
+            None, // no storage options for local
+        )
+        .map_err(|e| Error::General(format!("Failed to create Delta writer: {}", e)))?;
+
+        // Write all batches
+        for batch in data {
+            writer
+                .write(batch)
+                .await
+                .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+        }
+
+        // Flush to get Add actions
+        let adds = writer
+            .flush()
+            .await
+            .map_err(|e| Error::General(format!("Failed to flush writer: {}", e)))?;
+
+        // Convert Add actions to kernel Actions
+        let actions: Vec<deltalake::kernel::Action> = adds
+            .into_iter()
+            .map(deltalake::kernel::Action::Add)
+            .collect();
+
+        // Commit the adds to the table
+        let log_store = table.log_store();
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| Error::General(format!("Failed to get snapshot: {}", e)))?;
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                log_store,
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await
+            .map_err(|e| Error::General(format!("Failed to commit write: {}", e)))?;
+
+        Ok(())
     }
 
     fn has_native_statistics(&self) -> bool {

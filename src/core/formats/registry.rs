@@ -1,7 +1,7 @@
 //! Format handler registry for dynamic format registration
 //!
-//! Provides a plugin-style system for registering format handlers without
-//! modifying core code. Handlers are checked in priority order.
+//! Provides a plugin-style system for registering table format handlers.
+//! Supports Delta Lake and Iceberg.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -9,30 +9,17 @@ use std::sync::{Arc, OnceLock, RwLock};
 use crate::core::storage::StorageBackend;
 use crate::error::Result;
 
+use super::traits::TimeTravelOptions;
 use super::FormatHandler;
 
 /// Factory function type for creating format handlers
 pub type FormatHandlerFactoryFn =
     Arc<dyn Fn(&Path, Arc<dyn StorageBackend>) -> Result<Box<dyn FormatHandler>> + Send + Sync>;
 
-/// Registry for format handlers with priority-based detection
+/// Registry for table format handlers (Delta Lake, Iceberg)
 ///
 /// Format handlers are checked in priority order (highest first) until one
-/// successfully handles the given path. This allows for:
-/// - Custom formats to override built-in detection
-/// - Efficient format detection (check fast formats first)
-/// - Plugin-style extensibility
-///
-/// # Example
-///
-/// ```ignore
-/// use tablectl::core::formats::FormatHandlerRegistry;
-///
-/// // Register a custom format
-/// FormatHandlerRegistry::global().register("xml", 75, |path, storage| {
-///     Ok(Box::new(XmlHandler::new(path, storage)?))
-/// });
-/// ```
+/// successfully handles the given path.
 pub struct FormatHandlerRegistry {
     /// Registered handlers: (format_name, priority, factory_fn)
     handlers: RwLock<Vec<(String, i32, FormatHandlerFactoryFn)>>,
@@ -40,9 +27,6 @@ pub struct FormatHandlerRegistry {
 
 impl FormatHandlerRegistry {
     /// Get the global singleton instance
-    ///
-    /// The registry is initialized once with built-in formats. Additional
-    /// formats can be registered at any time.
     pub fn global() -> &'static Self {
         static INSTANCE: OnceLock<FormatHandlerRegistry> = OnceLock::new();
         INSTANCE.get_or_init(|| {
@@ -61,20 +45,7 @@ impl FormatHandlerRegistry {
 
     /// Register a format handler with priority
     ///
-    /// Higher priority handlers are checked first. Built-in formats use:
-    /// - Parquet: 100 (most common, fastest detection)
-    /// - Arrow IPC: 90
-    /// - Delta/Iceberg: 80 (table formats)
-    /// - CSV: 50 (ambiguous, slower detection)
-    /// - JSON: 50
-    ///
-    /// Custom formats should use priorities between 0-200 based on specificity.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Format name for debugging/logging
-    /// * `priority` - Detection priority (higher = checked first)
-    /// * `factory` - Function to create handler instances
+    /// Higher priority handlers are checked first.
     pub fn register<F>(&self, name: &str, priority: i32, factory: F)
     where
         F: Fn(&Path, Arc<dyn StorageBackend>) -> Result<Box<dyn FormatHandler>>
@@ -89,14 +60,27 @@ impl FormatHandlerRegistry {
     }
 
     /// Try to create a handler by testing registered formats in priority order
-    ///
-    /// Each registered factory is called and its `can_handle` method is checked
-    /// until a handler succeeds. Returns an error if no handler can process the path.
     pub async fn create_handler(
         &self,
         path: &Path,
         storage: Arc<dyn StorageBackend>,
     ) -> Result<Box<dyn FormatHandler>> {
+        self.create_handler_with_options(path, storage, TimeTravelOptions::default()).await
+    }
+
+    /// Try to create a handler with time-travel options
+    pub async fn create_handler_with_options(
+        &self,
+        path: &Path,
+        storage: Arc<dyn StorageBackend>,
+        time_travel: TimeTravelOptions,
+    ) -> Result<Box<dyn FormatHandler>> {
+        // If time-travel options are set, create handlers directly with options
+        if time_travel.is_set() {
+            return self.create_time_travel_handler(path, storage, time_travel).await;
+        }
+
+        // Otherwise, use the standard factory-based approach
         let handlers = self.handlers.read().unwrap();
 
         for (_name, _priority, factory) in handlers.iter() {
@@ -111,34 +95,49 @@ impl FormatHandlerRegistry {
         }
 
         Err(crate::error::Error::InvalidFormat {
-            message: format!("No handler found for path: {}", path.display()),
+            message: format!(
+                "No table format handler found for: {}",
+                path.display()
+            ),
         })
     }
 
-    /// Register built-in formats with default priorities
+    /// Create a handler with time-travel options (bypasses factory)
+    #[allow(unused_variables)]
+    async fn create_time_travel_handler(
+        &self,
+        path: &Path,
+        storage: Arc<dyn StorageBackend>,
+        time_travel: TimeTravelOptions,
+    ) -> Result<Box<dyn FormatHandler>> {
+        // Try Delta Lake first
+        #[cfg(feature = "delta")]
+        {
+            let handler = super::DeltaHandler::with_time_travel(path, storage.clone(), time_travel.clone())?;
+            if handler.can_handle(path).await? {
+                return Ok(Box::new(handler));
+            }
+        }
+
+        // Try Iceberg
+        #[cfg(feature = "iceberg")]
+        {
+            let handler = super::IcebergHandler::with_time_travel(path, storage, time_travel)?;
+            if handler.can_handle(path).await? {
+                return Ok(Box::new(handler));
+            }
+        }
+
+        Err(crate::error::Error::InvalidFormat {
+            message: format!(
+                "No table format handler found for: {}",
+                path.display()
+            ),
+        })
+    }
+
+    /// Register built-in table formats
     fn register_builtin_formats(&self) {
-        use super::{ArrowHandler, CsvHandler, JsonHandler, ParquetHandler};
-
-        // Parquet gets highest priority (100) - most common in data engineering
-        self.register("parquet", 100, |path, storage| {
-            Ok(Box::new(ParquetHandler::new(path, storage)?))
-        });
-
-        // Arrow IPC
-        self.register("arrow", 90, |path, storage| {
-            Ok(Box::new(ArrowHandler::new(path, storage)?))
-        });
-
-        // CSV (lower priority due to ambiguous detection)
-        self.register("csv", 50, |path, storage| {
-            Ok(Box::new(CsvHandler::new(path, storage)?))
-        });
-
-        // JSON/NDJSON
-        self.register("json", 50, |path, storage| {
-            Ok(Box::new(JsonHandler::new(path, storage)?))
-        });
-
         // Delta Lake (feature-gated)
         #[cfg(feature = "delta")]
         self.register("delta", 80, |path, storage| {
@@ -168,18 +167,6 @@ mod tests {
         let registry = FormatHandlerRegistry::new();
         let formats = registry.registered_formats();
         assert_eq!(formats.len(), 0);
-    }
-
-    #[test]
-    fn test_global_registry_has_builtin_formats() {
-        let registry = FormatHandlerRegistry::global();
-        let formats = registry.registered_formats();
-
-        // Should have at least: parquet, arrow, csv, json
-        assert!(formats.contains(&"parquet".to_string()));
-        assert!(formats.contains(&"arrow".to_string()));
-        assert!(formats.contains(&"csv".to_string()));
-        assert!(formats.contains(&"json".to_string()));
     }
 
     #[test]

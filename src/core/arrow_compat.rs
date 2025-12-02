@@ -28,8 +28,8 @@ use bytes::Bytes;
 /// - IPC deserialization fails
 /// - Schema is incompatible
 pub fn to_datafusion_batch(
-    batch: &datafusion::arrow::record_batch::RecordBatch,
-) -> Result<datafusion::arrow::record_batch::RecordBatch> {
+    batch: &arrow::record_batch::RecordBatch,
+) -> Result<arrow::record_batch::RecordBatch> {
     // Serialize to IPC bytes using arrow v54
     let ipc_bytes = serialize_batch_to_ipc(batch)?;
 
@@ -46,8 +46,8 @@ pub fn to_datafusion_batch(
 ///
 /// Returns error if any batch conversion fails
 pub fn to_datafusion_batches(
-    batches: &[datafusion::arrow::record_batch::RecordBatch],
-) -> Result<Vec<datafusion::arrow::record_batch::RecordBatch>> {
+    batches: &[arrow::record_batch::RecordBatch],
+) -> Result<Vec<arrow::record_batch::RecordBatch>> {
     if batches.is_empty() {
         return Ok(Vec::new());
     }
@@ -68,8 +68,8 @@ pub fn to_datafusion_batches(
 /// Returns error if conversion fails
 #[allow(dead_code)]
 pub fn from_datafusion_batch(
-    batch: &datafusion::arrow::record_batch::RecordBatch,
-) -> Result<datafusion::arrow::record_batch::RecordBatch> {
+    batch: &arrow::record_batch::RecordBatch,
+) -> Result<arrow::record_batch::RecordBatch> {
     // Serialize to IPC bytes using datafusion::arrow
     let ipc_bytes = serialize_batch_to_ipc_df(batch)?;
 
@@ -82,8 +82,8 @@ pub fn from_datafusion_batch(
 // ============================================================================
 
 /// Serialize a single arrow v54 RecordBatch to IPC format
-fn serialize_batch_to_ipc(batch: &datafusion::arrow::record_batch::RecordBatch) -> Result<Bytes> {
-    use datafusion::arrow::ipc::writer::StreamWriter;
+fn serialize_batch_to_ipc(batch: &arrow::record_batch::RecordBatch) -> Result<Bytes> {
+    use arrow::ipc::writer::StreamWriter;
 
     let mut buffer = Vec::new();
     {
@@ -104,9 +104,9 @@ fn serialize_batch_to_ipc(batch: &datafusion::arrow::record_batch::RecordBatch) 
 
 /// Serialize multiple arrow v54 RecordBatches to IPC stream format
 fn serialize_batches_to_ipc(
-    batches: &[datafusion::arrow::record_batch::RecordBatch],
+    batches: &[arrow::record_batch::RecordBatch],
 ) -> Result<Bytes> {
-    use datafusion::arrow::ipc::writer::StreamWriter;
+    use arrow::ipc::writer::StreamWriter;
 
     if batches.is_empty() {
         return Err(Error::General(
@@ -138,8 +138,8 @@ fn serialize_batches_to_ipc(
 /// Deserialize arrow v54 RecordBatch from IPC format
 fn deserialize_batch_from_ipc(
     bytes: &[u8],
-) -> Result<datafusion::arrow::record_batch::RecordBatch> {
-    use datafusion::arrow::ipc::reader::StreamReader;
+) -> Result<arrow::record_batch::RecordBatch> {
+    use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 
     let cursor = Cursor::new(bytes);
@@ -157,9 +157,9 @@ fn deserialize_batch_from_ipc(
 
 /// Serialize a single datafusion::arrow RecordBatch to IPC format
 fn serialize_batch_to_ipc_df(
-    batch: &datafusion::arrow::record_batch::RecordBatch,
+    batch: &arrow::record_batch::RecordBatch,
 ) -> Result<Bytes> {
-    use datafusion::arrow::ipc::writer::StreamWriter;
+    use arrow::ipc::writer::StreamWriter;
 
     let mut buffer = Vec::new();
     {
@@ -181,8 +181,8 @@ fn serialize_batch_to_ipc_df(
 /// Deserialize datafusion::arrow RecordBatch from IPC format
 fn deserialize_batch_from_ipc_df(
     bytes: &[u8],
-) -> Result<datafusion::arrow::record_batch::RecordBatch> {
-    use datafusion::arrow::ipc::reader::StreamReader;
+) -> Result<arrow::record_batch::RecordBatch> {
+    use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 
     let cursor = Cursor::new(bytes);
@@ -201,8 +201,8 @@ fn deserialize_batch_from_ipc_df(
 /// Deserialize multiple datafusion::arrow RecordBatches from IPC stream
 fn deserialize_batches_from_ipc_df(
     bytes: &[u8],
-) -> Result<Vec<datafusion::arrow::record_batch::RecordBatch>> {
-    use datafusion::arrow::ipc::reader::StreamReader;
+) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+    use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 
     let cursor = Cursor::new(bytes);
@@ -216,8 +216,8 @@ fn deserialize_batches_from_ipc_df(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{Int32Array, StringArray};
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
             Field::new("name", DataType::Utf8, false),
         ]));
 
-        let batch = datafusion::arrow::record_batch::RecordBatch::try_new(
+        let batch = arrow::record_batch::RecordBatch::try_new(
             schema,
             vec![
                 Arc::new(Int32Array::from(vec![1, 2, 3])),
@@ -256,13 +256,13 @@ mod tests {
             false,
         )]));
 
-        let batch1 = datafusion::arrow::record_batch::RecordBatch::try_new(
+        let batch1 = arrow::record_batch::RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(Int32Array::from(vec![1, 2]))],
         )
         .unwrap();
 
-        let batch2 = datafusion::arrow::record_batch::RecordBatch::try_new(
+        let batch2 = arrow::record_batch::RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(Int32Array::from(vec![3, 4]))],
         )
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_empty_batches() {
-        let batches: Vec<datafusion::arrow::record_batch::RecordBatch> = vec![];
+        let batches: Vec<arrow::record_batch::RecordBatch> = vec![];
         let result = to_datafusion_batches(&batches).unwrap();
         assert!(result.is_empty());
     }
@@ -293,7 +293,7 @@ mod tests {
             false,
         )]));
 
-        let original = datafusion::arrow::record_batch::RecordBatch::try_new(
+        let original = arrow::record_batch::RecordBatch::try_new(
             schema,
             vec![Arc::new(Int32Array::from(vec![42, 43, 44]))],
         )

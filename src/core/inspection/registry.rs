@@ -1,4 +1,4 @@
-//! Registry for physical inspectors
+//! Registry for physical inspectors (Delta Lake, Iceberg)
 
 use super::traits::PhysicalInspector;
 use crate::core::storage::StorageBackend;
@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Factory trait for creating physical inspectors
+#[async_trait::async_trait]
 pub trait PhysicalInspectorFactory: Send + Sync {
     /// Create an inspector for the given path and storage
     fn create(
@@ -16,7 +17,8 @@ pub trait PhysicalInspectorFactory: Send + Sync {
     ) -> Result<Box<dyn PhysicalInspector>>;
 
     /// Check if this factory can handle the given path
-    fn can_handle(&self, path: &Path) -> bool;
+    /// For remote storage (S3, etc.), this may need to check for directory existence
+    async fn can_handle(&self, path: &Path, storage: &Arc<dyn StorageBackend>) -> bool;
 
     /// Get the priority of this factory (higher = checked first)
     fn priority(&self) -> i32 {
@@ -24,7 +26,7 @@ pub trait PhysicalInspectorFactory: Send + Sync {
     }
 }
 
-/// Registry for managing physical inspectors
+/// Registry for managing physical inspectors (Delta Lake, Iceberg)
 pub struct PhysicalInspectorRegistry {
     factories: Vec<Box<dyn PhysicalInspectorFactory>>,
 }
@@ -37,12 +39,17 @@ impl PhysicalInspectorRegistry {
         }
     }
 
-    /// Create a registry with default inspectors
+    /// Create a registry with default inspectors for table formats
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
 
-        // Register Parquet inspector
-        registry.register(super::parquet::ParquetInspectorFactory);
+        // Register Delta Lake inspector (priority 80)
+        #[cfg(feature = "delta")]
+        registry.register(super::delta::DeltaInspectorFactory);
+
+        // Register Iceberg inspector (priority 75)
+        #[cfg(feature = "iceberg")]
+        registry.register(super::iceberg::IcebergInspectorFactory);
 
         registry
     }
@@ -55,28 +62,33 @@ impl PhysicalInspectorRegistry {
     }
 
     /// Create an inspector for the given path
-    pub fn create_inspector(
+    pub async fn create_inspector(
         &self,
         path: &Path,
         storage: Arc<dyn StorageBackend>,
     ) -> Result<Box<dyn PhysicalInspector>> {
         for factory in &self.factories {
-            if factory.can_handle(path) {
+            if factory.can_handle(path, &storage).await {
                 return factory.create(path, storage);
             }
         }
 
         Err(Error::InvalidFormat {
             message: format!(
-                "No physical inspector found for: {}",
+                "No table format inspector found for: {}",
                 path.display()
             ),
         })
     }
 
     /// Check if any factory can handle the given path
-    pub fn can_handle(&self, path: &Path) -> bool {
-        self.factories.iter().any(|f| f.can_handle(path))
+    pub async fn can_handle(&self, path: &Path, storage: &Arc<dyn StorageBackend>) -> bool {
+        for factory in &self.factories {
+            if factory.can_handle(path, storage).await {
+                return true;
+            }
+        }
+        false
     }
 }
 

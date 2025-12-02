@@ -42,7 +42,7 @@ impl PhysicalInspectionService {
         let storage = StorageBackendFactory::create_backend(path_str).await?;
 
         // 2. Detect format and create inspector
-        let inspector = self.registry.create_inspector(path, storage)?;
+        let inspector = self.registry.create_inspector(path, storage).await?;
 
         // 3. Extract metadata
         let metadata = inspector.extract_metadata(&options).await?;
@@ -64,11 +64,6 @@ impl PhysicalInspectionService {
         }
 
         Ok(view_builder.build())
-    }
-
-    /// Check if a path can be inspected
-    pub fn can_inspect(&self, path: &Path) -> bool {
-        self.registry.can_handle(path)
     }
 }
 
