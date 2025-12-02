@@ -386,6 +386,10 @@ pub struct OptimizeArgs {
     #[arg(long, value_delimiter = ',')]
     pub zorder: Option<Vec<String>>,
 
+    /// Dry run mode - show what would be done without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,

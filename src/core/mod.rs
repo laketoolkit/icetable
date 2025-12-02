@@ -6,6 +6,8 @@
 pub mod arrow_compat;
 pub mod formats;
 pub mod inspection;
+pub mod maintenance;
+pub mod metadata;
 pub mod operations;
 pub mod storage;
 pub mod validation;

@@ -91,7 +91,7 @@ impl DeltaHandler {
     }
 
     /// Convert Delta schema to Arrow schema
-    fn delta_schema_to_arrow(delta_schema: &deltalake::kernel::StructType) -> Schema {
+    pub fn delta_schema_to_arrow(delta_schema: &deltalake::kernel::StructType) -> Schema {
         let fields: Vec<arrow::datatypes::Field> = delta_schema
             .fields()
             .map(|field| Self::convert_field(field))
