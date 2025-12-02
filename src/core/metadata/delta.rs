@@ -118,16 +118,12 @@ impl DeltaMetadataService {
 
     /// Convert Delta file URI to DataFileInfo
     fn uri_to_data_file_info(&self, uri: &str) -> DataFileInfo {
-        let path = if uri.starts_with("file://") {
-            uri[7..].to_string()
-        } else {
-            uri.to_string()
-        };
+        let path = crate::core::utils::normalize_path(uri);
 
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
         // Try to read record count from parquet
-        let record_count = super::iceberg::IcebergMetadataService::read_parquet_record_count(&path);
+        let record_count = crate::core::utils::read_parquet_record_count(&path);
 
         DataFileInfo {
             path,
@@ -143,10 +139,6 @@ impl MetadataService for DeltaMetadataService {
     async fn current_snapshot(&self) -> Result<Option<SnapshotInfo>> {
         let table = self.open_table().await?;
         let version = table.version().unwrap_or(0);
-
-        if version < 0 {
-            return Ok(None);
-        }
 
         // Try to get commit info
         let timestamp_ms = chrono::Utc::now().timestamp_millis();

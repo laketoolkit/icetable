@@ -15,6 +15,7 @@ pub use vacuum::{VacuumAnalysis, VacuumConfig, VacuumService};
 use std::collections::HashMap;
 
 use crate::core::metadata::DataFileInfo;
+use crate::core::utils::sizes;
 
 /// Common configuration for maintenance operations
 #[derive(Debug, Clone)]
@@ -34,9 +35,9 @@ pub struct MaintenanceConfig {
 impl Default for MaintenanceConfig {
     fn default() -> Self {
         Self {
-            target_size: 256 * 1024 * 1024,  // 256 MB
-            min_size: 16 * 1024 * 1024,      // 16 MB
-            max_size: 512 * 1024 * 1024,     // 512 MB
+            target_size: sizes::DEFAULT_TARGET_SIZE,
+            min_size: sizes::DEFAULT_MIN_SIZE,
+            max_size: sizes::DEFAULT_MAX_SIZE,
             dry_run: false,
             parallelism: 4,
         }
@@ -75,7 +76,11 @@ impl FileGroup {
     }
 
     /// Check if the group needs compaction (has multiple small files)
-    pub fn needs_compaction(&self, min_size: u64, _target_size: u64) -> bool {
+    ///
+    /// A group needs compaction if:
+    /// - It has at least 2 files
+    /// - At least half of the files are smaller than `min_size`
+    pub fn needs_compaction(&self, min_size: u64) -> bool {
         // Need at least 2 files to compact
         if self.files.len() < 2 {
             return false;

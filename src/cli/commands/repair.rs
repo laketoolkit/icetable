@@ -6,8 +6,18 @@ use colored::Colorize;
 
 use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
-use crate::core::metadata::{utils, MaintenanceResult};
+use crate::core::metadata::MaintenanceResult;
+use crate::core::{detect_table_format, format_bytes, TableFormat};
 use crate::error::{Error, Result};
+
+/// Repair options specifying what actions to take
+#[derive(Debug, Clone, Copy)]
+pub struct RepairOptions {
+    /// Whether to add orphan files to metadata
+    pub add_orphans: bool,
+    /// Whether to remove missing file references
+    pub remove_missing: bool,
+}
 
 /// Handler for repair command
 pub struct RepairCommand;
@@ -25,8 +35,13 @@ impl RepairCommand {
         let path = std::path::Path::new(&args.path);
 
         // Detect table format
-        let is_delta = path.join("_delta_log").exists();
-        let is_iceberg = path.join("metadata").exists();
+        let format = detect_table_format(path);
+
+        // Determine repair options
+        let options = RepairOptions {
+            add_orphans: args.add_orphans || args.sync_metadata,
+            remove_missing: args.remove_missing || args.sync_metadata,
+        };
 
         // Create service configuration
         let config = MaintenanceConfig {
@@ -36,21 +51,23 @@ impl RepairCommand {
 
         let service = RepairService::with_config(config);
 
-        if is_delta {
-            Self::repair_delta(&args, &service).await
-        } else if is_iceberg {
-            Self::repair_iceberg(&args, &service).await
-        } else {
-            Err(Error::General(format!(
+        match format {
+            TableFormat::Delta => Self::repair_delta(&args, &service, options).await,
+            TableFormat::Iceberg => Self::repair_iceberg(&args, &service, options).await,
+            TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 args.path
-            )))
+            ))),
         }
     }
 
     /// Repair Delta Lake table
     #[cfg(feature = "delta")]
-    async fn repair_delta(args: &RepairArgs, service: &RepairService) -> Result<()> {
+    async fn repair_delta(
+        args: &RepairArgs,
+        service: &RepairService,
+        options: RepairOptions,
+    ) -> Result<()> {
         use crate::core::metadata::DeltaMetadataService;
 
         println!(
@@ -63,9 +80,22 @@ impl RepairCommand {
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;
-        Self::print_analysis(&analysis, args)?;
+        Self::print_analysis(&analysis, args, options)?;
 
         if !analysis.has_issues() {
+            return Ok(());
+        }
+
+        // Check if any selected options have issues to fix
+        let has_work = (options.add_orphans && !analysis.orphan_files.is_empty())
+            || (options.remove_missing && !analysis.missing_files.is_empty());
+
+        if !has_work {
+            println!();
+            println!(
+                "{}",
+                "No issues match the selected repair options.".yellow()
+            );
             return Ok(());
         }
 
@@ -81,7 +111,11 @@ impl RepairCommand {
     }
 
     #[cfg(not(feature = "delta"))]
-    async fn repair_delta(_args: &RepairArgs, _service: &RepairService) -> Result<()> {
+    async fn repair_delta(
+        _args: &RepairArgs,
+        _service: &RepairService,
+        _options: RepairOptions,
+    ) -> Result<()> {
         Err(Error::UnsupportedFeature {
             feature: "Delta Lake support not enabled".to_string(),
         })
@@ -89,7 +123,11 @@ impl RepairCommand {
 
     /// Repair Iceberg table
     #[cfg(feature = "iceberg")]
-    async fn repair_iceberg(args: &RepairArgs, service: &RepairService) -> Result<()> {
+    async fn repair_iceberg(
+        args: &RepairArgs,
+        service: &RepairService,
+        options: RepairOptions,
+    ) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
 
         println!(
@@ -102,9 +140,22 @@ impl RepairCommand {
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;
-        Self::print_analysis(&analysis, args)?;
+        Self::print_analysis(&analysis, args, options)?;
 
         if !analysis.has_issues() {
+            return Ok(());
+        }
+
+        // Check if any selected options have issues to fix
+        let has_work = (options.add_orphans && !analysis.orphan_files.is_empty())
+            || (options.remove_missing && !analysis.missing_files.is_empty());
+
+        if !has_work {
+            println!();
+            println!(
+                "{}",
+                "No issues match the selected repair options.".yellow()
+            );
             return Ok(());
         }
 
@@ -120,14 +171,18 @@ impl RepairCommand {
     }
 
     #[cfg(not(feature = "iceberg"))]
-    async fn repair_iceberg(_args: &RepairArgs, _service: &RepairService) -> Result<()> {
+    async fn repair_iceberg(
+        _args: &RepairArgs,
+        _service: &RepairService,
+        _options: RepairOptions,
+    ) -> Result<()> {
         Err(Error::UnsupportedFeature {
             feature: "Iceberg support not enabled".to_string(),
         })
     }
 
     /// Print analysis results
-    fn print_analysis(analysis: &RepairAnalysis, args: &RepairArgs) -> Result<()> {
+    fn print_analysis(analysis: &RepairAnalysis, args: &RepairArgs, options: RepairOptions) -> Result<()> {
         println!();
         println!(
             "Tracked files in metadata: {}",
@@ -148,18 +203,30 @@ impl RepairCommand {
         println!("Issues found:");
 
         if !analysis.missing_files.is_empty() {
+            let status = if options.remove_missing {
+                "will fix".green()
+            } else {
+                "skipped".dimmed()
+            };
             println!(
-                "  Missing files:  {} ({})",
+                "  Missing files:  {} ({}) [{}]",
                 analysis.missing_files.len().to_string().red(),
-                utils::format_bytes(analysis.missing_bytes())
+                format_bytes(analysis.missing_bytes()),
+                status
             );
         }
 
         if !analysis.orphan_files.is_empty() {
+            let status = if options.add_orphans {
+                "will fix".green()
+            } else {
+                "skipped".dimmed()
+            };
             println!(
-                "  Orphan files:   {} ({})",
+                "  Orphan files:   {} ({}) [{}]",
                 analysis.orphan_files.len().to_string().yellow(),
-                utils::format_bytes(analysis.orphan_bytes())
+                format_bytes(analysis.orphan_bytes()),
+                status
             );
         }
 
@@ -167,18 +234,22 @@ impl RepairCommand {
             println!();
             println!("{}", "DRY RUN - No changes made".yellow().bold());
 
-            for file in &analysis.missing_files {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-                println!("  Would remove reference: {}", name.red());
+            if options.remove_missing {
+                for file in &analysis.missing_files {
+                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    println!("  Would remove reference: {}", name.red());
+                }
             }
 
-            for file in &analysis.orphan_files {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-                println!(
-                    "  Would add: {} ({})",
-                    name.green(),
-                    utils::format_bytes(file.size)
-                );
+            if options.add_orphans {
+                for file in &analysis.orphan_files {
+                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    println!(
+                        "  Would add: {} ({})",
+                        name.green(),
+                        format_bytes(file.size)
+                    );
+                }
             }
         }
 

@@ -4,9 +4,10 @@
 //! by removing files that are no longer referenced by any snapshot.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
-use crate::core::metadata::{utils, MaintenanceResult, MetadataService};
+use crate::core::metadata::{MaintenanceResult, MetadataService};
+use crate::core::utils::fs::{normalize_path, scan_parquet_files, ScanConfig};
+use crate::core::utils::{format_bytes, sizes};
 use crate::error::Result;
 
 /// Service for vacuuming tables (removing unreferenced files)
@@ -28,7 +29,7 @@ pub struct VacuumConfig {
 impl Default for VacuumConfig {
     fn default() -> Self {
         Self {
-            retention_hours: 168, // 7 days
+            retention_hours: sizes::DEFAULT_RETENTION_HOURS,
             dry_run: false,
             include_metadata: false,
         }
@@ -59,7 +60,7 @@ impl VacuumService {
         // Get set of currently referenced file paths
         let referenced_paths: HashSet<String> = current_files
             .iter()
-            .map(|f| self.normalize_path(&f.path))
+            .map(|f| normalize_path(&f.path))
             .collect();
 
         // Calculate cutoff time
@@ -67,17 +68,27 @@ impl VacuumService {
             - chrono::Duration::hours(self.config.retention_hours as i64);
         let cutoff_timestamp = cutoff_time.timestamp();
 
-        // Scan filesystem for all parquet files
-        let mut orphan_files = Vec::new();
-        let mut orphan_bytes = 0u64;
+        // Configure scan
+        let mut scan_config = ScanConfig::parquet().with_cutoff(cutoff_timestamp);
+        if self.config.include_metadata {
+            scan_config.skip_dirs.clear();
+        }
 
-        self.scan_directory_recursive(
-            &data_dir,
-            &referenced_paths,
-            cutoff_timestamp,
-            &mut orphan_files,
-            &mut orphan_bytes,
-        );
+        // Scan filesystem for all parquet files
+        let scanned_files = scan_parquet_files(&data_dir, &scan_config);
+
+        // Filter to orphan files (not referenced)
+        let orphan_files: Vec<OrphanFile> = scanned_files
+            .into_iter()
+            .filter(|f| !referenced_paths.contains(&f.path))
+            .map(|f| OrphanFile {
+                path: f.path,
+                size: f.size,
+                mtime_seconds: f.mtime_seconds,
+            })
+            .collect();
+
+        let orphan_bytes = orphan_files.iter().map(|f| f.size).sum();
 
         Ok(VacuumAnalysis {
             orphan_files,
@@ -109,7 +120,7 @@ impl VacuumService {
             );
             details.insert(
                 "bytes_to_free".to_string(),
-                utils::format_bytes(analysis.orphan_bytes),
+                format_bytes(analysis.orphan_bytes),
             );
 
             return Ok(MaintenanceResult {
@@ -142,7 +153,7 @@ impl VacuumService {
 
         let mut details = HashMap::new();
         details.insert("deleted_files".to_string(), deleted_count.to_string());
-        details.insert("freed_bytes".to_string(), utils::format_bytes(deleted_bytes));
+        details.insert("freed_bytes".to_string(), format_bytes(deleted_bytes));
 
         if !errors.is_empty() {
             details.insert("errors".to_string(), errors.len().to_string());
@@ -157,75 +168,6 @@ impl VacuumService {
             operation: "vacuum".to_string(),
             details,
         })
-    }
-
-    /// Normalize a file path for comparison
-    fn normalize_path(&self, path: &str) -> String {
-        path.strip_prefix("file://").unwrap_or(path).to_string()
-    }
-
-    /// Recursively scan directory for orphan parquet files
-    fn scan_directory_recursive(
-        &self,
-        dir: &Path,
-        referenced_paths: &HashSet<String>,
-        cutoff_timestamp: i64,
-        orphan_files: &mut Vec<OrphanFile>,
-        orphan_bytes: &mut u64,
-    ) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            // Skip metadata directories unless configured
-            if !self.config.include_metadata {
-                if name == "_delta_log" || name == "metadata" {
-                    continue;
-                }
-            }
-
-            if path.is_dir() {
-                self.scan_directory_recursive(
-                    &path,
-                    referenced_paths,
-                    cutoff_timestamp,
-                    orphan_files,
-                    orphan_bytes,
-                );
-            } else if path.extension().map_or(false, |ext| ext == "parquet") {
-                let path_str = self.normalize_path(&path.to_string_lossy());
-
-                // Skip if file is currently referenced
-                if referenced_paths.contains(&path_str) {
-                    continue;
-                }
-
-                // Check file modification time
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    let mtime = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-
-                    // Only include files older than retention period
-                    if mtime < cutoff_timestamp {
-                        *orphan_bytes += metadata.len();
-                        orphan_files.push(OrphanFile {
-                            path: path_str,
-                            size: metadata.len(),
-                            mtime_seconds: mtime,
-                        });
-                    }
-                }
-            }
-        }
     }
 }
 

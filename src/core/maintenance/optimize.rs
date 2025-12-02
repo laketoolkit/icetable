@@ -15,8 +15,9 @@ use parquet::file::properties::WriterProperties;
 
 use super::{group_files_by_partition, FileGroup, MaintenanceConfig};
 use crate::core::metadata::{
-    utils, DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
+    DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
+use crate::core::utils::{format_bytes, generate_unique_id};
 use crate::error::{Error, Result};
 
 /// Service for optimizing tables by compacting small files
@@ -43,7 +44,7 @@ impl OptimizeService {
 
         groups
             .into_values()
-            .filter(|g| g.needs_compaction(self.config.min_size, self.config.target_size))
+            .filter(|g| g.needs_compaction(self.config.min_size))
             .collect()
     }
 
@@ -130,7 +131,7 @@ impl OptimizeService {
         );
         summary.insert(
             "target_size".to_string(),
-            utils::format_bytes(self.config.target_size),
+            format_bytes(self.config.target_size),
         );
 
         // Commit the changes
@@ -160,7 +161,7 @@ impl OptimizeService {
         data_dir: &Path,
     ) -> Result<(Vec<DataFileInfo>, Vec<DataFileInfo>)> {
         // Generate output file path
-        let unique_id = utils::generate_unique_id();
+        let unique_id = generate_unique_id();
         let output_path = if group.partition_key.is_empty() {
             data_dir.join(format!("compact-{}.parquet", unique_id))
         } else {

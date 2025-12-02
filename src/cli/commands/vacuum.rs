@@ -8,7 +8,7 @@ use colored::Colorize;
 
 use crate::cli::parser::VacuumArgs;
 use crate::core::maintenance::{VacuumAnalysis, VacuumConfig, VacuumService};
-use crate::core::metadata::utils;
+use crate::core::{detect_table_format, format_bytes, TableFormat};
 use crate::error::{Error, Result};
 
 /// Handler for vacuum command
@@ -20,18 +20,15 @@ impl VacuumCommand {
         let path = std::path::Path::new(&args.path);
 
         // Detect table format
-        let is_delta = path.join("_delta_log").exists();
-        let is_iceberg = path.join("metadata").exists();
+        let format = detect_table_format(path);
 
-        if is_delta {
-            Self::vacuum_delta(&args).await
-        } else if is_iceberg {
-            Self::vacuum_iceberg(&args).await
-        } else {
-            Err(Error::General(format!(
+        match format {
+            TableFormat::Delta => Self::vacuum_delta(&args).await,
+            TableFormat::Iceberg => Self::vacuum_iceberg(&args).await,
+            TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 args.path
-            )))
+            ))),
         }
     }
 
@@ -188,7 +185,7 @@ impl VacuumCommand {
                 "{} {} files, freed {}",
                 "Deleted".green().bold(),
                 result.files_removed,
-                utils::format_bytes(result.bytes_removed)
+                format_bytes(result.bytes_removed)
             );
         }
 
@@ -220,7 +217,7 @@ impl VacuumCommand {
             "Files {}:   {} ({})",
             if dry_run { "to delete" } else { "deleted" },
             analysis.orphan_files.len().to_string().cyan(),
-            utils::format_bytes(analysis.orphan_bytes)
+            format_bytes(analysis.orphan_bytes)
         );
         println!(
             "Retention:        {} hours",
@@ -235,7 +232,7 @@ impl VacuumCommand {
                 println!(
                     "  - {} ({})",
                     name.dimmed(),
-                    utils::format_bytes(file.size)
+                    format_bytes(file.size)
                 );
             }
         }

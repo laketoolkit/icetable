@@ -6,7 +6,8 @@ use colored::Colorize;
 
 use crate::cli::parser::OptimizeArgs;
 use crate::core::maintenance::{MaintenanceConfig, OptimizeService};
-use crate::core::metadata::{utils, MaintenanceResult};
+use crate::core::metadata::MaintenanceResult;
+use crate::core::{detect_table_format, format_bytes, TableFormat};
 use crate::error::{Error, Result};
 
 /// Handler for optimize command
@@ -18,8 +19,7 @@ impl OptimizeCommand {
         let path = std::path::Path::new(&args.path);
 
         // Detect table format
-        let is_delta = path.join("_delta_log").exists();
-        let is_iceberg = path.join("metadata").exists();
+        let format = detect_table_format(path);
 
         // Create service configuration
         let config = MaintenanceConfig {
@@ -32,15 +32,15 @@ impl OptimizeCommand {
 
         let service = OptimizeService::with_config(config);
 
-        let result = if is_delta {
-            Self::optimize_delta(&args, &service).await?
-        } else if is_iceberg {
-            Self::optimize_iceberg(&args, &service).await?
-        } else {
-            return Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                args.path
-            )));
+        let result = match format {
+            TableFormat::Delta => Self::optimize_delta(&args, &service).await?,
+            TableFormat::Iceberg => Self::optimize_iceberg(&args, &service).await?,
+            TableFormat::Unknown => {
+                return Err(Error::General(format!(
+                    "Path '{}' is not a Delta Lake or Iceberg table",
+                    args.path
+                )));
+            }
         };
 
         Self::output_result(&result, &args.output)?;
@@ -131,7 +131,7 @@ impl OptimizeCommand {
                     );
                     println!(
                         "Bytes saved:      {}",
-                        utils::format_bytes(result.bytes_removed.saturating_sub(result.bytes_added))
+                        format_bytes(result.bytes_removed.saturating_sub(result.bytes_added))
                     );
                     println!(
                         "Records affected: {}",

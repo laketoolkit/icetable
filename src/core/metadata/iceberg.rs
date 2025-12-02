@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{
     DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, ManifestList,
@@ -21,7 +20,6 @@ use iceberg::spec::{
 };
 use iceberg::table::StaticTable;
 use iceberg::TableIdent;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use super::traits::{
     DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo,
@@ -247,12 +245,34 @@ impl IcebergMetadataService {
 
     /// Convert Iceberg DataFile to DataFileInfo
     fn from_iceberg_data_file(data_file: &DataFile) -> DataFileInfo {
+        // Extract partition values from the data file
+        let partition = Self::extract_partition_values(data_file);
+
         DataFileInfo {
             path: data_file.file_path().to_string(),
             size: data_file.file_size_in_bytes() as u64,
             record_count: data_file.record_count(),
-            partition: HashMap::new(), // TODO: extract partition values
+            partition,
         }
+    }
+
+    /// Extract partition values from an Iceberg DataFile
+    fn extract_partition_values(data_file: &DataFile) -> HashMap<String, String> {
+        // The partition struct contains the partition field values
+        // For now, we extract what we can from the file path as a fallback
+        let mut partition = HashMap::new();
+
+        // Parse partition values from the file path (e.g., "year=2024/month=01/file.parquet")
+        let path = data_file.file_path();
+        for component in path.split('/') {
+            if let Some(eq_pos) = component.find('=') {
+                let key = component[..eq_pos].to_string();
+                let value = component[eq_pos + 1..].to_string();
+                partition.insert(key, value);
+            }
+        }
+
+        partition
     }
 
     /// Convert OperationType to Iceberg Operation
@@ -264,17 +284,6 @@ impl IcebergMetadataService {
             OperationType::Overwrite => iceberg::spec::Operation::Overwrite,
             OperationType::Restore => iceberg::spec::Operation::Replace,
             OperationType::Repair => iceberg::spec::Operation::Replace,
-        }
-    }
-
-    /// Read record count from a parquet file
-    pub fn read_parquet_record_count(path: &str) -> u64 {
-        match std::fs::read(path) {
-            Ok(data) => match ParquetRecordBatchReaderBuilder::try_new(Bytes::from(data)) {
-                Ok(builder) => builder.metadata().file_metadata().num_rows() as u64,
-                Err(_) => 0,
-            },
-            Err(_) => 0,
         }
     }
 }
@@ -377,7 +386,7 @@ impl MetadataService for IcebergMetadataService {
 
         // Generate IDs
         let snapshot_id = chrono::Utc::now().timestamp_millis();
-        let timestamp_nanos = super::traits::utils::generate_unique_id();
+        let timestamp_nanos = crate::core::utils::generate_unique_id();
 
         // Get existing files (if replacing/repairing, we need to include unchanged files)
         let mut all_files: Vec<DataFile> = Vec::new();

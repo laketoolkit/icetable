@@ -6,12 +6,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
 use super::MaintenanceConfig;
 use crate::core::metadata::{
     DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
+use crate::core::utils::fs::{normalize_path, scan_parquet_files, ScanConfig};
+use crate::core::utils::parquet::read_parquet_record_count_from_file;
 use crate::error::Result;
 
 /// Service for repairing table metadata
@@ -43,28 +43,28 @@ impl RepairService {
         // Get set of tracked file paths
         let tracked_paths: HashSet<String> = tracked_files
             .iter()
-            .map(|f| self.normalize_path(&f.path))
+            .map(|f| normalize_path(&f.path))
             .collect();
 
         // Scan filesystem for parquet files
-        let fs_files = self.scan_data_files(&data_dir)?;
+        let fs_files = self.scan_data_files(&data_dir);
 
         // Find orphan files (on disk but not in metadata)
         let orphan_files: Vec<DataFileInfo> = fs_files
             .iter()
-            .filter(|f| !tracked_paths.contains(&self.normalize_path(&f.path)))
+            .filter(|f| !tracked_paths.contains(&normalize_path(&f.path)))
             .cloned()
             .collect();
 
         // Find missing files (in metadata but not on disk)
         let fs_paths: HashSet<String> = fs_files
             .iter()
-            .map(|f| self.normalize_path(&f.path))
+            .map(|f| normalize_path(&f.path))
             .collect();
 
         let missing_files: Vec<DataFileInfo> = tracked_files
             .iter()
-            .filter(|f| !fs_paths.contains(&self.normalize_path(&f.path)))
+            .filter(|f| !fs_paths.contains(&normalize_path(&f.path)))
             .cloned()
             .collect();
 
@@ -150,64 +150,35 @@ impl RepairService {
     }
 
     /// Scan data directory for parquet files
-    fn scan_data_files(&self, data_dir: &Path) -> Result<Vec<DataFileInfo>> {
-        let mut files = Vec::new();
-        self.scan_directory_recursive(data_dir, &mut files);
-        Ok(files)
+    fn scan_data_files(&self, data_dir: &Path) -> Vec<DataFileInfo> {
+        let scan_config = ScanConfig::parquet();
+        let scanned_files = scan_parquet_files(data_dir, &scan_config);
+
+        scanned_files
+            .into_iter()
+            .filter_map(|f| self.to_data_file_info(&f.path))
+            .collect()
     }
 
-    /// Recursively scan a directory for parquet files
-    fn scan_directory_recursive(&self, dir: &Path, files: &mut Vec<DataFileInfo>) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            // Skip metadata directories
-            if name == "_delta_log" || name == "metadata" {
-                continue;
-            }
-
-            if path.is_dir() {
-                self.scan_directory_recursive(&path, files);
-            } else if path.extension().map_or(false, |ext| ext == "parquet") {
-                if let Some(info) = self.read_file_info(&path) {
-                    files.push(info);
-                }
-            }
-        }
-    }
-
-    /// Read file information from a parquet file
-    fn read_file_info(&self, path: &Path) -> Option<DataFileInfo> {
-        let file_path = path.to_string_lossy().to_string();
+    /// Convert a file path to DataFileInfo
+    fn to_data_file_info(&self, path: &str) -> Option<DataFileInfo> {
+        let path_buf = Path::new(path);
 
         // Get file size
-        let size = std::fs::metadata(path).ok()?.len();
+        let size = std::fs::metadata(path_buf).ok()?.len();
 
         // Try to read record count from parquet metadata
-        let record_count = self.read_parquet_record_count(path).unwrap_or(0);
+        let record_count = read_parquet_record_count_from_file(path_buf).unwrap_or(0);
 
         // Try to extract partition from path
-        let partition = self.extract_partition_from_path(path);
+        let partition = self.extract_partition_from_path(path_buf);
 
         Some(DataFileInfo {
-            path: file_path,
+            path: path.to_string(),
             size,
             record_count,
             partition,
         })
-    }
-
-    /// Read record count from parquet file footer
-    fn read_parquet_record_count(&self, path: &Path) -> Option<u64> {
-        let file = std::fs::File::open(path).ok()?;
-        let reader = ParquetRecordBatchReaderBuilder::try_new(file).ok()?;
-        Some(reader.metadata().file_metadata().num_rows() as u64)
     }
 
     /// Extract partition information from file path
@@ -224,13 +195,6 @@ impl RepairService {
         }
 
         partition
-    }
-
-    /// Normalize a file path for comparison
-    fn normalize_path(&self, path: &str) -> String {
-        path.strip_prefix("file://")
-            .unwrap_or(path)
-            .to_string()
     }
 }
 

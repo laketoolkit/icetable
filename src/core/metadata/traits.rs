@@ -189,30 +189,7 @@ impl MaintenanceResult {
     }
 }
 
-/// Utility functions for formatting
+/// Re-export utility functions from the shared utils module for backward compatibility
 pub mod utils {
-    /// Format bytes to human-readable string
-    pub fn format_bytes(bytes: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
-
-        if bytes >= GB {
-            format!("{:.2} GB", bytes as f64 / GB as f64)
-        } else if bytes >= MB {
-            format!("{:.2} MB", bytes as f64 / MB as f64)
-        } else if bytes >= KB {
-            format!("{:.2} KB", bytes as f64 / KB as f64)
-        } else {
-            format!("{} bytes", bytes)
-        }
-    }
-
-    /// Generate a timestamp-based unique ID
-    pub fn generate_unique_id() -> u128 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    }
+    pub use crate::core::utils::{format_bytes, generate_unique_id};
 }
