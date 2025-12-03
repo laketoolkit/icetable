@@ -281,6 +281,10 @@ pub struct StatsArgs {
     /// Path to table file
     pub path: String,
 
+    /// Table format (delta, iceberg) - auto-detected if not specified
+    #[arg(short, long, value_parser = ["delta", "iceberg"])]
+    pub format: Option<String>,
+
     /// Only compute stats for specific columns
     #[arg(long, value_delimiter = ',')]
     pub columns: Option<Vec<String>>,
@@ -323,6 +327,10 @@ pub struct TuiArgs {
 pub struct HistoryArgs {
     /// Path to table
     pub path: String,
+
+    /// Table format (delta, iceberg) - auto-detected if not specified
+    #[arg(short, long, value_parser = ["delta", "iceberg"])]
+    pub format: Option<String>,
 
     /// Maximum number of versions to show
     #[arg(short = 'n', long, default_value = "10")]

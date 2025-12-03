@@ -2,7 +2,7 @@ use super::box_container::Box;
 use super::box_item::BoxItem;
 use super::box_layout::{BoxChars, BoxLayout};
 use super::box_section::SectionStyle;
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 use unicode_width::UnicodeWidthStr;
 
 /// Renderizador de cajas con manejo de ANSI codes
@@ -53,12 +53,8 @@ impl BoxRenderer {
                         value,
                         key_width,
                     } => {
-                        let rendered = if let Some(width) = key_width {
-                            format!(" {:<width$} {}", key, value, width = width)
-                        } else {
-                            format!(" {}: {}", key, value)
-                        };
-                        lines.push(self.render_line(&rendered, chars));
+                        let kv_lines = self.render_key_value(&key, &value, key_width, chars);
+                        lines.push(kv_lines);
                     }
                     BoxItem::Separator => {
                         lines.push(self.render_separator(chars));
@@ -150,19 +146,202 @@ impl BoxRenderer {
         )
     }
 
-    /// Renderiza una línea de contenido con padding
-    fn render_line(&self, content: &str, chars: BoxChars) -> String {
-        let content_visual_width = Self::visual_width(content);
+    /// Renderiza un key-value con wrap alineado al valor
+    fn render_key_value(
+        &self,
+        key: &str,
+        value: &str,
+        key_width: Option<usize>,
+        chars: BoxChars,
+    ) -> String {
         let available_width = self.layout.content_width();
-        let padding = available_width.saturating_sub(content_visual_width);
 
-        format!(
-            "{}{}{}{}",
-            chars.vertical,
-            content,
-            " ".repeat(padding),
-            chars.vertical
-        )
+        // Apply colors: key in teal (45, 212, 191), value in slate (148, 163, 184)
+        let colored_key: ColoredString = if let Some(width) = key_width {
+            format!("{:<width$}", key, width = width).truecolor(45, 212, 191)
+        } else {
+            format!("{}:", key).truecolor(45, 212, 191)
+        };
+
+        // Calculate the indent for continuation lines (aligned with value start)
+        // Format: " {key:<width>} {value}" -> indent = 1 + width + 1
+        let actual_key_width = key_width.unwrap_or_else(|| Self::visual_width(key) + 1); // +1 for ":"
+        let value_indent = 1 + actual_key_width + 1; // leading space + key + space before value
+
+        // First line with key (for width calculation, use uncolored)
+        let first_line_plain = if let Some(width) = key_width {
+            format!(" {:<width$} {}", key, value, width = width)
+        } else {
+            format!(" {}: {}", key, value)
+        };
+
+        let first_line_width = Self::visual_width(&first_line_plain);
+
+        // If it fits, just render normally
+        if first_line_width <= available_width {
+            // Slate color (203, 213, 225) - Tailwind slate-300
+            let colored_value = value.truecolor(203, 213, 225);
+            let first_line_colored = format!(" {} {}", colored_key, colored_value);
+            let padding = available_width.saturating_sub(first_line_width);
+            return format!(
+                "{}{}{}{}",
+                chars.vertical,
+                first_line_colored,
+                " ".repeat(padding),
+                chars.vertical
+            );
+        }
+
+        // Need to wrap - calculate how much of value fits on first line
+        let key_part_plain = if let Some(width) = key_width {
+            format!(" {:<width$} ", key, width = width)
+        } else {
+            format!(" {}: ", key)
+        };
+        let key_part_colored = format!(" {} ", colored_key);
+        let key_part_width = Self::visual_width(&key_part_plain);
+        let value_space = available_width.saturating_sub(key_part_width);
+
+        // Wrap the value
+        let value_lines = Self::wrap_value(value, value_space, available_width - value_indent);
+
+        let mut result_lines = Vec::new();
+
+        for (i, val_line) in value_lines.iter().enumerate() {
+            // Slate color (203, 213, 225) - Tailwind slate-300
+            let colored_val_line = val_line.truecolor(203, 213, 225);
+            if i == 0 {
+                // First line: key + value
+                let line = format!("{}{}", key_part_colored, colored_val_line);
+                let line_plain = format!("{}{}", key_part_plain, val_line);
+                let line_width = Self::visual_width(&line_plain);
+                let padding = available_width.saturating_sub(line_width);
+                result_lines.push(format!(
+                    "{}{}{}{}",
+                    chars.vertical,
+                    line,
+                    " ".repeat(padding),
+                    chars.vertical
+                ));
+            } else {
+                // Continuation: indent + value
+                let line = format!("{}{}", " ".repeat(value_indent), colored_val_line);
+                let line_width = Self::visual_width(&format!("{}{}", " ".repeat(value_indent), val_line));
+                let padding = available_width.saturating_sub(line_width);
+                result_lines.push(format!(
+                    "{}{}{}{}",
+                    chars.vertical,
+                    line,
+                    " ".repeat(padding),
+                    chars.vertical
+                ));
+            }
+        }
+
+        result_lines.join("\n")
+    }
+
+    /// Wrap a value string, with different width for first line vs continuation
+    fn wrap_value(value: &str, first_line_width: usize, continuation_width: usize) -> Vec<String> {
+        if Self::visual_width(value) <= first_line_width {
+            return vec![value.to_string()];
+        }
+
+        let mut lines = Vec::new();
+        let mut current_line = String::new();
+        let mut current_width = 0;
+        let mut is_first_line = true;
+
+        let max_width = |first: bool| {
+            if first {
+                first_line_width
+            } else {
+                continuation_width
+            }
+        };
+
+        for ch in value.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+
+            if current_width + ch_width > max_width(is_first_line) && !current_line.is_empty() {
+                lines.push(current_line);
+                current_line = String::new();
+                current_width = 0;
+                is_first_line = false;
+            }
+
+            current_line.push(ch);
+            current_width += ch_width;
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+
+        lines
+    }
+
+    /// Renderiza una línea de contenido con padding, haciendo wrap si es necesario
+    fn render_line(&self, content: &str, chars: BoxChars) -> String {
+        let available_width = self.layout.content_width();
+        let wrapped_lines = Self::wrap_text(content, available_width);
+
+        wrapped_lines
+            .into_iter()
+            .map(|line| {
+                let line_width = Self::visual_width(&line);
+                let padding = available_width.saturating_sub(line_width);
+                format!(
+                    "{}{}{}{}",
+                    chars.vertical,
+                    line,
+                    " ".repeat(padding),
+                    chars.vertical
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Wrap text to fit within max_width, preserving leading spaces for continuation
+    fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+        let text_width = Self::visual_width(text);
+        if text_width <= max_width {
+            return vec![text.to_string()];
+        }
+
+        // Find leading whitespace to preserve indentation on wrapped lines
+        let leading_spaces = text.len() - text.trim_start().len();
+        let indent = " ".repeat(leading_spaces.min(20)); // Cap indent at 20
+
+        let mut lines = Vec::new();
+        let mut current_line = String::new();
+        let mut current_width = 0;
+        let mut is_first_line = true;
+
+        for ch in text.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+
+            if current_width + ch_width > max_width && !current_line.is_empty() {
+                lines.push(current_line);
+                current_line = if is_first_line {
+                    is_first_line = false;
+                    indent.clone()
+                } else {
+                    indent.clone()
+                };
+                current_width = Self::visual_width(&current_line);
+            }
+
+            current_line.push(ch);
+            current_width += ch_width;
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+
+        lines
     }
 
     /// Renderiza línea vacía

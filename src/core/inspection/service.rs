@@ -49,6 +49,7 @@ impl PhysicalInspectionService {
 
         // 4. Build view
         let mut view_builder = InspectionViewBuilder::new()
+            .with_format_name(&metadata.format_name)
             .with_file_info(&metadata.file_info);
 
         if let Some(schema) = &metadata.schema {

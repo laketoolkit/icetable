@@ -66,9 +66,9 @@ impl PhysicalInspectResult {
 
         let mut container = Box::titled(title);
 
-        // File Information section
+        // Table Information section
         container = container.section(
-            BoxSection::titled("File Information")
+            BoxSection::titled("Table Information")
                 .items(self.file_info.clone())
         );
 

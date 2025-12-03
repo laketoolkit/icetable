@@ -40,7 +40,7 @@ impl Default for StatsOptions {
     fn default() -> Self {
         Self {
             include_histogram: false,
-            percentiles: vec![0.25, 0.5, 0.75],
+            percentiles: vec![],  // Empty by default - only computed when --profile is used
             profile: false,
             columns: None,
         }
@@ -69,7 +69,17 @@ impl StatsOperation {
             schema.fields().iter().map(|f| f.name().clone()).collect()
         };
 
-        // Read data in batches
+        // Check if we need to read data or can use native statistics
+        let needs_data_scan = options.profile || options.include_histogram || !options.percentiles.is_empty();
+
+        // Try to use native statistics first (much faster for large tables)
+        if !needs_data_scan && self.handler.has_native_statistics() {
+            if let Ok(native_stats) = self.handler.read_statistics().await {
+                return Self::convert_native_stats(&native_stats, &column_names, &schema);
+            }
+        }
+
+        // Fall back to reading data if native stats unavailable or advanced stats needed
         let read_opts = ReadOptions::builder().batch_size(8192).build();
         let batches = self.handler.read_batches(&read_opts).await?;
 
@@ -108,6 +118,88 @@ impl StatsOperation {
                 total_rows,
                 options,
             )?;
+
+            column_stats.push(stats);
+        }
+
+        Ok(StatsResult {
+            total_rows: total_rows as i64,
+            column_stats,
+        })
+    }
+
+    /// Convert native format statistics to our StatsResult
+    fn convert_native_stats(
+        native_stats: &[crate::core::formats::ColumnStats],
+        column_names: &[String],
+        schema: &arrow::datatypes::Schema,
+    ) -> Result<StatsResult> {
+        // Get total rows from metadata if available
+        let total_rows = native_stats
+            .iter()
+            .filter_map(|s| s.distinct_count)
+            .max()
+            .unwrap_or(0);
+
+        let mut column_stats = Vec::new();
+
+        for col_name in column_names {
+            // Find native stats for this column
+            let native = native_stats.iter().find(|s| s.name == *col_name);
+
+            let field = schema
+                .field_with_name(col_name)
+                .map_err(|e| Error::General(format!("Column '{}' not found: {}", col_name, e)))?;
+
+            let null_count = native.and_then(|s| s.null_count).unwrap_or(0) as usize;
+
+            let mut stats = ColumnStatistics {
+                name: col_name.clone(),
+                data_type: field.data_type().clone(),
+                null_count,
+                non_null_count: total_rows as usize - null_count,
+                numeric_stats: None,
+                string_stats: None,
+                boolean_stats: None,
+                temporal_stats: None,
+            };
+
+            // Extract min/max from native stats
+            if let Some(native) = native {
+                match field.data_type() {
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
+                    DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 |
+                    DataType::Float32 | DataType::Float64 => {
+                        let min = native.min_value.as_ref().and_then(|s| s.parse::<f64>().ok());
+                        let max = native.max_value.as_ref().and_then(|s| s.parse::<f64>().ok());
+
+                        stats.numeric_stats = Some(NumericStats {
+                            min,
+                            max,
+                            mean: None,  // Not available from native stats
+                            median: None,
+                            std_dev: None,
+                            percentiles: None,
+                        });
+                    }
+                    DataType::Utf8 | DataType::LargeUtf8 => {
+                        stats.string_stats = Some(StringStats {
+                            min_length: None,
+                            max_length: None,
+                            avg_length: None,
+                            distinct_count: native.distinct_count.map(|c| c as usize),
+                            most_common: None,
+                        });
+                    }
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+                        stats.temporal_stats = Some(TemporalStats {
+                            min: native.min_value.clone(),
+                            max: native.max_value.clone(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
 
             column_stats.push(stats);
         }
@@ -277,8 +369,13 @@ impl StatsOperation {
         };
 
         // Compute median and percentiles if profiling
+        let percentile_values = if options.percentiles.is_empty() && options.profile {
+            vec![0.25, 0.5, 0.75]  // Default quartiles when profiling
+        } else {
+            options.percentiles.clone()
+        };
         let (median, percentiles) =
-            if options.profile && !options.percentiles.is_empty() && count > 0 {
+            if options.profile && count > 0 {
                 let mut all_values = Vec::new();
                 for array in arrays {
                     let primitive_array: &PrimitiveArray<T> = array.as_primitive();
@@ -294,8 +391,7 @@ impl StatsOperation {
 
                 let median_val = Self::compute_percentile(&all_values, 0.5);
 
-                let percentile_vals: HashMap<String, f64> = options
-                    .percentiles
+                let percentile_vals: HashMap<String, f64> = percentile_values
                     .iter()
                     .map(|&p| {
                         let val = Self::compute_percentile(&all_values, p);

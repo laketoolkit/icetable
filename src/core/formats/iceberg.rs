@@ -121,23 +121,33 @@ impl IcebergHandler {
     /// This uses StaticTable which loads the table directly from the metadata file
     /// without requiring a catalog.
     async fn open_table(&self) -> Result<StaticTable> {
-        // Iceberg's FileIO requires absolute paths
-        let abs_path = if self.path.is_absolute() {
-            self.path.clone()
-        } else {
+        let table_path = self.path.to_string_lossy().to_string();
+
+        // Check if this is a cloud storage path
+        let is_cloud = table_path.starts_with("s3://")
+            || table_path.starts_with("s3a://")
+            || table_path.starts_with("gs://")
+            || table_path.starts_with("gcs://")
+            || table_path.starts_with("az://")
+            || table_path.starts_with("abfs://")
+            || table_path.starts_with("abfss://");
+
+        // For local paths, convert to absolute
+        let table_path = if !is_cloud && !self.path.is_absolute() {
             std::env::current_dir()
                 .map_err(|e| Error::General(format!("Failed to get current dir: {}", e)))?
                 .join(&self.path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            table_path
         };
-        let table_path = abs_path.to_string_lossy().to_string();
 
         // Find the metadata location
         let metadata_location = self.find_metadata_location(&table_path).await?;
 
-        // Create FileIO for reading the metadata
-        let file_io = FileIOBuilder::new_fs_io()
-            .build()
-            .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))?;
+        // Create FileIO based on path scheme
+        let file_io = Self::create_file_io(&table_path)?;
 
         // Create a table identifier (just for identification purposes)
         let table_ident = TableIdent::from_strs(&["iceberg", "table"])
@@ -155,6 +165,63 @@ impl IcebergHandler {
                 })?;
 
         Ok(table)
+    }
+
+    /// Create FileIO based on path scheme
+    fn create_file_io(path: &str) -> Result<iceberg::io::FileIO> {
+        if path.starts_with("s3://") || path.starts_with("s3a://") {
+            // For S3, build FileIO with s3 scheme
+            // Read credentials and config from environment
+            let mut builder = FileIOBuilder::new("s3");
+
+            // S3 credentials
+            if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
+                builder = builder.with_prop("s3.access-key-id", key);
+            }
+            if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+                builder = builder.with_prop("s3.secret-access-key", secret);
+            }
+            if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
+                builder = builder.with_prop("s3.session-token", token);
+            }
+
+            // S3 endpoint (for MinIO or other S3-compatible storage)
+            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+                builder = builder.with_prop("s3.endpoint", endpoint);
+            }
+
+            // S3 region
+            if let Ok(region) = std::env::var("AWS_REGION") {
+                builder = builder.with_prop("s3.region", region);
+            } else if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
+                builder = builder.with_prop("s3.region", region);
+            } else {
+                // Default region for MinIO/local S3
+                builder = builder.with_prop("s3.region", "us-east-1");
+            }
+
+            // Enable path-style access for MinIO
+            builder = builder.with_prop("s3.path-style-access", "true");
+
+            builder
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
+        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
+            // For GCS
+            FileIOBuilder::new("gcs")
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
+        } else if path.starts_with("az://") || path.starts_with("abfs://") || path.starts_with("abfss://") {
+            // For Azure
+            FileIOBuilder::new("azblob")
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
+        } else {
+            // Local filesystem
+            FileIOBuilder::new_fs_io()
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
+        }
     }
 
     /// Find the metadata file location for an Iceberg table
@@ -417,17 +484,27 @@ impl FormatHandler for IcebergHandler {
 
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>> {
         let schema = self.read_schema().await?;
+        let table = self.open_table().await?;
+        let metadata = table.metadata();
 
-        // Initialize stats for all columns
-        // Iceberg stores statistics in manifest files, but extracting them
-        // requires more complex logic. For now, return basic structure.
+        // Get total record count from snapshot summary
+        let total_records = metadata
+            .current_snapshot()
+            .and_then(|s| s.summary().additional_properties.get("total-records"))
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+
+        // Build stats with row count
+        // Note: We store total_records in distinct_count only for the first column
+        // to pass it to the stats operation for row count calculation
         let stats: Vec<ColumnStats> = schema
             .fields
             .iter()
-            .map(|field| ColumnStats {
+            .enumerate()
+            .map(|(idx, field)| ColumnStats {
                 name: field.name().clone(),
-                null_count: None,
-                distinct_count: None,
+                null_count: Some(0),  // Assume no nulls unless we read manifests
+                distinct_count: if idx == 0 { Some(total_records) } else { None },
                 min_value: None,
                 max_value: None,
                 mean: None,

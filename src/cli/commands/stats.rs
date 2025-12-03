@@ -21,8 +21,12 @@ impl StatsCommand {
         // Create storage backend (supports local and cloud)
         let storage = StorageBackendFactory::create_backend(&args.path).await?;
 
-        // Get format handler
-        let handler = FormatHandlerFactory::create_handler(path, storage).await?;
+        // Get format handler (use explicit format if provided, otherwise auto-detect)
+        let handler = if let Some(format) = &args.format {
+            FormatHandlerFactory::create_handler_for_format(format, path, storage).await?
+        } else {
+            FormatHandlerFactory::create_handler(path, storage).await?
+        };
 
         // Convert to Arc for StatsOperation
         let handler_arc = Arc::from(handler);

@@ -2,7 +2,6 @@
 
 use super::formatters::*;
 use super::traits::*;
-use std::collections::HashMap;
 
 /// View section containing items
 #[derive(Debug, Clone)]
@@ -36,21 +35,12 @@ pub enum ViewItem {
 }
 
 impl ViewItem {
-    /// Create a key-value item with default key width
+    /// Create a key-value item (width calculated globally later)
     pub fn kv(key: impl Into<String>, value: impl Into<String>) -> Self {
         Self::KeyValue {
             key: key.into(),
             value: value.into(),
-            key_width: Some(20),
-        }
-    }
-
-    /// Create a key-value item with custom key width
-    pub fn kv_width(key: impl Into<String>, value: impl Into<String>, width: usize) -> Self {
-        Self::KeyValue {
-            key: key.into(),
-            value: value.into(),
-            key_width: Some(width),
+            key_width: None,
         }
     }
 
@@ -68,12 +58,15 @@ impl ViewItem {
 /// Complete inspection view
 #[derive(Debug, Clone)]
 pub struct InspectionView {
+    /// Format name (e.g., "Apache Iceberg", "Delta Lake")
+    pub format_name: String,
     /// View sections
     pub sections: Vec<ViewSection>,
 }
 
 /// Builder for creating inspection views from metadata
 pub struct InspectionViewBuilder {
+    format_name: String,
     sections: Vec<ViewSection>,
 }
 
@@ -81,51 +74,106 @@ impl InspectionViewBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
+            format_name: "Unknown Format".to_string(),
             sections: Vec::new(),
         }
+    }
+
+    /// Set the format name
+    pub fn with_format_name(mut self, format_name: impl Into<String>) -> Self {
+        self.format_name = format_name.into();
+        self
     }
 
     /// Add file information section
     pub fn with_file_info(mut self, info: &FileInfo) -> Self {
         let mut items = vec![
             ViewItem::kv("Path", extract_filename(&info.path)),
-            ViewItem::kv("Size", format_bytes(info.file_size)),
-            ViewItem::kv("Format Version", &info.format_version),
         ];
+
+        // Only show size if non-zero (Iceberg tables don't have single file size)
+        if info.file_size > 0 {
+            items.push(ViewItem::kv("Size", format_bytes(info.file_size)));
+        }
+
+        items.push(ViewItem::kv("Format Version", &info.format_version));
 
         if let Some(created_by) = &info.created_by {
             items.push(ViewItem::kv("Created By", created_by));
         }
 
-        // Add any additional metadata
-        for (key, value) in &info.metadata {
-            items.push(ViewItem::kv(key, value));
+        // Add metadata (excluding properties which go in separate section)
+        // Sort keys for consistent ordering
+        let mut meta_keys: Vec<_> = info.metadata.keys()
+            .filter(|k| !k.starts_with("property."))
+            .collect();
+        meta_keys.sort();
+
+        for key in meta_keys {
+            if let Some(value) = info.metadata.get(key) {
+                items.push(ViewItem::kv(key, value));
+            }
         }
 
         self.sections.push(ViewSection {
-            title: "File Information".to_string(),
+            title: "Table Information".to_string(),
             items,
         });
+
+        // Add table properties as separate section if any exist
+        let property_keys: Vec<_> = info.metadata.keys()
+            .filter(|k| k.starts_with("property."))
+            .collect();
+
+        if !property_keys.is_empty() {
+            let mut prop_items = Vec::new();
+
+            // Check if using defaults (no explicit properties)
+            let using_defaults = property_keys.iter()
+                .any(|k| k.as_str() == "property._using_defaults");
+
+            if using_defaults {
+                prop_items.push(ViewItem::text("(using defaults)"));
+                prop_items.push(ViewItem::empty());
+            }
+
+            // Filter out internal markers and sort
+            let mut sorted_keys: Vec<_> = property_keys
+                .into_iter()
+                .filter(|k| !k.starts_with("property._"))
+                .collect();
+            sorted_keys.sort();
+
+            for key in sorted_keys {
+                if let Some(value) = info.metadata.get(key) {
+                    // Strip "property." prefix for display
+                    let display_key = key.strip_prefix("property.").unwrap_or(key);
+                    prop_items.push(ViewItem::kv(display_key, value));
+                }
+            }
+
+            self.sections.push(ViewSection {
+                title: "Table Properties".to_string(),
+                items: prop_items,
+            });
+        }
+
         self
     }
 
     /// Add schema section
     pub fn with_schema(mut self, schema: &SchemaInfo) -> Self {
-        let mut items = vec![
-            ViewItem::kv("Columns", format_number(schema.num_columns as i64)),
-            ViewItem::empty(),
-        ];
+        let mut items = Vec::new();
 
-        // Add column definitions
+        // Add column definitions as key-value pairs (name = key, type = value)
         for col in &schema.columns {
-            let nullable = if col.nullable { "" } else { "NOT NULL" };
-            items.push(ViewItem::text(format!(
-                "  {}.  {:<30} {:<20} {}",
-                col.index + 1,
-                col.name,
-                col.column_type,
-                nullable
-            )));
+            let type_with_nullable = if col.nullable {
+                col.column_type.clone()
+            } else {
+                format!("{} NOT NULL", col.column_type)
+            };
+
+            items.push(ViewItem::kv(&col.name, type_with_nullable));
         }
 
         self.sections.push(ViewSection {
@@ -290,9 +338,14 @@ impl InspectionViewBuilder {
             items.push(ViewItem::kv("Partitioning", partitioning));
         }
 
-        // Add any additional details
-        for (key, value) in &files.details {
-            items.push(ViewItem::kv(key, value));
+        // Add any additional details (sorted for consistent ordering)
+        let mut detail_keys: Vec<_> = files.details.keys().collect();
+        detail_keys.sort();
+
+        for key in detail_keys {
+            if let Some(value) = files.details.get(key) {
+                items.push(ViewItem::kv(key, value));
+            }
         }
 
         self.sections.push(ViewSection {
@@ -334,6 +387,7 @@ impl InspectionViewBuilder {
     /// Build the final inspection view
     pub fn build(self) -> InspectionView {
         InspectionView {
+            format_name: self.format_name,
             sections: self.sections,
         }
     }
@@ -349,21 +403,36 @@ impl Default for InspectionViewBuilder {
 pub fn view_to_box_items(view: &InspectionView) -> Vec<crate::cli::output::BoxItem> {
     use crate::cli::output::BoxItem;
 
+    // Calculate global key width across ALL sections
+    let global_key_width = view
+        .sections
+        .iter()
+        .flat_map(|s| s.items.iter())
+        .filter_map(|item| {
+            if let ViewItem::KeyValue { key, .. } = item {
+                Some(key.len())
+            } else {
+                None
+            }
+        })
+        .max()
+        .unwrap_or(20);
+
     let mut items = Vec::new();
 
     for section in &view.sections {
         // Add section title
-        items.push(BoxItem::Text(format!("══════ {} ══════", section.title)));
+        items.push(BoxItem::Text(format!("------ {} ------", section.title)));
         items.push(BoxItem::Empty);
 
         // Add section items
         for item in &section.items {
             match item {
-                ViewItem::KeyValue { key, value, key_width } => {
+                ViewItem::KeyValue { key, value, .. } => {
                     items.push(BoxItem::KeyValue {
                         key: key.clone(),
                         value: value.clone(),
-                        key_width: *key_width,
+                        key_width: Some(global_key_width),
                     });
                 }
                 ViewItem::Text(text) => {
@@ -374,7 +443,7 @@ pub fn view_to_box_items(view: &InspectionView) -> Vec<crate::cli::output::BoxIt
                 }
                 ViewItem::List(list_items) => {
                     for list_item in list_items {
-                        items.push(BoxItem::Text(format!("  • {}", list_item)));
+                        items.push(BoxItem::Text(format!("  - {}", list_item)));
                     }
                 }
                 ViewItem::Table { headers, rows } => {
@@ -402,6 +471,21 @@ pub fn view_to_box_items(view: &InspectionView) -> Vec<crate::cli::output::BoxIt
 pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::inspect::common::PhysicalInspectResult {
     use crate::cli::output::BoxItem;
 
+    // First pass: calculate the maximum key width across ALL sections
+    let global_key_width = view
+        .sections
+        .iter()
+        .flat_map(|s| s.items.iter())
+        .filter_map(|item| {
+            if let ViewItem::KeyValue { key, .. } = item {
+                Some(key.len())
+            } else {
+                None
+            }
+        })
+        .max()
+        .unwrap_or(20);
+
     let mut file_info = Vec::new();
     let mut schema = None;
     let mut layout = None;
@@ -413,11 +497,11 @@ pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::in
         // Convert section items to BoxItems
         for item in &section.items {
             match item {
-                ViewItem::KeyValue { key, value, key_width } => {
+                ViewItem::KeyValue { key, value, .. } => {
                     section_items.push(BoxItem::KeyValue {
                         key: key.clone(),
                         value: value.clone(),
-                        key_width: *key_width,
+                        key_width: Some(global_key_width),
                     });
                 }
                 ViewItem::Text(text) => {
@@ -428,7 +512,7 @@ pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::in
                 }
                 ViewItem::List(list_items) => {
                     for list_item in list_items {
-                        section_items.push(BoxItem::Text(format!("  • {}", list_item)));
+                        section_items.push(BoxItem::Text(format!("  - {}", list_item)));
                     }
                 }
                 ViewItem::Table { headers, rows } => {
@@ -448,8 +532,14 @@ pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::in
 
         // Assign to appropriate section
         match section.title.as_str() {
-            "File Information" => {
+            "File Information" | "Table Information" => {
                 file_info = section_items;
+            }
+            "Table Properties" => {
+                // Append to file_info with a styled header
+                file_info.push(BoxItem::Empty);
+                file_info.push(BoxItem::Text("== Table Properties ==".to_string()));
+                file_info.extend(section_items);
             }
             "Schema" => {
                 schema = Some(section_items);
@@ -461,14 +551,18 @@ pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::in
                 statistics = Some(section_items);
             }
             _ => {
-                // Unknown section - add to statistics
-                if statistics.is_none() {
-                    statistics = Some(Vec::new());
-                }
+                // Unknown section - append to statistics
                 if let Some(ref mut stats) = statistics {
-                    stats.push(BoxItem::Text(format!("══════ {} ══════", section.title)));
                     stats.push(BoxItem::Empty);
+                    stats.push(BoxItem::Text(format!("{}:", section.title)));
                     stats.extend(section_items);
+                } else {
+                    // No statistics yet, add section header + items
+                    let mut items = vec![
+                        BoxItem::Text(format!("{}:", section.title)),
+                    ];
+                    items.extend(section_items);
+                    statistics = Some(items);
                 }
             }
         }

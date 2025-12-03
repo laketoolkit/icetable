@@ -185,32 +185,5 @@ async fn inspect_physical_layout(
 
     // Convert InspectionView to PhysicalInspectResult and render
     let result = view_to_inspect_result(&view);
-    let format_name = view.sections
-        .first()
-        .and_then(|section| section.items.first())
-        .and_then(|item| {
-            if let crate::core::inspection::ViewItem::Text(text) = item {
-                // Extract format name from "Format: ..." text
-                if text.contains("Apache Parquet") {
-                    Some("Apache Parquet File")
-                } else if text.contains("Apache Arrow IPC") {
-                    Some("Apache Arrow IPC File")
-                } else if text.contains("Delta Lake") {
-                    Some("Delta Lake Table")
-                } else if text.contains("Iceberg") {
-                    Some("Apache Iceberg Table")
-                } else if text.contains("CSV") {
-                    Some("CSV File")
-                } else if text.contains("JSON") {
-                    Some("JSON File")
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .unwrap_or("Unknown Format");
-
-    Ok(result.render(format_name))
+    Ok(result.render(&view.format_name))
 }
