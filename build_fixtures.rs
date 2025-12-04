@@ -133,9 +133,7 @@ fn generate_types_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/types.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::GZIP(
-            Default::default(),
-        ))
+        .set_compression(parquet::basic::Compression::GZIP(Default::default()))
         .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
         .build();
 
@@ -186,9 +184,7 @@ fn generate_larger_parquet() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::create("tests/fixtures/larger.parquet")?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::ZSTD(
-            Default::default(),
-        ))
+        .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
         .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
         .build();
 
@@ -395,9 +391,10 @@ fn generate_arrow_with_metadata() -> Result<(), Box<dyn std::error::Error>> {
 
         let category_keys = UInt16Array::from(category_values);
         let category_dict: ArrayRef = Arc::new(StringArray::from(categories));
-        let category_array =
-            Arc::new(DictionaryArray::<UInt16Type>::try_new(category_keys, category_dict)?)
-                as ArrayRef;
+        let category_array = Arc::new(DictionaryArray::<UInt16Type>::try_new(
+            category_keys,
+            category_dict,
+        )?) as ArrayRef;
 
         // Status dictionary column (4 statuses)
         let statuses = vec!["pending", "active", "completed", "cancelled"];
@@ -405,8 +402,10 @@ fn generate_arrow_with_metadata() -> Result<(), Box<dyn std::error::Error>> {
 
         let status_keys = UInt16Array::from(status_values);
         let status_dict: ArrayRef = Arc::new(StringArray::from(statuses));
-        let status_array =
-            Arc::new(DictionaryArray::<UInt16Type>::try_new(status_keys, status_dict)?) as ArrayRef;
+        let status_array = Arc::new(DictionaryArray::<UInt16Type>::try_new(
+            status_keys,
+            status_dict,
+        )?) as ArrayRef;
 
         // Value column (some nulls)
         let values: Vec<Option<i32>> = (0..batch_size)
@@ -443,7 +442,11 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
         Field::new("age", DataType::Int32, true),
         Field::new("score", DataType::Float64, true),
         Field::new("active", DataType::Boolean, false),
-        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
     ]));
 
     // Generate data with patterns that benefit from bloom filters
@@ -460,8 +463,16 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
         user_ids.push(i as i64);
         usernames.push(format!("user_{:06}", i));
         emails.push(format!("user{}@example{}.com", i, i % 100));
-        ages.push(if i % 10 == 0 { None } else { Some(20 + (i % 50) as i32) });
-        scores.push(if i % 15 == 0 { None } else { Some((i as f64) * 0.123 + 50.0) });
+        ages.push(if i % 10 == 0 {
+            None
+        } else {
+            Some(20 + (i % 50) as i32)
+        });
+        scores.push(if i % 15 == 0 {
+            None
+        } else {
+            Some((i as f64) * 0.123 + 50.0)
+        });
         actives.push(i % 3 != 0);
         timestamps.push(1609459200000 + (i as i64) * 86400000); // Daily increments from 2021-01-01
     }
@@ -491,7 +502,9 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
 
     // Create writer properties with advanced features
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()))
+        .set_compression(parquet::basic::Compression::ZSTD(
+            parquet::basic::ZstdLevel::default(),
+        ))
         .set_statistics_enabled(EnabledStatistics::Page)
         .set_column_bloom_filter_enabled("username".into(), true)
         .set_column_bloom_filter_enabled("email".into(), true)
@@ -506,17 +519,16 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
                 "created_by".to_string(),
                 "tabletools advanced test generator".to_string(),
             ),
-            parquet::file::metadata::KeyValue::new(
-                "version".to_string(),
-                "2.0".to_string(),
-            ),
+            parquet::file::metadata::KeyValue::new("version".to_string(), "2.0".to_string()),
             parquet::file::metadata::KeyValue::new(
                 "description".to_string(),
-                "Parquet file with bloom filters, column indexes, and advanced features".to_string(),
+                "Parquet file with bloom filters, column indexes, and advanced features"
+                    .to_string(),
             ),
             parquet::file::metadata::KeyValue::new(
                 "test_features".to_string(),
-                "bloom_filters,column_indexes,page_statistics,dictionary_encoding,zstd_compression".to_string(),
+                "bloom_filters,column_indexes,page_statistics,dictionary_encoding,zstd_compression"
+                    .to_string(),
             ),
         ]))
         .build();
@@ -539,7 +551,7 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
 /// Generate a complete Iceberg table with manifests
 #[cfg(feature = "iceberg")]
 fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
-    use apache_avro::{types::Record, Writer};
+    use apache_avro::{Writer, types::Record};
     use serde_json::json;
 
     println!("Generating Iceberg table...");
@@ -557,7 +569,11 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
         Field::new("age", DataType::Int32, true),
         Field::new("score", DataType::Float64, true),
         Field::new("active", DataType::Boolean, false),
-        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
     ]));
 
     let num_rows = 10000;
@@ -573,8 +589,16 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
         user_ids.push(i as i64);
         usernames.push(format!("user_{:06}", i));
         emails.push(format!("user{}@example{}.com", i, i % 100));
-        ages.push(if i % 10 == 0 { None } else { Some(20 + (i % 50) as i32) });
-        scores.push(if i % 15 == 0 { None } else { Some((i as f64) * 0.123 + 50.0) });
+        ages.push(if i % 10 == 0 {
+            None
+        } else {
+            Some(20 + (i % 50) as i32)
+        });
+        scores.push(if i % 15 == 0 {
+            None
+        } else {
+            Some((i as f64) * 0.123 + 50.0)
+        });
         actives.push(i % 3 != 0);
         timestamps.push(1609459200000 + (i as i64) * 86400000);
     }
@@ -656,13 +680,30 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     }"#;
     let data_file_schema = apache_avro::Schema::parse_str(data_file_schema_str)?;
     let mut data_file_inner = Record::new(&data_file_schema).unwrap();
-    data_file_inner.put("file_path", apache_avro::types::Value::String("s3://tablectl/iceberg-table/data/00000-0-data.parquet".to_string()));
-    data_file_inner.put("file_format", apache_avro::types::Value::String("PARQUET".to_string()));
+    data_file_inner.put(
+        "file_path",
+        apache_avro::types::Value::String(
+            "s3://tablectl/iceberg-table/data/00000-0-data.parquet".to_string(),
+        ),
+    );
+    data_file_inner.put(
+        "file_format",
+        apache_avro::types::Value::String("PARQUET".to_string()),
+    );
     data_file_inner.put("partition", apache_avro::types::Value::Map(HashMap::new()));
-    data_file_inner.put("record_count", apache_avro::types::Value::Long(num_rows as i64));
-    data_file_inner.put("file_size_in_bytes", apache_avro::types::Value::Long(data_file_size));
+    data_file_inner.put(
+        "record_count",
+        apache_avro::types::Value::Long(num_rows as i64),
+    );
+    data_file_inner.put(
+        "file_size_in_bytes",
+        apache_avro::types::Value::Long(data_file_size),
+    );
 
-    data_file_record.put("data_file", apache_avro::types::Value::Record(data_file_inner.fields));
+    data_file_record.put(
+        "data_file",
+        apache_avro::types::Value::Record(data_file_inner.fields),
+    );
     manifest_writer.append(data_file_record)?;
     manifest_writer.flush()?;
 
@@ -692,14 +733,31 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     let mut manifest_list_writer = Writer::new(&manifest_list_schema, manifest_list_file);
 
     let mut manifest_list_record = Record::new(&manifest_list_schema).unwrap();
-    manifest_list_record.put("manifest_path", apache_avro::types::Value::String("s3://tablectl/iceberg-table/metadata/snap-1-manifest.avro".to_string()));
-    manifest_list_record.put("manifest_length", apache_avro::types::Value::Long(manifest_file_size));
+    manifest_list_record.put(
+        "manifest_path",
+        apache_avro::types::Value::String(
+            "s3://tablectl/iceberg-table/metadata/snap-1-manifest.avro".to_string(),
+        ),
+    );
+    manifest_list_record.put(
+        "manifest_length",
+        apache_avro::types::Value::Long(manifest_file_size),
+    );
     manifest_list_record.put("partition_spec_id", apache_avro::types::Value::Int(0));
     manifest_list_record.put("added_snapshot_id", apache_avro::types::Value::Long(1));
     manifest_list_record.put("added_data_files_count", apache_avro::types::Value::Int(1));
-    manifest_list_record.put("existing_data_files_count", apache_avro::types::Value::Int(0));
-    manifest_list_record.put("deleted_data_files_count", apache_avro::types::Value::Int(0));
-    manifest_list_record.put("added_rows_count", apache_avro::types::Value::Long(num_rows as i64));
+    manifest_list_record.put(
+        "existing_data_files_count",
+        apache_avro::types::Value::Int(0),
+    );
+    manifest_list_record.put(
+        "deleted_data_files_count",
+        apache_avro::types::Value::Int(0),
+    );
+    manifest_list_record.put(
+        "added_rows_count",
+        apache_avro::types::Value::Long(num_rows as i64),
+    );
     manifest_list_record.put("existing_rows_count", apache_avro::types::Value::Long(0));
     manifest_list_record.put("deleted_rows_count", apache_avro::types::Value::Long(0));
 
@@ -789,7 +847,10 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     version_hint_file.write_all(b"1")?;
 
     println!("Created: {}", table_dir);
-    println!("  - Data file: data/00000-0-data.parquet ({} rows, {} bytes)", num_rows, data_file_size);
+    println!(
+        "  - Data file: data/00000-0-data.parquet ({} rows, {} bytes)",
+        num_rows, data_file_size
+    );
     println!("  - Manifest: metadata/snap-1-manifest.avro");
     println!("  - Manifest list: metadata/snap-1-manifest-list.avro");
     println!("  - Metadata: metadata/v1.metadata.json");

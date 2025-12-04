@@ -3,11 +3,14 @@
 //! Thin wrapper that delegates to RepairService for both Delta Lake and Iceberg tables.
 
 use colored::Colorize;
+use std::sync::Arc;
 
 use crate::cli::parser::RepairArgs;
+use crate::config::ResolvePath;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
-use crate::core::{detect_table_format, format_bytes, TableFormat};
+use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::{TableFormat, format_bytes};
 use crate::error::{Error, Result};
 
 /// Repair options specifying what actions to take
@@ -24,7 +27,10 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(args: RepairArgs) -> Result<()> {
+    pub async fn execute(mut args: RepairArgs) -> Result<()> {
+        let table_path = args.path.resolve()?;
+        args.path = Some(table_path.clone());
+
         // Validate at least one repair option is specified
         if !args.sync_metadata && !args.remove_missing && !args.add_orphans {
             return Err(Error::General(
@@ -32,10 +38,19 @@ impl RepairCommand {
             ));
         }
 
-        let path = std::path::Path::new(&args.path);
+        // Create storage backend (supports local and cloud)
+        let storage = StorageBackendFactory::create_backend(&table_path).await?;
 
-        // Detect table format
-        let format = detect_table_format(path);
+        // Detect table format (use explicit format if provided, otherwise auto-detect)
+        let format = if let Some(format_str) = &args.format {
+            match format_str.as_str() {
+                "delta" => TableFormat::Delta,
+                "iceberg" => TableFormat::Iceberg,
+                _ => TableFormat::Unknown,
+            }
+        } else {
+            Self::detect_format(&table_path, &storage).await
+        };
 
         // Determine repair options
         let options = RepairOptions {
@@ -56,68 +71,54 @@ impl RepairCommand {
             TableFormat::Iceberg => Self::repair_iceberg(&args, &service, options).await,
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
-                args.path
+                table_path
             ))),
         }
     }
 
-    /// Repair Delta Lake table
-    #[cfg(feature = "delta")]
-    async fn repair_delta(
-        args: &RepairArgs,
-        service: &RepairService,
-        options: RepairOptions,
-    ) -> Result<()> {
-        use crate::core::metadata::DeltaMetadataService;
+    /// Detect table format using storage backend (supports cloud paths)
+    async fn detect_format(path: &str, storage: &Arc<dyn StorageBackend>) -> TableFormat {
+        use crate::core::storage::traits::ListOptions;
 
-        println!(
-            "{} Delta table at {}",
-            if args.dry_run { "Analyzing" } else { "Repairing" }.green(),
-            args.path
-        );
-
-        let metadata_service = DeltaMetadataService::new(args.path.clone().into())?;
-
-        // First analyze to show what will be done
-        let analysis = service.analyze(&metadata_service).await?;
-        Self::print_analysis(&analysis, args, options)?;
-
-        if !analysis.has_issues() {
-            return Ok(());
+        // Check for Delta Lake (_delta_log directory)
+        let delta_prefix = format!("{}/_delta_log/", path.trim_end_matches('/'));
+        let list_opts = ListOptions {
+            prefix: Some(delta_prefix),
+            delimiter: None,
+            max_results: Some(1),
+            continuation_token: None,
+        };
+        if let Ok(result) = storage.list(&list_opts).await {
+            if !result.objects.is_empty() {
+                return TableFormat::Delta;
+            }
         }
 
-        // Check if any selected options have issues to fix
-        let has_work = (options.add_orphans && !analysis.orphan_files.is_empty())
-            || (options.remove_missing && !analysis.missing_files.is_empty());
-
-        if !has_work {
-            println!();
-            println!(
-                "{}",
-                "No issues match the selected repair options.".yellow()
-            );
-            return Ok(());
+        // Check for Iceberg (metadata directory)
+        let iceberg_prefix = format!("{}/metadata/", path.trim_end_matches('/'));
+        let list_opts = ListOptions {
+            prefix: Some(iceberg_prefix),
+            delimiter: None,
+            max_results: Some(1),
+            continuation_token: None,
+        };
+        if let Ok(result) = storage.list(&list_opts).await {
+            if !result.objects.is_empty() {
+                return TableFormat::Iceberg;
+            }
         }
 
-        if args.dry_run {
-            return Ok(());
-        }
-
-        // Execute the repair
-        let result = service.execute(&metadata_service).await?;
-        Self::print_result(&result)?;
-
-        Ok(())
+        TableFormat::Unknown
     }
 
-    #[cfg(not(feature = "delta"))]
+    /// Repair Delta Lake table - not supported, use Iceberg instead
     async fn repair_delta(
         _args: &RepairArgs,
         _service: &RepairService,
         _options: RepairOptions,
     ) -> Result<()> {
         Err(Error::UnsupportedFeature {
-            feature: "Delta Lake support not enabled".to_string(),
+            feature: "Delta Lake repair is not supported. Use 'icebergctl import delta' to convert to Iceberg.".to_string(),
         })
     }
 
@@ -130,13 +131,19 @@ impl RepairCommand {
     ) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
 
+        let table_path = args.path.as_ref().unwrap();
         println!(
             "{} Iceberg table at {}",
-            if args.dry_run { "Analyzing" } else { "Repairing" }.green(),
-            args.path
+            if args.dry_run {
+                "Analyzing"
+            } else {
+                "Repairing"
+            }
+            .green(),
+            table_path
         );
 
-        let metadata_service = IcebergMetadataService::new(args.path.clone().into())?;
+        let metadata_service = IcebergMetadataService::new_async(table_path.clone()).await?;
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;
@@ -182,7 +189,11 @@ impl RepairCommand {
     }
 
     /// Print analysis results
-    fn print_analysis(analysis: &RepairAnalysis, args: &RepairArgs, options: RepairOptions) -> Result<()> {
+    fn print_analysis(
+        analysis: &RepairAnalysis,
+        args: &RepairArgs,
+        options: RepairOptions,
+    ) -> Result<()> {
         println!();
         println!(
             "Tracked files in metadata: {}",

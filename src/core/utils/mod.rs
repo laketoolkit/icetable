@@ -6,8 +6,10 @@ pub mod format_detection;
 pub mod fs;
 pub mod parquet;
 
-pub use format_detection::{detect_table_format, TableFormat};
-pub use fs::{normalize_path, scan_parquet_files, ScannedFile};
+pub use format_detection::{
+    TableFormat, detect_table_format, detect_table_format_async, detect_table_format_with_storage,
+};
+pub use fs::{ScannedFile, normalize_path, scan_parquet_files};
 pub use parquet::read_parquet_record_count;
 
 /// Default file sizes for maintenance operations (in bytes)

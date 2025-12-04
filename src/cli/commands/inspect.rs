@@ -6,11 +6,12 @@ use std::path::Path;
 
 use crate::cli::output::OutputFormatter;
 use crate::cli::parser::InspectArgs;
+use crate::config::ResolvePath;
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
-use common::VerbosityLevel;
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
 use crate::error::Result;
+use common::VerbosityLevel;
 
 use common::PhysicalInspectOptions;
 
@@ -19,9 +20,13 @@ pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
-    pub async fn execute(args: InspectArgs) -> Result<()> {
+    pub async fn execute(mut args: InspectArgs) -> Result<()> {
+        let path = args.path.resolve()?;
+        args.path = Some(path);
+
         // Check if any physical layout flags are set
-        let physical_mode = args.layout || (!args.schema && !args.metadata && !args.stats && !args.preview);
+        let physical_mode =
+            args.layout || (!args.schema && !args.metadata && !args.stats && !args.preview);
 
         // If physical mode, use new physical layout inspection
         if physical_mode {
@@ -35,7 +40,8 @@ impl InspectCommand {
     /// Execute physical layout inspection (new mode)
     async fn execute_physical_inspect(args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
-        let storage = StorageBackendFactory::create_backend(&args.path).await?;
+        let path_str = args.path.as_ref().unwrap();
+        let storage = StorageBackendFactory::create_backend(path_str).await?;
 
         // 2. Build physical inspect options
         let verbosity = if args.verbose {
@@ -48,10 +54,11 @@ impl InspectCommand {
             args.layout,
             args.stats,
             verbosity,
+            args.deep,
         );
 
-        // 3. Inspect physical layout
-        let path = Path::new(&args.path);
+        // 3. Inspect physical layout (progress shown inside service)
+        let path = Path::new(path_str);
         let result = self::inspect_physical_layout(path, storage, &options).await?;
 
         // 4. Display result
@@ -63,7 +70,8 @@ impl InspectCommand {
     /// Execute legacy inspect (old mode, for backwards compatibility)
     async fn execute_legacy_inspect(args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
-        let storage = StorageBackendFactory::create_backend(&args.path).await?;
+        let path_str = args.path.as_ref().unwrap();
+        let storage = StorageBackendFactory::create_backend(path_str).await?;
 
         // 2. Build time-travel options from CLI args
         let time_travel = TimeTravelOptions {
@@ -72,7 +80,7 @@ impl InspectCommand {
         };
 
         // 3. Create format handler with time-travel support
-        let path = Path::new(&args.path);
+        let path = Path::new(path_str);
         let handler = FormatHandlerRegistry::global()
             .create_handler_with_options(path, storage, time_travel)
             .await?;
@@ -178,6 +186,7 @@ async fn inspect_physical_layout(
             VerbosityLevel::Normal => crate::core::inspection::VerbosityLevel::Normal,
             VerbosityLevel::Verbose => crate::core::inspection::VerbosityLevel::Verbose,
         },
+        deep_scan: options.deep_scan,
     };
 
     let service = PhysicalInspectionService::new();

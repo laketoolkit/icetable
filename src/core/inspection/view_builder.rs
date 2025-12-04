@@ -87,9 +87,7 @@ impl InspectionViewBuilder {
 
     /// Add file information section
     pub fn with_file_info(mut self, info: &FileInfo) -> Self {
-        let mut items = vec![
-            ViewItem::kv("Path", extract_filename(&info.path)),
-        ];
+        let mut items = vec![ViewItem::kv("Path", extract_filename(&info.path))];
 
         // Only show size if non-zero (Iceberg tables don't have single file size)
         if info.file_size > 0 {
@@ -104,7 +102,9 @@ impl InspectionViewBuilder {
 
         // Add metadata (excluding properties which go in separate section)
         // Sort keys for consistent ordering
-        let mut meta_keys: Vec<_> = info.metadata.keys()
+        let mut meta_keys: Vec<_> = info
+            .metadata
+            .keys()
             .filter(|k| !k.starts_with("property."))
             .collect();
         meta_keys.sort();
@@ -121,7 +121,9 @@ impl InspectionViewBuilder {
         });
 
         // Add table properties as separate section if any exist
-        let property_keys: Vec<_> = info.metadata.keys()
+        let property_keys: Vec<_> = info
+            .metadata
+            .keys()
             .filter(|k| k.starts_with("property."))
             .collect();
 
@@ -129,7 +131,8 @@ impl InspectionViewBuilder {
             let mut prop_items = Vec::new();
 
             // Check if using defaults (no explicit properties)
-            let using_defaults = property_keys.iter()
+            let using_defaults = property_keys
+                .iter()
                 .any(|k| k.as_str() == "property._using_defaults");
 
             if using_defaults {
@@ -360,10 +363,7 @@ impl InspectionViewBuilder {
         let mut items = Vec::new();
 
         if let Some(records) = uns.estimated_records {
-            items.push(ViewItem::kv(
-                "Estimated Records",
-                format_number(records),
-            ));
+            items.push(ViewItem::kv("Estimated Records", format_number(records)));
         }
 
         if let Some(delimiter) = uns.delimiter {
@@ -379,6 +379,64 @@ impl InspectionViewBuilder {
 
         self.sections.push(ViewSection {
             title: "Layout".to_string(),
+            items,
+        });
+        self
+    }
+
+    /// Add orphan files section
+    pub fn with_orphan_files(mut self, orphans: &OrphanFilesInfo) -> Self {
+        // Title changes based on scan mode
+        let title = if orphans.is_deep_scan {
+            "Orphan Files"
+        } else {
+            "Potentially Orphan Files"
+        };
+
+        let mut items = vec![
+            ViewItem::kv("Count", format_number(orphans.count as i64)),
+            ViewItem::kv("Total Size", format_bytes(orphans.total_size)),
+        ];
+
+        if !orphans.files.is_empty() {
+            items.push(ViewItem::empty());
+            items.push(ViewItem::text("Files:"));
+
+            for file in &orphans.files {
+                let filename = file.path.split('/').last().unwrap_or(&file.path);
+                items.push(ViewItem::text(format!(
+                    "  {} ({})",
+                    filename,
+                    format_bytes(file.size)
+                )));
+            }
+
+            if orphans.truncated {
+                items.push(ViewItem::text(format!(
+                    "  ... and {} more",
+                    orphans.count - orphans.files.len()
+                )));
+            }
+        }
+
+        items.push(ViewItem::empty());
+
+        // Hint changes based on scan mode
+        if orphans.is_deep_scan {
+            items.push(ViewItem::text(
+                "Hint: Use 'repair --add-orphans' to register or 'vacuum' to delete",
+            ));
+        } else {
+            items.push(ViewItem::text(
+                "Hint: These files are not in current snapshot. Use '--deep' to check all snapshots,",
+            ));
+            items.push(ViewItem::text(
+                "      or 'repair --add-orphans' to register, or 'vacuum' to delete.",
+            ));
+        }
+
+        self.sections.push(ViewSection {
+            title: title.to_string(),
             items,
         });
         self
@@ -468,7 +526,9 @@ pub fn view_to_box_items(view: &InspectionView) -> Vec<crate::cli::output::BoxIt
 }
 
 /// Convert InspectionView to PhysicalInspectResult for CLI rendering
-pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::inspect::common::PhysicalInspectResult {
+pub fn view_to_inspect_result(
+    view: &InspectionView,
+) -> crate::cli::commands::inspect::common::PhysicalInspectResult {
     use crate::cli::output::BoxItem;
 
     // First pass: calculate the maximum key width across ALL sections
@@ -550,6 +610,19 @@ pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::in
             "Statistics" | "File Contents" => {
                 statistics = Some(section_items);
             }
+            "Orphan Files" | "Potentially Orphan Files" => {
+                // Add orphan files as a subsection of statistics with styled header
+                let header = format!("== {} ==", section.title);
+                if let Some(ref mut stats) = statistics {
+                    stats.push(BoxItem::Empty);
+                    stats.push(BoxItem::Text(header));
+                    stats.extend(section_items);
+                } else {
+                    let mut items = vec![BoxItem::Text(header)];
+                    items.extend(section_items);
+                    statistics = Some(items);
+                }
+            }
             _ => {
                 // Unknown section - append to statistics
                 if let Some(ref mut stats) = statistics {
@@ -558,9 +631,7 @@ pub fn view_to_inspect_result(view: &InspectionView) -> crate::cli::commands::in
                     stats.extend(section_items);
                 } else {
                     // No statistics yet, add section header + items
-                    let mut items = vec![
-                        BoxItem::Text(format!("{}:", section.title)),
-                    ];
+                    let mut items = vec![BoxItem::Text(format!("{}:", section.title))];
                     items.extend(section_items);
                     statistics = Some(items);
                 }

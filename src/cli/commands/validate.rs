@@ -1,15 +1,16 @@
 //! Validate command implementation
 //!
-//! This command validates table formats (Delta Lake, Iceberg).
+//! Validates Iceberg table structure and metadata.
 
 use std::path::Path;
 
 use crate::cli::parser::ValidateArgs;
-use crate::core::formats::{FormatHandler, FormatHandlerRegistry};
+use crate::config::ResolvePath;
+use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::validation::{Severity, ValidationEngine};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::utils::progress::ProgressTracker;
 
 /// Handler for validate command
@@ -18,32 +19,35 @@ pub struct ValidateCommand;
 impl ValidateCommand {
     /// Execute validate command
     pub async fn execute(args: ValidateArgs) -> Result<()> {
+        let table_path = args.path.resolve()?;
+
         // 1. Create storage backend based on path
-        let storage = StorageBackendFactory::create_backend(&args.path).await?;
+        let storage = StorageBackendFactory::create_backend(&table_path).await?;
 
-        // 2. Create format handler (forced format if specified)
-        let path = Path::new(&args.path);
-        let handler: Box<dyn FormatHandler> = if let Some(format) = &args.format {
-            // Force specific format
-            match format.to_lowercase().as_str() {
-                #[cfg(feature = "delta")]
-                "delta" => Box::new(crate::core::formats::DeltaHandler::new(path, storage.clone())?),
-                #[cfg(feature = "iceberg")]
-                "iceberg" => Box::new(crate::core::formats::IcebergHandler::new(path, storage.clone())?),
-                _ => {
-                    return Err(crate::error::Error::InvalidFormat {
-                        message: format!("Unsupported format: {}", format),
-                    });
-                }
+        // 2. Only Iceberg is supported
+        if let Some(format) = &args.format {
+            if format.to_lowercase() != "iceberg" {
+                return Err(Error::UnsupportedFeature {
+                    feature: "Only Iceberg tables are supported.".to_string(),
+                });
             }
-        } else {
-            // Auto-detect format
-            FormatHandlerRegistry::global()
-                .create_handler(path, storage)
-                .await?
-        };
+        }
 
-        // 3. Execute basic validation
+        // 3. Create Iceberg handler
+        let path = Path::new(&table_path);
+        let handler = FormatHandlerRegistry::global()
+            .create_handler(path, storage)
+            .await?;
+
+        // Verify it's Iceberg
+        if handler.format_name() != "Apache Iceberg" {
+            return Err(Error::General(format!(
+                "Path '{}' is not an Iceberg table.",
+                table_path
+            )));
+        }
+
+        // 4. Execute basic validation
         let show_progress = !args.quiet && args.output != "json";
         let progress = if show_progress {
             Some(ProgressTracker::spinner("Validating table structure..."))
@@ -58,7 +62,7 @@ impl ValidateCommand {
             p.finish_and_clear();
         }
 
-        // 4. Execute custom rules if provided
+        // 5. Execute custom rules if provided
         let rules_results = if let Some(rules_path) = &args.rules {
             let progress = if show_progress {
                 Some(ProgressTracker::spinner(
@@ -68,10 +72,9 @@ impl ValidateCommand {
                 None
             };
 
-            // Need to recreate handler for rules engine
-            let storage2 = StorageBackendFactory::create_backend(&args.path).await?;
+            let storage2 = StorageBackendFactory::create_backend(&table_path).await?;
             let handler2 = FormatHandlerRegistry::global()
-                .create_handler(Path::new(&args.path), storage2)
+                .create_handler(Path::new(&table_path), storage2)
                 .await?;
 
             let rules = ValidationEngine::load_rules(rules_path.to_str().unwrap()).await?;
@@ -87,16 +90,14 @@ impl ValidateCommand {
             None
         };
 
-        // 5. Determine overall validation status
+        // 6. Determine overall validation status
         let mut overall_valid = result.is_valid;
 
         if let Some(rules_res) = &rules_results {
-            // Check if any error-level rules failed
             let has_error_failures = rules_res
                 .iter()
                 .any(|r| !r.passed && r.severity == Severity::Error);
 
-            // In strict mode, warnings also fail validation
             let has_warning_failures = args.strict
                 && rules_res
                     .iter()
@@ -105,11 +106,11 @@ impl ValidateCommand {
             overall_valid = overall_valid && !has_error_failures && !has_warning_failures;
         }
 
-        // 6. Format and display output based on output format
-        let filename = Path::new(&args.path)
+        // 7. Format and display output
+        let filename = Path::new(&table_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(&args.path);
+            .unwrap_or(&table_path);
 
         if args.quiet {
             // Quiet mode: no output, just exit code
@@ -143,10 +144,9 @@ impl ValidateCommand {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json_output)
-                    .map_err(|e| crate::error::Error::General(e.to_string()))?
+                    .map_err(|e| Error::General(e.to_string()))?
             );
         } else {
-            // Simple text output: just filename and status with format
             use colored::Colorize;
 
             if overall_valid {
@@ -166,8 +166,7 @@ impl ValidateCommand {
             }
         }
 
-        // 7. Exit with appropriate code based on validation result
-        // In relax mode, never fail (always exit 0)
+        // 8. Exit with appropriate code
         if !args.relax && !overall_valid {
             std::process::exit(1);
         }

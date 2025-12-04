@@ -25,6 +25,8 @@ pub struct PhysicalInspectOptions {
     pub show_stats: bool,
     /// Verbosity level
     pub verbosity: VerbosityLevel,
+    /// Deep scan: check all snapshots for orphan detection (slower but accurate)
+    pub deep_scan: bool,
 }
 
 impl PhysicalInspectOptions {
@@ -34,6 +36,7 @@ impl PhysicalInspectOptions {
         layout: bool,
         stats: bool,
         verbosity: VerbosityLevel,
+        deep_scan: bool,
     ) -> Self {
         let any_flag = schema || layout || stats;
 
@@ -42,6 +45,7 @@ impl PhysicalInspectOptions {
             show_layout: if any_flag { layout } else { true },
             show_stats: if any_flag { stats } else { true },
             verbosity,
+            deep_scan,
         }
     }
 }
@@ -59,6 +63,32 @@ pub struct PhysicalMetadata {
     pub layout: Option<LayoutInfo>,
     /// Statistics information (optional)
     pub statistics: Option<StatisticsInfo>,
+    /// Orphan files information (optional)
+    pub orphan_files: Option<OrphanFilesInfo>,
+}
+
+/// Information about orphan files (files in data/ not tracked in metadata)
+#[derive(Debug, Clone)]
+pub struct OrphanFilesInfo {
+    /// Number of orphan files found
+    pub count: usize,
+    /// Total size of orphan files in bytes
+    pub total_size: u64,
+    /// List of orphan file paths (limited to first N)
+    pub files: Vec<OrphanFileEntry>,
+    /// Whether the list is truncated
+    pub truncated: bool,
+    /// Whether this was a deep scan (all snapshots) or quick scan (current only)
+    pub is_deep_scan: bool,
+}
+
+/// Single orphan file entry
+#[derive(Debug, Clone)]
+pub struct OrphanFileEntry {
+    /// File path
+    pub path: String,
+    /// File size in bytes
+    pub size: u64,
 }
 
 /// File-level information
@@ -228,10 +258,7 @@ pub struct ColumnStatistics {
 #[async_trait]
 pub trait PhysicalInspector: Send + Sync {
     /// Extract metadata from physical structure
-    async fn extract_metadata(
-        &self,
-        options: &PhysicalInspectOptions,
-    ) -> Result<PhysicalMetadata>;
+    async fn extract_metadata(&self, options: &PhysicalInspectOptions) -> Result<PhysicalMetadata>;
 
     /// Get format name
     fn format_name(&self) -> &str;

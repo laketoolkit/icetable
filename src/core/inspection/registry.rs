@@ -58,7 +58,8 @@ impl PhysicalInspectorRegistry {
     pub fn register<F: PhysicalInspectorFactory + 'static>(&mut self, factory: F) {
         self.factories.push(Box::new(factory));
         // Sort by priority (highest first)
-        self.factories.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        self.factories
+            .sort_by(|a, b| b.priority().cmp(&a.priority()));
     }
 
     /// Create an inspector for the given path
@@ -74,10 +75,7 @@ impl PhysicalInspectorRegistry {
         }
 
         Err(Error::InvalidFormat {
-            message: format!(
-                "No table format inspector found for: {}",
-                path.display()
-            ),
+            message: format!("No table format inspector found for: {}", path.display()),
         })
     }
 

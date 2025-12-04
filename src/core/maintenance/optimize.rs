@@ -8,12 +8,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use super::{group_files_by_partition, FileGroup, MaintenanceConfig};
+use super::{FileGroup, MaintenanceConfig, group_files_by_partition};
 use crate::core::metadata::{
     DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
@@ -86,8 +86,7 @@ impl OptimizeService {
             }
 
             // Compact files in this group
-            let (new_files, old_files) =
-                self.compact_group(&group, &schema, &data_dir).await?;
+            let (new_files, old_files) = self.compact_group(&group, &schema, &data_dir).await?;
 
             total_input_files += old_files.len();
             total_output_files += new_files.len();
@@ -121,14 +120,8 @@ impl OptimizeService {
 
         // Build summary
         let mut summary = HashMap::new();
-        summary.insert(
-            "input_files".to_string(),
-            changes.removed.len().to_string(),
-        );
-        summary.insert(
-            "output_files".to_string(),
-            changes.added.len().to_string(),
-        );
+        summary.insert("input_files".to_string(), changes.removed.len().to_string());
+        summary.insert("output_files".to_string(), changes.added.len().to_string());
         summary.insert(
             "target_size".to_string(),
             format_bytes(self.config.target_size),
@@ -172,9 +165,8 @@ impl OptimizeService {
 
         // Ensure parent directory exists
         if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                Error::General(format!("Failed to create directory: {}", e))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::General(format!("Failed to create directory: {}", e)))?;
         }
 
         // Read and merge all input files
@@ -248,9 +240,7 @@ impl OptimizeService {
             .close()
             .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
 
-        let size = std::fs::metadata(path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
         Ok(DataFileInfo {
             path: path.to_string_lossy().to_string(),

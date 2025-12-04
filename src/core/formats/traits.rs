@@ -4,9 +4,9 @@
 //! This provides a unified interface for working with table formats
 //! (Delta Lake, Iceberg).
 
-use async_trait::async_trait;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -438,10 +438,7 @@ impl FormatHandlerFactory {
             }
 
             return Err(crate::error::Error::InvalidFormat {
-                message: format!(
-                    "Could not detect table format for path: {}",
-                    path.display()
-                ),
+                message: format!("Could not detect table format for path: {}", path.display()),
             });
         }
 
@@ -465,10 +462,7 @@ impl FormatHandlerFactory {
         }
 
         Err(crate::error::Error::InvalidFormat {
-            message: format!(
-                "Could not detect table format for path: {}",
-                path.display()
-            ),
+            message: format!("Could not detect table format for path: {}", path.display()),
         })
     }
 
@@ -523,7 +517,10 @@ impl FormatHandlerFactory {
         match storage.list(&list_opts).await {
             Ok(result) => {
                 // Look for .metadata.json files
-                result.objects.iter().any(|obj| obj.path.contains(".metadata.json"))
+                result
+                    .objects
+                    .iter()
+                    .any(|obj| obj.path.contains(".metadata.json"))
             }
             Err(_) => false,
         }

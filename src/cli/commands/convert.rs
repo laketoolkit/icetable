@@ -1,4 +1,6 @@
 //! Convert command implementation
+//!
+//! Converts files to Iceberg tables.
 
 use std::path::Path;
 
@@ -9,7 +11,7 @@ use crate::core::operations::convert::ConvertOperation;
 use crate::core::operations::transform::TransformConfig;
 use crate::core::storage::StorageBackendFactory;
 use crate::error::{Error, Result};
-use crate::utils::{parse_data_type, ProgressTracker};
+use crate::utils::{ProgressTracker, parse_data_type};
 
 /// Handler for convert command
 pub struct ConvertCommand;
@@ -24,37 +26,45 @@ impl ConvertCommand {
             ));
         }
 
-        // 2. Build transform configuration from CLI args
+        // 2. Only Iceberg target is supported
+        if let Some(ref target_format) = args.target_format {
+            if target_format.to_lowercase() != "iceberg" {
+                return Err(Error::UnsupportedFeature {
+                    feature: "Only Iceberg is supported as target format. Use 'icebergctl import' for Delta sources.".to_string(),
+                });
+            }
+        }
+
+        // 3. Build transform configuration from CLI args
         let transform_config = Self::build_transform_config(&args)?;
 
-        // 3. Create source storage and handler
+        // 4. Create source storage and handler
         let source_storage = StorageBackendFactory::create_backend(&args.input).await?;
         let source_path = Path::new(&args.input);
         let source_handler = FormatHandlerRegistry::global()
             .create_handler(source_path, source_storage)
             .await?;
 
-        // 4. Handle target - check if it's a table-to-table conversion
-        let target_handler: Box<dyn FormatHandler> =
-            if let Some(target_format) = &args.target_format {
-                // Table-to-table conversion (Delta <-> Iceberg)
-                Self::create_or_open_table_handler(&args, &source_handler, target_format).await?
-            } else {
-                // File format conversion - target must exist or be creatable
-                if !args.overwrite && std::path::Path::new(&args.file).exists() {
-                    return Err(Error::General(format!(
-                        "Output file '{}' already exists. Use --overwrite to replace it.",
-                        args.file
-                    )));
-                }
-                let target_storage = StorageBackendFactory::create_backend(&args.file).await?;
-                let target_path = Path::new(&args.file);
-                FormatHandlerRegistry::global()
-                    .create_handler(target_path, target_storage)
-                    .await?
-            };
+        // 5. Handle target
+        let target_handler: Box<dyn FormatHandler> = if args.target_format.is_some() {
+            // Table-to-table conversion to Iceberg
+            Self::create_or_open_iceberg_table(&args, &source_handler).await?
+        } else {
+            // File format conversion
+            if !args.overwrite && std::path::Path::new(&args.file).exists() {
+                return Err(Error::General(format!(
+                    "Output file '{}' already exists. Use --overwrite to replace it.",
+                    args.file
+                )));
+            }
+            let target_storage = StorageBackendFactory::create_backend(&args.file).await?;
+            let target_path = Path::new(&args.file);
+            FormatHandlerRegistry::global()
+                .create_handler(target_path, target_storage)
+                .await?
+        };
 
-        // 5. Build write options
+        // 6. Build write options
         let mut write_options_builder = WriteOptions::builder()
             .enable_dictionary(true)
             .enable_statistics(true)
@@ -70,12 +80,16 @@ impl ConvertCommand {
 
         let write_options = write_options_builder.build();
 
-        // 6. Execute conversion
+        // 7. Execute conversion
         let progress =
             ProgressTracker::spinner(&format!("Converting {} to {}...", args.input, args.file));
 
         let operation = if transform_config.has_transforms() {
-            ConvertOperation::with_transforms(source_handler.into(), target_handler.into(), transform_config)
+            ConvertOperation::with_transforms(
+                source_handler.into(),
+                target_handler.into(),
+                transform_config,
+            )
         } else {
             ConvertOperation::new(source_handler.into(), target_handler.into())
         };
@@ -87,7 +101,7 @@ impl ConvertCommand {
             StatusIcon::Success.as_str()
         ));
 
-        // 6. Display results
+        // 8. Display results
         println!();
         println!("Source format:   {}", result.source_format);
         println!("Target format:   {}", result.target_format);
@@ -99,7 +113,7 @@ impl ConvertCommand {
             println!("Compression:     {:.2}%", ratio);
         }
 
-        // 7. Optionally validate output
+        // 9. Optionally validate output
         if args.validate {
             println!();
             println!("Validating output file...");
@@ -135,17 +149,14 @@ impl ConvertCommand {
     fn build_transform_config(args: &ConvertArgs) -> Result<TransformConfig> {
         let mut config = TransformConfig::new();
 
-        // Add column selection
         if let Some(columns) = &args.columns {
             config = config.with_columns(columns.clone());
         }
 
-        // Add filter expression
         if let Some(filter) = &args.where_clause {
             config = config.with_filter(filter.clone());
         }
 
-        // Parse and add column renames
         if let Some(renames) = &args.rename {
             for rename_spec in renames {
                 let parts: Vec<&str> = rename_spec.split(':').collect();
@@ -159,7 +170,6 @@ impl ConvertCommand {
             }
         }
 
-        // Parse and add column casts
         if let Some(casts) = &args.cast {
             for cast_spec in casts {
                 let parts: Vec<&str> = cast_spec.split(':').collect();
@@ -172,8 +182,6 @@ impl ConvertCommand {
 
                 let column = parts[0].to_string();
                 let type_str = parts[1];
-
-                // Parse Arrow data type
                 let data_type = parse_data_type(type_str)?;
 
                 config = config.with_cast(column, data_type);
@@ -183,11 +191,10 @@ impl ConvertCommand {
         Ok(config)
     }
 
-    /// Create or open a table handler for table-to-table conversion
-    async fn create_or_open_table_handler(
+    /// Create or open an Iceberg table for table-to-table conversion
+    async fn create_or_open_iceberg_table(
         args: &ConvertArgs,
         source_handler: &Box<dyn FormatHandler>,
-        target_format: &str,
     ) -> Result<Box<dyn FormatHandler>> {
         use crate::cli::commands::init::InitCommand;
         use crate::cli::parser::InitArgs;
@@ -195,11 +202,7 @@ impl ConvertCommand {
         let target_path = Path::new(&args.file);
 
         // Check if table already exists
-        let table_exists = match target_format {
-            "delta" => target_path.join("_delta_log").exists(),
-            "iceberg" => target_path.join("metadata").exists(),
-            _ => false,
-        };
+        let table_exists = target_path.join("metadata").exists();
 
         if table_exists {
             if !args.overwrite {
@@ -208,10 +211,8 @@ impl ConvertCommand {
                     args.file
                 )));
             }
-            // Clean up existing table
-            std::fs::remove_dir_all(target_path).map_err(|e| {
-                Error::General(format!("Failed to remove existing table: {}", e))
-            })?;
+            std::fs::remove_dir_all(target_path)
+                .map_err(|e| Error::General(format!("Failed to remove existing table: {}", e)))?;
         }
 
         // Get schema from source
@@ -223,16 +224,14 @@ impl ConvertCommand {
             .map_err(|e| Error::General(format!("Failed to serialize schema: {}", e)))?;
 
         // Write temporary schema file
-        let schema_file = std::env::temp_dir().join(format!(
-            "tablectl_schema_{}.json",
-            std::process::id()
-        ));
+        let schema_file =
+            std::env::temp_dir().join(format!("icebergctl_schema_{}.json", std::process::id()));
         std::fs::write(&schema_file, &schema_json)
             .map_err(|e| Error::General(format!("Failed to write schema file: {}", e)))?;
 
         // Create init args
         let init_args = InitArgs {
-            format: target_format.to_string(),
+            format: "iceberg".to_string(),
             path: args.file.clone(),
             schema: Some(schema_file.clone()),
             name: None,
@@ -295,12 +294,12 @@ impl ConvertCommand {
             DataType::Timestamp(_, _) => "timestamp".to_string(),
             DataType::Time32(_) | DataType::Time64(_) => "time".to_string(),
             DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => "double".to_string(),
-            _ => "string".to_string(), // Fallback
+            _ => "string".to_string(),
         }
     }
 }
 
-/// Schema definition for init command (matches init.rs)
+/// Schema definition for init command
 #[derive(serde::Serialize)]
 struct InitSchemaDefinition {
     columns: Vec<InitColumnDefinition>,

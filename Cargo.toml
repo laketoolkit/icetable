@@ -1,12 +1,12 @@
 [package]
-name = "tablectl"
+name = "icectl"
 version = "0.1.0"
 edition = "2024"
 authors = ["Juan José de las Heras Herrera"]
-description = "Universal CLI for inspecting, validating, converting and managing tabular data files"
+description = "CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and migrate from Delta Lake"
 license = "Apache-2.0"
-repository = "https://github.com/datatools-hub/tablectl"
-keywords = ["parquet", "arrow", "iceberg", "delta-lake", "cli"]
+repository = "https://github.com/datatools-hub/icectl"
+keywords = ["iceberg", "parquet", "arrow", "lakehouse", "cli"]
 categories = ["command-line-utilities", "database"]
 
 [dependencies]
@@ -62,6 +62,8 @@ url = "2.5"
 regex = "1.11"
 log = "0.4"
 env_logger = "0.11"
+toml = "0.8"
+dirs = "5.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 strip-ansi-escapes = "0.2"
 num-traits = "0.2"
@@ -78,14 +80,15 @@ tempfile = "3.13"
 tokio-test = "0.4"
 
 [features]
-default = ["delta", "iceberg", "tui"]
-delta = ["dep:deltalake", "deltalake/s3", "deltalake/gcs", "deltalake/azure"]
+default = ["iceberg"]
 iceberg = ["dep:iceberg", "dep:apache-avro"]
+# Delta support is for import only - reading Delta tables to create Iceberg tables
+delta = ["dep:deltalake", "deltalake/s3", "deltalake/gcs", "deltalake/azure"]
 tui = ["dep:ratatui", "dep:crossterm"]
-all = ["delta", "iceberg", "tui"]
+all = ["iceberg", "delta", "tui"]
 
 [[bin]]
-name = "tablectl"
+name = "icectl"
 path = "src/main.rs"
 
 [[bin]]
@@ -93,7 +96,7 @@ name = "build_fixtures"
 path = "build_fixtures.rs"
 
 [lib]
-name = "tablectl"
+name = "icectl"
 path = "src/lib.rs"
 
 [[bench]]

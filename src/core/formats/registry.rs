@@ -9,8 +9,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 use crate::core::storage::StorageBackend;
 use crate::error::Result;
 
-use super::traits::TimeTravelOptions;
 use super::FormatHandler;
+use super::traits::TimeTravelOptions;
 
 /// Factory function type for creating format handlers
 pub type FormatHandlerFactoryFn =
@@ -65,7 +65,8 @@ impl FormatHandlerRegistry {
         path: &Path,
         storage: Arc<dyn StorageBackend>,
     ) -> Result<Box<dyn FormatHandler>> {
-        self.create_handler_with_options(path, storage, TimeTravelOptions::default()).await
+        self.create_handler_with_options(path, storage, TimeTravelOptions::default())
+            .await
     }
 
     /// Try to create a handler with time-travel options
@@ -77,7 +78,9 @@ impl FormatHandlerRegistry {
     ) -> Result<Box<dyn FormatHandler>> {
         // If time-travel options are set, create handlers directly with options
         if time_travel.is_set() {
-            return self.create_time_travel_handler(path, storage, time_travel).await;
+            return self
+                .create_time_travel_handler(path, storage, time_travel)
+                .await;
         }
 
         // Otherwise, use the standard factory-based approach
@@ -95,10 +98,7 @@ impl FormatHandlerRegistry {
         }
 
         Err(crate::error::Error::InvalidFormat {
-            message: format!(
-                "No table format handler found for: {}",
-                path.display()
-            ),
+            message: format!("No table format handler found for: {}", path.display()),
         })
     }
 
@@ -113,7 +113,8 @@ impl FormatHandlerRegistry {
         // Try Delta Lake first
         #[cfg(feature = "delta")]
         {
-            let handler = super::DeltaHandler::with_time_travel(path, storage.clone(), time_travel.clone())?;
+            let handler =
+                super::DeltaHandler::with_time_travel(path, storage.clone(), time_travel.clone())?;
             if handler.can_handle(path).await? {
                 return Ok(Box::new(handler));
             }
@@ -129,10 +130,7 @@ impl FormatHandlerRegistry {
         }
 
         Err(crate::error::Error::InvalidFormat {
-            message: format!(
-                "No table format handler found for: {}",
-                path.display()
-            ),
+            message: format!("No table format handler found for: {}", path.display()),
         })
     }
 

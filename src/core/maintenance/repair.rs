@@ -4,15 +4,17 @@
 //! by detecting orphan files and missing metadata entries.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use super::MaintenanceConfig;
 use crate::core::metadata::{
     DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
-use crate::core::utils::fs::{normalize_path, scan_parquet_files, ScanConfig};
-use crate::core::utils::parquet::read_parquet_record_count_from_file;
 use crate::error::Result;
+
+/// Extract filename from a path (handles both local and cloud paths)
+fn extract_filename(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_string()
+}
 
 /// Service for repairing table metadata
 pub struct RepairService {
@@ -33,46 +35,64 @@ impl RepairService {
     }
 
     /// Analyze the table and find issues
+    ///
+    /// Uses `get_all_referenced_files()` to check ALL snapshots, not just current.
+    /// A file is only truly orphaned if it's not referenced by ANY snapshot.
     pub async fn analyze<M: MetadataService>(
         &self,
         metadata_service: &M,
     ) -> Result<RepairAnalysis> {
-        let data_dir = metadata_service.data_directory();
-        let tracked_files = metadata_service.list_data_files().await?;
+        // Get files referenced by ANY snapshot (for orphan detection)
+        let all_referenced = metadata_service.get_all_referenced_files().await?;
 
-        // Get set of tracked file paths
-        let tracked_paths: HashSet<String> = tracked_files
+        // Build reference set with both full path and filename for flexible matching
+        let mut reference_set: HashSet<String> = HashSet::new();
+        for path in &all_referenced {
+            reference_set.insert(path.clone());
+            reference_set.insert(extract_filename(path));
+        }
+
+        // Scan storage for parquet files
+        let storage_files = metadata_service.scan_data_files_on_storage().await?;
+
+        // Find orphan files (on storage but not referenced by ANY snapshot)
+        let orphan_files: Vec<DataFileInfo> = storage_files
             .iter()
-            .map(|f| normalize_path(&f.path))
-            .collect();
-
-        // Scan filesystem for parquet files
-        let fs_files = self.scan_data_files(&data_dir)?;
-
-        // Find orphan files (on disk but not in metadata)
-        let orphan_files: Vec<DataFileInfo> = fs_files
-            .iter()
-            .filter(|f| !tracked_paths.contains(&normalize_path(&f.path)))
+            .filter(|f| {
+                let is_referenced = reference_set
+                    .iter()
+                    .any(|referenced| f.path.ends_with(referenced) || f.path == *referenced);
+                !is_referenced
+            })
             .cloned()
             .collect();
 
-        // Find missing files (in metadata but not on disk)
-        let fs_paths: HashSet<String> = fs_files
-            .iter()
-            .map(|f| normalize_path(&f.path))
-            .collect();
+        // For missing files, we check against current snapshot only
+        // (files missing from current but present in old snapshots are not "missing")
+        let current_files = metadata_service.list_data_files().await?;
 
-        let missing_files: Vec<DataFileInfo> = tracked_files
+        let mut storage_set: HashSet<String> = HashSet::new();
+        for f in &storage_files {
+            storage_set.insert(f.path.clone());
+            storage_set.insert(extract_filename(&f.path));
+        }
+
+        let missing_files: Vec<DataFileInfo> = current_files
             .iter()
-            .filter(|f| !fs_paths.contains(&normalize_path(&f.path)))
+            .filter(|f| {
+                let is_on_storage = storage_set
+                    .iter()
+                    .any(|stored| f.path.ends_with(stored) || f.path == *stored);
+                !is_on_storage
+            })
             .cloned()
             .collect();
 
         Ok(RepairAnalysis {
             orphan_files,
             missing_files,
-            total_tracked: tracked_files.len(),
-            total_on_disk: fs_files.len(),
+            total_tracked: current_files.len(),
+            total_on_disk: storage_files.len(),
         })
     }
 
@@ -147,54 +167,6 @@ impl RepairService {
             operation: "repair".to_string(),
             details,
         })
-    }
-
-    /// Scan data directory for parquet files
-    fn scan_data_files(&self, data_dir: &Path) -> Result<Vec<DataFileInfo>> {
-        let scan_config = ScanConfig::parquet();
-        let scanned_files = scan_parquet_files(data_dir, &scan_config)?;
-
-        Ok(scanned_files
-            .into_iter()
-            .filter_map(|f| self.to_data_file_info(&f.path))
-            .collect())
-    }
-
-    /// Convert a file path to DataFileInfo
-    fn to_data_file_info(&self, path: &str) -> Option<DataFileInfo> {
-        let path_buf = Path::new(path);
-
-        // Get file size
-        let size = std::fs::metadata(path_buf).ok()?.len();
-
-        // Try to read record count from parquet metadata
-        let record_count = read_parquet_record_count_from_file(path_buf).unwrap_or(0);
-
-        // Try to extract partition from path
-        let partition = self.extract_partition_from_path(path_buf);
-
-        Some(DataFileInfo {
-            path: path.to_string(),
-            size,
-            record_count,
-            partition,
-        })
-    }
-
-    /// Extract partition information from file path
-    fn extract_partition_from_path(&self, path: &Path) -> HashMap<String, String> {
-        let mut partition = HashMap::new();
-
-        for component in path.components() {
-            let part = component.as_os_str().to_string_lossy();
-            if let Some(eq_pos) = part.find('=') {
-                let key = part[..eq_pos].to_string();
-                let value = part[eq_pos + 1..].to_string();
-                partition.insert(key, value);
-            }
-        }
-
-        partition
     }
 }
 

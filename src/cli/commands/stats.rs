@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::cli::output::OutputFormatter;
 use crate::cli::parser::StatsArgs;
+use crate::config::ResolvePath;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::operations::stats::{StatsOperation, StatsOptions};
 use crate::core::storage::StorageBackendFactory;
@@ -16,10 +17,11 @@ pub struct StatsCommand;
 impl StatsCommand {
     /// Execute stats command
     pub async fn execute(args: StatsArgs) -> Result<()> {
-        let path = Path::new(&args.path);
+        let table_path = args.path.resolve()?;
+        let path = Path::new(&table_path);
 
         // Create storage backend (supports local and cloud)
-        let storage = StorageBackendFactory::create_backend(&args.path).await?;
+        let storage = StorageBackendFactory::create_backend(&table_path).await?;
 
         // Get format handler (use explicit format if provided, otherwise auto-detect)
         let handler = if let Some(format) = &args.format {

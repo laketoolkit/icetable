@@ -3,6 +3,10 @@
 //! Centralized logic for detecting table formats.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use crate::core::storage::traits::ListOptions;
+use crate::core::storage::{StorageBackend, StorageBackendFactory};
 
 /// Supported table formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +29,7 @@ impl std::fmt::Display for TableFormat {
     }
 }
 
-/// Detect the table format at the given path
+/// Detect the table format at the given path (local filesystem only)
 ///
 /// Checks for the presence of format-specific directories:
 /// - `_delta_log` for Delta Lake
@@ -38,6 +42,58 @@ pub fn detect_table_format(path: &Path) -> TableFormat {
     } else {
         TableFormat::Unknown
     }
+}
+
+/// Detect the table format at the given path (supports remote storage)
+///
+/// Creates a storage backend and checks for format-specific directories.
+pub async fn detect_table_format_async(path: &str) -> TableFormat {
+    match StorageBackendFactory::create_backend(path).await {
+        Ok(storage) => detect_table_format_with_storage(path, &storage).await,
+        Err(_) => TableFormat::Unknown,
+    }
+}
+
+/// Detect the table format using an existing storage backend
+///
+/// Checks for the presence of format-specific directories:
+/// - `_delta_log` for Delta Lake
+/// - `metadata` for Iceberg
+pub async fn detect_table_format_with_storage(
+    path: &str,
+    storage: &Arc<dyn StorageBackend>,
+) -> TableFormat {
+    let base_path = path.trim_end_matches('/');
+
+    // Check for Delta Lake (_delta_log directory)
+    let delta_prefix = format!("{}/_delta_log/", base_path);
+    let list_opts = ListOptions {
+        prefix: Some(delta_prefix),
+        delimiter: None,
+        max_results: Some(1),
+        continuation_token: None,
+    };
+    if let Ok(result) = storage.list(&list_opts).await {
+        if !result.objects.is_empty() {
+            return TableFormat::Delta;
+        }
+    }
+
+    // Check for Iceberg (metadata directory)
+    let iceberg_prefix = format!("{}/metadata/", base_path);
+    let list_opts = ListOptions {
+        prefix: Some(iceberg_prefix),
+        delimiter: None,
+        max_results: Some(1),
+        continuation_token: None,
+    };
+    if let Ok(result) = storage.list(&list_opts).await {
+        if !result.objects.is_empty() {
+            return TableFormat::Iceberg;
+        }
+    }
+
+    TableFormat::Unknown
 }
 
 #[cfg(test)]

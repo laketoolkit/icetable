@@ -226,7 +226,8 @@ impl BoxRenderer {
             } else {
                 // Continuation: indent + value
                 let line = format!("{}{}", " ".repeat(value_indent), colored_val_line);
-                let line_width = Self::visual_width(&format!("{}{}", " ".repeat(value_indent), val_line));
+                let line_width =
+                    Self::visual_width(&format!("{}{}", " ".repeat(value_indent), val_line));
                 let padding = available_width.saturating_sub(line_width);
                 result_lines.push(format!(
                     "{}{}{}{}",

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::metadata::{MaintenanceResult, MetadataService};
-use crate::core::utils::fs::{normalize_path, scan_parquet_files, ScanConfig};
+use crate::core::utils::fs::{ScanConfig, normalize_path, scan_parquet_files};
 use crate::core::utils::{format_bytes, sizes};
 use crate::error::Result;
 
@@ -64,8 +64,8 @@ impl VacuumService {
             .collect();
 
         // Calculate cutoff time
-        let cutoff_time = chrono::Utc::now()
-            - chrono::Duration::hours(self.config.retention_hours as i64);
+        let cutoff_time =
+            chrono::Utc::now() - chrono::Duration::hours(self.config.retention_hours as i64);
         let cutoff_timestamp = cutoff_time.timestamp();
 
         // Configure scan

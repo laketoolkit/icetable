@@ -14,9 +14,9 @@
 //! # Usage
 //!
 //! ```ignore
-//! use tablectl::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
-//! use tablectl::v1::storage::StorageBackendFactory;
-//! use tablectl::v1::Result;
+//! use icebergctl::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
+//! use icebergctl::v1::storage::StorageBackendFactory;
+//! use icebergctl::v1::Result;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {

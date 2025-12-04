@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
 use iceberg::TableIdent;
 use iceberg::io::FileIOBuilder;
 use iceberg::table::StaticTable;
@@ -211,7 +211,10 @@ impl IcebergHandler {
             FileIOBuilder::new("gcs")
                 .build()
                 .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
-        } else if path.starts_with("az://") || path.starts_with("abfs://") || path.starts_with("abfss://") {
+        } else if path.starts_with("az://")
+            || path.starts_with("abfs://")
+            || path.starts_with("abfss://")
+        {
             // For Azure
             FileIOBuilder::new("azblob")
                 .build()
@@ -503,7 +506,7 @@ impl FormatHandler for IcebergHandler {
             .enumerate()
             .map(|(idx, field)| ColumnStats {
                 name: field.name().clone(),
-                null_count: Some(0),  // Assume no nulls unless we read manifests
+                null_count: Some(0), // Assume no nulls unless we read manifests
                 distinct_count: if idx == 0 { Some(total_records) } else { None },
                 min_value: None,
                 max_value: None,
@@ -616,10 +619,7 @@ impl FormatHandler for IcebergHandler {
 
                 // Add PARQUET:field_id metadata
                 let mut metadata = field.metadata().clone();
-                metadata.insert(
-                    "PARQUET:field_id".to_string(),
-                    field_id.to_string(),
-                );
+                metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
                 field.as_ref().clone().with_metadata(metadata)
             })
             .collect();
@@ -704,8 +704,12 @@ impl FormatHandler for IcebergHandler {
             .new_output(&manifest_list_path)
             .map_err(|e| Error::General(format!("Failed to create manifest list output: {}", e)))?;
 
-        let mut manifest_list_writer =
-            ManifestListWriter::v2(manifest_list_output, snapshot_id, Some(snapshot_id), sequence_number);
+        let mut manifest_list_writer = ManifestListWriter::v2(
+            manifest_list_output,
+            snapshot_id,
+            Some(snapshot_id),
+            sequence_number,
+        );
 
         manifest_list_writer
             .add_manifests(vec![manifest_file].into_iter())
@@ -740,21 +744,18 @@ impl FormatHandler for IcebergHandler {
             .build();
 
         // Build new metadata - need to dereference Arc
-        let old_metadata_owned: iceberg::spec::TableMetadata =
-            (*old_metadata).clone();
+        let old_metadata_owned: iceberg::spec::TableMetadata = (*old_metadata).clone();
 
         // Get current metadata version for the metadata log path
         let current_version = get_current_version(&metadata_dir)?;
         let metadata_log_path = format!("v{}.metadata.json", current_version);
 
-        let new_metadata = TableMetadataBuilder::new_from_metadata(
-            old_metadata_owned,
-            Some(metadata_log_path),
-        )
-        .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
-        .map_err(|e| Error::General(format!("Failed to set branch snapshot: {}", e)))?
-        .build()
-        .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        let new_metadata =
+            TableMetadataBuilder::new_from_metadata(old_metadata_owned, Some(metadata_log_path))
+                .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
+                .map_err(|e| Error::General(format!("Failed to set branch snapshot: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
         let new_version = current_version + 1;
 

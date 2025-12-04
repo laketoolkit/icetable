@@ -26,9 +26,12 @@ pub use formatters::*;
 pub use registry::{PhysicalInspectorFactory, PhysicalInspectorRegistry};
 pub use service::PhysicalInspectionService;
 pub use traits::{
-    BatchLayout, BatchMetadata, ColumnChunkMetadata, ColumnInfo, ColumnStatistics,
-    FileBasedLayout, FileInfo, LayoutInfo, PhysicalInspectOptions, PhysicalInspector,
-    PhysicalMetadata, RowGroupLayout, RowGroupMetadata, SchemaInfo, StatisticsInfo,
-    UnstructuredLayout, VerbosityLevel,
+    BatchLayout, BatchMetadata, ColumnChunkMetadata, ColumnInfo, ColumnStatistics, FileBasedLayout,
+    FileInfo, LayoutInfo, PhysicalInspectOptions, PhysicalInspector, PhysicalMetadata,
+    RowGroupLayout, RowGroupMetadata, SchemaInfo, StatisticsInfo, UnstructuredLayout,
+    VerbosityLevel,
 };
-pub use view_builder::{view_to_box_items, view_to_inspect_result, InspectionView, InspectionViewBuilder, ViewItem, ViewSection};
+pub use view_builder::{
+    InspectionView, InspectionViewBuilder, ViewItem, ViewSection, view_to_box_items,
+    view_to_inspect_result,
+};

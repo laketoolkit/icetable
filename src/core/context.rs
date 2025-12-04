@@ -1,0 +1,188 @@
+//! Table context for unified table access
+//!
+//! Provides a single entry point for loading tables, handling:
+//! - Path resolution (via config)
+//! - Storage backend creation
+//! - Format detection
+//! - Metadata loading
+
+use std::sync::Arc;
+
+use crate::config::ResolvePath;
+use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::TableFormat;
+use crate::error::{Error, Result};
+
+#[cfg(feature = "iceberg")]
+use crate::core::metadata::IcebergMetadataService;
+
+/// Table context - unified access to a table
+///
+/// Usage:
+/// ```ignore
+/// let ctx = TableContext::from_path(args.path).await?;
+/// let metadata = ctx.iceberg_metadata()?;
+/// ```
+pub struct TableContext {
+    /// Resolved table path
+    pub path: String,
+    /// Storage backend for the table
+    pub storage: Arc<dyn StorageBackend>,
+    /// Detected table format
+    pub format: TableFormat,
+}
+
+impl TableContext {
+    /// Create context from an optional path (resolves via config if None)
+    pub async fn from_path(path: Option<String>) -> Result<Self> {
+        let resolved_path = path.resolve()?;
+        Self::new(&resolved_path).await
+    }
+
+    /// Create context from an explicit path string
+    pub async fn new(path: &str) -> Result<Self> {
+        let storage = StorageBackendFactory::create_backend(path).await?;
+        let format = Self::detect_format_internal(path, &storage).await;
+
+        Ok(Self {
+            path: path.to_string(),
+            storage,
+            format,
+        })
+    }
+
+    /// Detect table format using storage backend
+    async fn detect_format_internal(path: &str, storage: &Arc<dyn StorageBackend>) -> TableFormat {
+        use crate::core::storage::traits::ListOptions;
+
+        let base_path = path.trim_end_matches('/');
+
+        // Check for Delta Lake (_delta_log directory)
+        let delta_prefix = format!("{}/_delta_log/", base_path);
+        let list_opts = ListOptions {
+            prefix: Some(delta_prefix),
+            delimiter: None,
+            max_results: Some(1),
+            continuation_token: None,
+        };
+        if let Ok(result) = storage.list(&list_opts).await {
+            if !result.objects.is_empty() {
+                return TableFormat::Delta;
+            }
+        }
+
+        // Check for Iceberg (metadata directory)
+        let iceberg_prefix = format!("{}/metadata/", base_path);
+        let list_opts = ListOptions {
+            prefix: Some(iceberg_prefix),
+            delimiter: None,
+            max_results: Some(1),
+            continuation_token: None,
+        };
+        if let Ok(result) = storage.list(&list_opts).await {
+            if !result.objects.is_empty() {
+                return TableFormat::Iceberg;
+            }
+        }
+
+        TableFormat::Unknown
+    }
+
+    /// Check if the table is Iceberg format
+    pub fn is_iceberg(&self) -> bool {
+        matches!(self.format, TableFormat::Iceberg)
+    }
+
+    /// Check if the table is Delta format
+    pub fn is_delta(&self) -> bool {
+        matches!(self.format, TableFormat::Delta)
+    }
+
+    /// Require Iceberg format, return error if not
+    pub fn require_iceberg(&self) -> Result<()> {
+        if !self.is_iceberg() {
+            return Err(Error::General(format!(
+                "Path '{}' is not an Iceberg table",
+                self.path
+            )));
+        }
+        Ok(())
+    }
+
+    /// Require Delta format, return error if not
+    #[allow(dead_code)]
+    pub fn require_delta(&self) -> Result<()> {
+        if !self.is_delta() {
+            return Err(Error::General(format!(
+                "Path '{}' is not a Delta Lake table",
+                self.path
+            )));
+        }
+        Ok(())
+    }
+
+    /// Get Iceberg metadata service for this table
+    #[cfg(feature = "iceberg")]
+    pub async fn iceberg_service(&self) -> Result<IcebergMetadataService> {
+        self.require_iceberg()?;
+        IcebergMetadataService::new_async(self.path.clone()).await
+    }
+
+    /// Load Iceberg metadata (convenience method)
+    #[cfg(feature = "iceberg")]
+    pub async fn iceberg_metadata(
+        &self,
+    ) -> Result<(Arc<iceberg::spec::TableMetadata>, i32)> {
+        let service = self.iceberg_service().await?;
+        service.load_metadata().await
+    }
+}
+
+/// Builder for TableContext with optional format override
+pub struct TableContextBuilder {
+    path: Option<String>,
+    format_override: Option<TableFormat>,
+}
+
+impl TableContextBuilder {
+    /// Create a new builder
+    pub fn new() -> Self {
+        Self {
+            path: None,
+            format_override: None,
+        }
+    }
+
+    /// Set the path (optional, will use config default if not set)
+    pub fn path(mut self, path: Option<String>) -> Self {
+        self.path = path;
+        self
+    }
+
+    /// Override the detected format
+    pub fn format(mut self, format: &str) -> Self {
+        self.format_override = Some(match format.to_lowercase().as_str() {
+            "delta" => TableFormat::Delta,
+            "iceberg" => TableFormat::Iceberg,
+            _ => TableFormat::Unknown,
+        });
+        self
+    }
+
+    /// Build the context
+    pub async fn build(self) -> Result<TableContext> {
+        let mut ctx = TableContext::from_path(self.path).await?;
+
+        if let Some(format) = self.format_override {
+            ctx.format = format;
+        }
+
+        Ok(ctx)
+    }
+}
+
+impl Default for TableContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

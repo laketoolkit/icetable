@@ -22,9 +22,7 @@ impl PhysicalInspectionService {
 
     /// Create a new inspection service with custom registry
     pub fn with_registry(registry: PhysicalInspectorRegistry) -> Self {
-        Self {
-            registry,
-        }
+        Self { registry }
     }
 
     /// Inspect a path and return view ready for rendering
@@ -35,9 +33,7 @@ impl PhysicalInspectionService {
     ) -> Result<InspectionView> {
         // 1. Create storage backend
         let path_str = path.to_str().ok_or_else(|| {
-            crate::error::Error::General(
-                "Invalid path: contains non-UTF8 characters".to_string()
-            )
+            crate::error::Error::General("Invalid path: contains non-UTF8 characters".to_string())
         })?;
         let storage = StorageBackendFactory::create_backend(path_str).await?;
 
@@ -62,6 +58,10 @@ impl PhysicalInspectionService {
 
         if let Some(stats) = &metadata.statistics {
             view_builder = view_builder.with_statistics(stats);
+        }
+
+        if let Some(orphans) = &metadata.orphan_files {
+            view_builder = view_builder.with_orphan_files(orphans);
         }
 
         Ok(view_builder.build())

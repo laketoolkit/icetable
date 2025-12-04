@@ -103,9 +103,7 @@ fn serialize_batch_to_ipc(batch: &arrow::record_batch::RecordBatch) -> Result<By
 }
 
 /// Serialize multiple arrow v54 RecordBatches to IPC stream format
-fn serialize_batches_to_ipc(
-    batches: &[arrow::record_batch::RecordBatch],
-) -> Result<Bytes> {
+fn serialize_batches_to_ipc(batches: &[arrow::record_batch::RecordBatch]) -> Result<Bytes> {
     use arrow::ipc::writer::StreamWriter;
 
     if batches.is_empty() {
@@ -136,9 +134,7 @@ fn serialize_batches_to_ipc(
 }
 
 /// Deserialize arrow v54 RecordBatch from IPC format
-fn deserialize_batch_from_ipc(
-    bytes: &[u8],
-) -> Result<arrow::record_batch::RecordBatch> {
+fn deserialize_batch_from_ipc(bytes: &[u8]) -> Result<arrow::record_batch::RecordBatch> {
     use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 
@@ -156,9 +152,7 @@ fn deserialize_batch_from_ipc(
 }
 
 /// Serialize a single datafusion::arrow RecordBatch to IPC format
-fn serialize_batch_to_ipc_df(
-    batch: &arrow::record_batch::RecordBatch,
-) -> Result<Bytes> {
+fn serialize_batch_to_ipc_df(batch: &arrow::record_batch::RecordBatch) -> Result<Bytes> {
     use arrow::ipc::writer::StreamWriter;
 
     let mut buffer = Vec::new();
@@ -179,9 +173,7 @@ fn serialize_batch_to_ipc_df(
 }
 
 /// Deserialize datafusion::arrow RecordBatch from IPC format
-fn deserialize_batch_from_ipc_df(
-    bytes: &[u8],
-) -> Result<arrow::record_batch::RecordBatch> {
+fn deserialize_batch_from_ipc_df(bytes: &[u8]) -> Result<arrow::record_batch::RecordBatch> {
     use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 
@@ -199,9 +191,7 @@ fn deserialize_batch_from_ipc_df(
 }
 
 /// Deserialize multiple datafusion::arrow RecordBatches from IPC stream
-fn deserialize_batches_from_ipc_df(
-    bytes: &[u8],
-) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+fn deserialize_batches_from_ipc_df(bytes: &[u8]) -> Result<Vec<arrow::record_batch::RecordBatch>> {
     use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
 

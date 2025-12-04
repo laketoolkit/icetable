@@ -1,14 +1,12 @@
 //! Vacuum command implementation
 //!
-//! Removes old files no longer referenced by Delta Lake and Iceberg tables.
-//! Delta uses native DeltaOps.vacuum() for optimal performance.
-//! Iceberg uses VacuumService for consistent behavior.
+//! Removes old files no longer referenced by Iceberg tables.
 
 use colored::Colorize;
 
 use crate::cli::parser::VacuumArgs;
-use crate::core::maintenance::{VacuumAnalysis, VacuumConfig, VacuumService};
-use crate::core::{detect_table_format, format_bytes, TableFormat};
+use crate::config::ResolvePath;
+use crate::core::format_bytes;
 use crate::error::{Error, Result};
 
 /// Handler for vacuum command
@@ -17,137 +15,19 @@ pub struct VacuumCommand;
 impl VacuumCommand {
     /// Execute vacuum command
     pub async fn execute(args: VacuumArgs) -> Result<()> {
-        let path = std::path::Path::new(&args.path);
-
-        // Detect table format
-        let format = detect_table_format(path);
-
-        match format {
-            TableFormat::Delta => Self::vacuum_delta(&args).await,
-            TableFormat::Iceberg => Self::vacuum_iceberg(&args).await,
-            TableFormat::Unknown => Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                args.path
-            ))),
-        }
+        let table_path = args.path.resolve()?;
+        Self::vacuum_iceberg(&table_path, &args).await
     }
 
-    /// Vacuum Delta Lake table using native DeltaOps
-    #[cfg(feature = "delta")]
-    async fn vacuum_delta(args: &VacuumArgs) -> Result<()> {
-        use deltalake::DeltaOps;
-
-        println!(
-            "{} Delta table at {}",
-            if args.dry_run {
-                "Analyzing".yellow()
-            } else {
-                "Vacuuming".green()
-            },
-            args.path
-        );
-
-        // Open the table
-        let table = deltalake::open_table(&args.path)
-            .await
-            .map_err(|e| Error::General(format!("Failed to open Delta table: {}", e)))?;
-
-        // Build vacuum operation
-        let retention = chrono::Duration::hours(args.retention_hours as i64);
-        let mut vacuum = DeltaOps(table).vacuum().with_retention_period(retention);
-
-        if args.dry_run {
-            vacuum = vacuum.with_dry_run(true);
-        }
-
-        if args.force {
-            vacuum = vacuum.with_enforce_retention_duration(false);
-        }
-
-        // Execute vacuum
-        let (table, metrics) = vacuum
-            .await
-            .map_err(|e| Error::General(format!("Vacuum failed: {}", e)))?;
-
-        // Output results
-        match args.output.as_str() {
-            "json" => Self::output_delta_json(&metrics, args.dry_run)?,
-            _ => Self::output_delta_text(&metrics, args.dry_run, table.version())?,
-        }
-
-        Ok(())
-    }
-
-    #[cfg(not(feature = "delta"))]
-    async fn vacuum_delta(_args: &VacuumArgs) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Delta Lake support not enabled".to_string(),
-        })
-    }
-
-    /// Output Delta vacuum results as text
-    #[cfg(feature = "delta")]
-    fn output_delta_text(
-        metrics: &deltalake::operations::vacuum::VacuumMetrics,
-        dry_run: bool,
-        version: Option<i64>,
-    ) -> Result<()> {
-        println!();
-
-        if dry_run {
-            println!("{}", "DRY RUN - No files were deleted".yellow().bold());
-            println!();
-        }
-
-        println!(
-            "Files {}:   {}",
-            if dry_run { "to delete" } else { "deleted" },
-            metrics.files_deleted.len().to_string().cyan()
-        );
-
-        if !metrics.files_deleted.is_empty() {
-            println!();
-            println!("Files:");
-            for file in &metrics.files_deleted {
-                println!("  - {}", file.dimmed());
-            }
-        }
-
-        if !dry_run {
-            if let Some(v) = version {
-                println!();
-                println!("Table version: {}", v.to_string().green());
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Output Delta vacuum results as JSON
-    #[cfg(feature = "delta")]
-    fn output_delta_json(
-        metrics: &deltalake::operations::vacuum::VacuumMetrics,
-        dry_run: bool,
-    ) -> Result<()> {
-        let json = serde_json::json!({
-            "dry_run": dry_run,
-            "files_deleted": metrics.files_deleted,
-            "files_count": metrics.files_deleted.len(),
-        });
-
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json)
-                .map_err(|e| Error::General(format!("Failed to serialize: {}", e)))?
-        );
-
-        Ok(())
-    }
-
-    /// Vacuum Iceberg table using VacuumService
-    #[cfg(feature = "iceberg")]
-    async fn vacuum_iceberg(args: &VacuumArgs) -> Result<()> {
+    /// Vacuum Iceberg table
+    async fn vacuum_iceberg(table_path: &str, args: &VacuumArgs) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
+        use crate::core::storage::StorageBackendFactory;
+        use crate::core::storage::traits::ListOptions;
+        use futures::stream::{self, StreamExt};
+        use iceberg::spec::ManifestList;
+        use indicatif::{ProgressBar, ProgressStyle};
+        use std::collections::HashSet;
 
         println!(
             "{} Iceberg table at {}",
@@ -156,112 +36,253 @@ impl VacuumCommand {
             } else {
                 "Vacuuming".green()
             },
-            args.path
+            table_path
         );
 
-        let config = VacuumConfig {
-            retention_hours: args.retention_hours,
-            dry_run: args.dry_run,
-            include_metadata: true, // Iceberg vacuum includes old metadata
+        // Load metadata
+        let service = match IcebergMetadataService::new_async(table_path.to_string()).await {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(Error::General(format!(
+                    "Path '{}' is not an Iceberg table",
+                    table_path
+                )));
+            }
         };
+        let (metadata, _) = service.load_metadata().await?;
+        let file_io = service.file_io().clone();
 
-        let service = VacuumService::with_config(config);
-        let metadata_service = IcebergMetadataService::new(args.path.clone().into())?;
+        let snapshots: Vec<_> = metadata.snapshots().collect();
 
-        // Get analysis first to show details
-        let analysis = service.analyze(&metadata_service).await?;
+        // Step 1: Collect all unique manifest entries from all snapshots
+        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
+        let mut manifest_entries: Vec<iceberg::spec::ManifestFile> = Vec::new();
 
-        // Output results
-        match args.output.as_str() {
-            "json" => Self::output_iceberg_json(&analysis, args.dry_run)?,
-            _ => Self::output_iceberg_text(&analysis, args.dry_run)?,
+        for snapshot in &snapshots {
+            let manifest_list_path = snapshot.manifest_list();
+
+            let manifest_list_content = match file_io
+                .new_input(manifest_list_path)
+                .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
+                .read()
+                .await
+            {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            let manifest_list = match ManifestList::parse_with_version(
+                &manifest_list_content,
+                metadata.format_version(),
+            ) {
+                Ok(ml) => ml,
+                Err(_) => continue,
+            };
+
+            for entry in manifest_list.entries() {
+                if !seen_manifest_paths.contains(&entry.manifest_path) {
+                    seen_manifest_paths.insert(entry.manifest_path.clone());
+                    manifest_entries.push(entry.clone());
+                }
+            }
         }
 
-        // Execute if not dry run and there are files to delete
-        if !args.dry_run && analysis.has_files_to_delete() {
-            let result = service.execute(&metadata_service).await?;
+        let total_manifests = manifest_entries.len();
+
+        // Step 2: Load all manifests in parallel with progress bar
+        let pb = ProgressBar::new(total_manifests as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.cyan} Scanning manifests {bar:30.dim.white/dim} {pos}/{len}")
+                .unwrap()
+                .progress_chars("━━╺"),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let manifest_results: Vec<Vec<String>> = stream::iter(manifest_entries.into_iter())
+            .map(|manifest_entry| {
+                let file_io = file_io.clone();
+                let pb = pb.clone();
+                async move {
+                    let result = if let Ok(manifest) = manifest_entry.load_manifest(&file_io).await
+                    {
+                        manifest
+                            .entries()
+                            .iter()
+                            .map(|e| e.file_path().to_string())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    pb.inc(1);
+                    result
+                }
+            })
+            .buffer_unordered(32)
+            .collect()
+            .await;
+
+        pb.finish_and_clear();
+
+        // Collect all referenced files
+        let mut referenced_files: HashSet<String> = HashSet::new();
+        for paths in manifest_results {
+            referenced_files.extend(paths);
+        }
+
+        // Calculate cutoff time
+        let cutoff_time = chrono::Utc::now() - chrono::Duration::hours(args.retention_hours as i64);
+        let cutoff_ms = cutoff_time.timestamp_millis();
+
+        // List all files in data directory
+        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let base_path = table_path.trim_end_matches('/');
+        let data_prefix = format!("{}/data/", base_path);
+
+        let list_opts = ListOptions {
+            prefix: Some(data_prefix),
+            delimiter: None,
+            max_results: None,
+            continuation_token: None,
+        };
+
+        let all_files = storage.list(&list_opts).await?;
+
+        // Build a HashSet of normalized file names for O(1) lookup
+        let referenced_filenames: HashSet<String> = referenced_files
+            .iter()
+            .filter_map(|r| r.rsplit('/').next().map(|s| s.to_string()))
+            .collect();
+
+        let mut orphan_files: Vec<(String, u64)> = Vec::new();
+        let mut orphan_bytes: u64 = 0;
+
+        for obj in &all_files.objects {
+            let filename = obj.path.rsplit('/').next().unwrap_or(&obj.path);
+            let is_referenced = referenced_filenames.contains(filename);
+
+            if !is_referenced {
+                let file_time_ms = obj.last_modified.timestamp_millis();
+                if file_time_ms < cutoff_ms {
+                    orphan_files.push((obj.path.clone(), obj.size));
+                    orphan_bytes += obj.size;
+                }
+            }
+        }
+
+        // Output analysis
+        println!();
+        println!(
+            "Referenced files: {}",
+            referenced_files.len().to_string().cyan()
+        );
+        println!(
+            "Files {}:   {} ({})",
+            if args.dry_run {
+                "to delete"
+            } else {
+                "to delete"
+            },
+            orphan_files.len().to_string().cyan(),
+            format_bytes(orphan_bytes)
+        );
+        println!(
+            "Retention:        {} hours",
+            args.retention_hours.to_string().cyan()
+        );
+
+        if orphan_files.is_empty() {
+            println!();
+            println!("{}", "No orphan files to delete".yellow());
+            return Ok(());
+        }
+
+        if args.dry_run {
+            println!();
+            println!("{}", "DRY RUN - No files will be deleted".yellow().bold());
+
+            if args.output == "json" {
+                let files: Vec<&str> = orphan_files.iter().map(|(p, _)| p.as_str()).collect();
+                let json = serde_json::json!({
+                    "dry_run": true,
+                    "files_to_delete": files,
+                    "files_count": orphan_files.len(),
+                    "bytes_to_free": orphan_bytes,
+                    "retention_hours": args.retention_hours,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json)
+                        .map_err(|e| Error::General(e.to_string()))?
+                );
+            } else {
+                println!();
+                println!("Files to delete:");
+                for (path, size) in &orphan_files {
+                    let name = path.rsplit('/').next().unwrap_or(path);
+                    println!("  - {} ({})", name.dimmed(), format_bytes(*size));
+                }
+            }
+            return Ok(());
+        }
+
+        // Actually delete files with progress bar
+        let pb = ProgressBar::new(orphan_files.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} Deleting {bar:30.cyan/blue} {pos}/{len} ({percent}%)")
+                .unwrap()
+                .progress_chars("━━╺"),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let mut deleted_count = 0;
+        let mut deleted_bytes = 0u64;
+        let mut errors = Vec::new();
+
+        for (path, size) in &orphan_files {
+            match storage.delete(path).await {
+                Ok(_) => {
+                    deleted_count += 1;
+                    deleted_bytes += size;
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", path, e));
+                }
+            }
+            pb.inc(1);
+        }
+
+        pb.finish_and_clear();
+
+        if args.output == "json" {
+            let json = serde_json::json!({
+                "files_deleted": deleted_count,
+                "bytes_freed": deleted_bytes,
+                "errors": errors.len(),
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+            );
+        } else {
             println!();
             println!(
                 "{} {} files, freed {}",
                 "Deleted".green().bold(),
-                result.files_removed,
-                format_bytes(result.bytes_removed)
+                deleted_count,
+                format_bytes(deleted_bytes)
             );
-        }
-
-        Ok(())
-    }
-
-    #[cfg(not(feature = "iceberg"))]
-    async fn vacuum_iceberg(_args: &VacuumArgs) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Iceberg support not enabled".to_string(),
-        })
-    }
-
-    /// Output Iceberg vacuum analysis as text
-    #[cfg(feature = "iceberg")]
-    fn output_iceberg_text(analysis: &VacuumAnalysis, dry_run: bool) -> Result<()> {
-        println!();
-
-        if dry_run {
-            println!("{}", "DRY RUN - No files will be deleted".yellow().bold());
-            println!();
-        }
-
-        println!(
-            "Referenced files: {}",
-            analysis.referenced_count.to_string().cyan()
-        );
-        println!(
-            "Files {}:   {} ({})",
-            if dry_run { "to delete" } else { "deleted" },
-            analysis.orphan_files.len().to_string().cyan(),
-            format_bytes(analysis.orphan_bytes)
-        );
-        println!(
-            "Retention:        {} hours",
-            analysis.retention_hours.to_string().cyan()
-        );
-
-        if !analysis.orphan_files.is_empty() {
-            println!();
-            println!("Files:");
-            for file in &analysis.orphan_files {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-                println!(
-                    "  - {} ({})",
-                    name.dimmed(),
-                    format_bytes(file.size)
-                );
+            if !errors.is_empty() {
+                println!("{} errors occurred:", errors.len().to_string().red());
+                for err in errors.iter().take(5) {
+                    println!("  - {}", err);
+                }
+                if errors.len() > 5 {
+                    println!("  ... and {} more", errors.len() - 5);
+                }
             }
         }
-
-        Ok(())
-    }
-
-    /// Output Iceberg vacuum analysis as JSON
-    #[cfg(feature = "iceberg")]
-    fn output_iceberg_json(analysis: &VacuumAnalysis, dry_run: bool) -> Result<()> {
-        let files: Vec<&str> = analysis
-            .orphan_files
-            .iter()
-            .map(|f| f.path.as_str())
-            .collect();
-
-        let json = serde_json::json!({
-            "dry_run": dry_run,
-            "files_to_delete": files,
-            "files_count": analysis.orphan_files.len(),
-            "bytes_to_free": analysis.orphan_bytes,
-            "retention_hours": analysis.retention_hours,
-        });
-
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json)
-                .map_err(|e| Error::General(format!("Failed to serialize: {}", e)))?
-        );
 
         Ok(())
     }

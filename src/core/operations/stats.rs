@@ -40,7 +40,7 @@ impl Default for StatsOptions {
     fn default() -> Self {
         Self {
             include_histogram: false,
-            percentiles: vec![],  // Empty by default - only computed when --profile is used
+            percentiles: vec![], // Empty by default - only computed when --profile is used
             profile: false,
             columns: None,
         }
@@ -70,7 +70,8 @@ impl StatsOperation {
         };
 
         // Check if we need to read data or can use native statistics
-        let needs_data_scan = options.profile || options.include_histogram || !options.percentiles.is_empty();
+        let needs_data_scan =
+            options.profile || options.include_histogram || !options.percentiles.is_empty();
 
         // Try to use native statistics first (much faster for large tables)
         if !needs_data_scan && self.handler.has_native_statistics() {
@@ -167,16 +168,29 @@ impl StatsOperation {
             // Extract min/max from native stats
             if let Some(native) = native {
                 match field.data_type() {
-                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
-                    DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 |
-                    DataType::Float32 | DataType::Float64 => {
-                        let min = native.min_value.as_ref().and_then(|s| s.parse::<f64>().ok());
-                        let max = native.max_value.as_ref().and_then(|s| s.parse::<f64>().ok());
+                    DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+                    | DataType::Float32
+                    | DataType::Float64 => {
+                        let min = native
+                            .min_value
+                            .as_ref()
+                            .and_then(|s| s.parse::<f64>().ok());
+                        let max = native
+                            .max_value
+                            .as_ref()
+                            .and_then(|s| s.parse::<f64>().ok());
 
                         stats.numeric_stats = Some(NumericStats {
                             min,
                             max,
-                            mean: None,  // Not available from native stats
+                            mean: None, // Not available from native stats
                             median: None,
                             std_dev: None,
                             percentiles: None,
@@ -370,39 +384,37 @@ impl StatsOperation {
 
         // Compute median and percentiles if profiling
         let percentile_values = if options.percentiles.is_empty() && options.profile {
-            vec![0.25, 0.5, 0.75]  // Default quartiles when profiling
+            vec![0.25, 0.5, 0.75] // Default quartiles when profiling
         } else {
             options.percentiles.clone()
         };
-        let (median, percentiles) =
-            if options.profile && count > 0 {
-                let mut all_values = Vec::new();
-                for array in arrays {
-                    let primitive_array: &PrimitiveArray<T> = array.as_primitive();
-                    for i in 0..primitive_array.len() {
-                        if !primitive_array.is_null(i) {
-                            all_values.push(Self::native_to_f64::<T>(primitive_array.value(i)));
-                        }
+        let (median, percentiles) = if options.profile && count > 0 {
+            let mut all_values = Vec::new();
+            for array in arrays {
+                let primitive_array: &PrimitiveArray<T> = array.as_primitive();
+                for i in 0..primitive_array.len() {
+                    if !primitive_array.is_null(i) {
+                        all_values.push(Self::native_to_f64::<T>(primitive_array.value(i)));
                     }
                 }
-                all_values.sort_by(|a: &f64, b: &f64| {
-                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                });
+            }
+            all_values
+                .sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-                let median_val = Self::compute_percentile(&all_values, 0.5);
+            let median_val = Self::compute_percentile(&all_values, 0.5);
 
-                let percentile_vals: HashMap<String, f64> = percentile_values
-                    .iter()
-                    .map(|&p| {
-                        let val = Self::compute_percentile(&all_values, p);
-                        (format!("p{}", (p * 100.0) as i32), val)
-                    })
-                    .collect();
+            let percentile_vals: HashMap<String, f64> = percentile_values
+                .iter()
+                .map(|&p| {
+                    let val = Self::compute_percentile(&all_values, p);
+                    (format!("p{}", (p * 100.0) as i32), val)
+                })
+                .collect();
 
-                (Some(median_val), Some(percentile_vals))
-            } else {
-                (None, None)
-            };
+            (Some(median_val), Some(percentile_vals))
+        } else {
+            (None, None)
+        };
 
         Ok(NumericStats {
             min: min_val,

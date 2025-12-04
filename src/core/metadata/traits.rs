@@ -1,7 +1,7 @@
 //! Common traits and types for metadata operations
 //!
-//! These abstractions allow maintenance operations to work with both
-//! Delta Lake and Iceberg tables through a unified interface.
+//! These abstractions provide a unified interface for maintenance operations
+//! on Iceberg tables.
 
 use std::collections::HashMap;
 
@@ -143,6 +143,26 @@ pub trait MetadataService: Send + Sync {
 
     /// Get the table's data directory path
     fn data_directory(&self) -> std::path::PathBuf;
+
+    /// Scan the data directory for parquet files on storage
+    ///
+    /// Returns all parquet files found in the data directory, regardless
+    /// of whether they are tracked in metadata. This supports both local
+    /// filesystem and cloud storage.
+    async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>>;
+
+    /// Get all files referenced by ANY valid snapshot (for orphan detection)
+    ///
+    /// This iterates through ALL snapshots in the table (not just current) and
+    /// collects every file that is referenced. A file is only truly orphaned if
+    /// it exists on storage but is NOT referenced by ANY snapshot.
+    ///
+    /// This is the correct way to detect orphans because:
+    /// - Files from older snapshots are needed for time-travel
+    /// - Files with ManifestStatus::Deleted in current snapshot may still be
+    ///   referenced by older snapshots
+    /// - Only after expire_snapshots removes old snapshots can files be vacuumed
+    async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>>;
 
     /// Get the table's schema (as Arrow schema)
     async fn schema(&self) -> Result<std::sync::Arc<arrow::datatypes::Schema>>;

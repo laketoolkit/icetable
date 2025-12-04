@@ -58,8 +58,14 @@ impl ObjectStoreAdapter {
         let path_str = location.as_ref();
 
         log::debug!("[ObjectStoreAdapter] to_storage_path called");
-        log::debug!("[ObjectStoreAdapter]   incoming location.as_ref(): '{}'", path_str);
-        log::debug!("[ObjectStoreAdapter]   self.base_path: '{}'", self.base_path);
+        log::debug!(
+            "[ObjectStoreAdapter]   incoming location.as_ref(): '{}'",
+            path_str
+        );
+        log::debug!(
+            "[ObjectStoreAdapter]   self.base_path: '{}'",
+            self.base_path
+        );
 
         // Local filesystem: DataFusion may pass paths with or without leading slash
         // Example: location = "home/user/data/file.parquet" (slash removed by DataFusion)
@@ -75,11 +81,15 @@ impl ObjectStoreAdapter {
                 let base_path_no_slash = self.base_path.trim_start_matches('/');
                 if path_str.starts_with(base_path_no_slash) {
                     // It's an absolute path without leading slash - just add it back
-                    log::debug!("[ObjectStoreAdapter]   sub-branch: absolute path without leading slash, adding it back");
+                    log::debug!(
+                        "[ObjectStoreAdapter]   sub-branch: absolute path without leading slash, adding it back"
+                    );
                     format!("/{}", path_str)
                 } else {
                     // Truly relative path - concatenate with base_path
-                    log::debug!("[ObjectStoreAdapter]   sub-branch: truly relative path, concatenating with base_path");
+                    log::debug!(
+                        "[ObjectStoreAdapter]   sub-branch: truly relative path, concatenating with base_path"
+                    );
                     format!("{}/{}", self.base_path.trim_end_matches('/'), path_str)
                 }
             }

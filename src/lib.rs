@@ -1,8 +1,8 @@
-//! TableTools - Universal CLI for tabular data
+//! icectl - CLI for Apache Iceberg table management
 //!
 //! This library provides a unified interface for inspecting, validating,
-//! converting, and managing tabular data files across different formats
-//! (Parquet, Arrow, CSV, JSON, Iceberg, Delta Lake) and storage systems (local, S3, GCS, Azure).
+//! converting, and managing Apache Iceberg tables across storage systems
+//! (local, S3, GCS, Azure).
 //!
 //! # Stability and Versioning
 //!
@@ -16,9 +16,9 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use tablectl::v1::formats::{FormatHandlerRegistry, ReadOptions};
-//! use tablectl::v1::storage::StorageBackendFactory;
-//! use tablectl::v1::Result;
+//! use icectl::v1::formats::{FormatHandlerRegistry, ReadOptions};
+//! use icectl::v1::storage::StorageBackendFactory;
+//! use icectl::v1::Result;
 //! use std::path::Path;
 //!
 //! #[tokio::main]
@@ -46,7 +46,7 @@
 //! # Extending with Custom Formats
 //!
 //! ```rust,ignore
-//! use tablectl::v1::formats::{FormatHandler, FormatHandlerRegistry};
+//! use icectl::v1::formats::{FormatHandler, FormatHandlerRegistry};
 //!
 //! // Register a custom format handler
 //! FormatHandlerRegistry::global().register("xml", 75, |path, storage| {
@@ -57,7 +57,7 @@
 //! # Custom Transformations
 //!
 //! ```rust,ignore
-//! use tablectl::v1::transform::{TransformPipeline, FilterStep, CustomTransformStep};
+//! use icectl::v1::transform::{TransformPipeline, FilterStep, CustomTransformStep};
 //!
 //! let pipeline = TransformPipeline::new()
 //!     .add_step(FilterStep::new("age > 18"))
@@ -74,6 +74,7 @@
 
 // Internal modules (implementation details)
 pub mod cli;
+pub mod config;
 pub mod core;
 pub mod error;
 pub mod utils;

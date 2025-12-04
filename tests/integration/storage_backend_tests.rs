@@ -1,7 +1,7 @@
 //! Unit tests for LocalStorageBackend
 
 use bytes::Bytes;
-use tablectl::core::storage::{
+use icebergctl::core::storage::{
     GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend,
 };
 

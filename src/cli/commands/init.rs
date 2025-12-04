@@ -1,6 +1,6 @@
 //! Init command implementation
 //!
-//! This command creates new Delta Lake or Iceberg tables.
+//! This command creates new Iceberg tables.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,6 +16,16 @@ pub struct InitCommand;
 impl InitCommand {
     /// Execute init command
     pub async fn execute(args: InitArgs) -> Result<()> {
+        // Only Iceberg is supported
+        if args.format != "iceberg" {
+            return Err(Error::UnsupportedFeature {
+                feature: format!(
+                    "Only Iceberg tables are supported. Use 'icebergctl init iceberg {}' instead.",
+                    args.path
+                ),
+            });
+        }
+
         // Parse schema if provided
         let schema = if let Some(schema_path) = &args.schema {
             Some(Self::load_schema(schema_path)?)
@@ -26,41 +36,7 @@ impl InitCommand {
         // Parse properties
         let properties = Self::parse_properties(&args.properties);
 
-        match args.format.as_str() {
-            "delta" => {
-                #[cfg(feature = "delta")]
-                {
-                    Self::create_delta_table(&args, schema, properties).await?;
-                }
-                #[cfg(not(feature = "delta"))]
-                {
-                    return Err(Error::UnsupportedFeature {
-                        feature: "Delta Lake support not enabled. Compile with --features delta"
-                            .to_string(),
-                    });
-                }
-            }
-            "iceberg" => {
-                #[cfg(feature = "iceberg")]
-                {
-                    Self::create_iceberg_table(&args, schema, properties).await?;
-                }
-                #[cfg(not(feature = "iceberg"))]
-                {
-                    return Err(Error::UnsupportedFeature {
-                        feature: "Iceberg support not enabled. Compile with --features iceberg"
-                            .to_string(),
-                    });
-                }
-            }
-            _ => {
-                return Err(Error::InvalidFormat {
-                    message: format!("Unsupported format: {}", args.format),
-                });
-            }
-        }
-
-        Ok(())
+        Self::create_iceberg_table(&args, schema, properties).await
     }
 
     /// Load schema from JSON file
@@ -97,100 +73,6 @@ impl InitCommand {
         map
     }
 
-    #[cfg(feature = "delta")]
-    async fn create_delta_table(
-        args: &InitArgs,
-        schema: Option<SchemaDefinition>,
-        _properties: HashMap<String, String>,
-    ) -> Result<()> {
-        use deltalake::kernel::{DataType, PrimitiveType, StructField};
-        use deltalake::DeltaOps;
-
-        let table_path = &args.path;
-
-        // Build schema
-        let fields: Vec<StructField> = if let Some(schema_def) = schema {
-            schema_def
-                .columns
-                .iter()
-                .map(|col| {
-                    let data_type = Self::parse_delta_type(&col.data_type)?;
-                    Ok(StructField::new(
-                        &col.name,
-                        data_type,
-                        col.nullable.unwrap_or(true),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            // Default schema with a single id column
-            vec![StructField::new(
-                "id",
-                DataType::Primitive(PrimitiveType::Long),
-                false,
-            )]
-        };
-
-        // Create table
-        let ops = DeltaOps::try_from_uri(table_path)
-            .await
-            .map_err(|e| Error::General(format!("Failed to create DeltaOps: {}", e)))?;
-
-        let mut create_builder = ops.create().with_columns(fields);
-
-        // Add table name if specified
-        if let Some(name) = &args.name {
-            create_builder = create_builder.with_table_name(name);
-        }
-
-        // Add description if specified
-        if let Some(description) = &args.description {
-            create_builder = create_builder.with_comment(description);
-        }
-
-        // Add partition columns if specified
-        if let Some(partition_cols) = &args.partition_by {
-            create_builder = create_builder.with_partition_columns(partition_cols.clone());
-        }
-
-        let table = create_builder
-            .await
-            .map_err(|e| Error::General(format!("Failed to create Delta table: {}", e)))?;
-
-        println!("{} Created Delta Lake table at {}", "✓".green(), table_path);
-        println!("  Version: {:?}", table.version());
-
-        Ok(())
-    }
-
-    #[cfg(feature = "delta")]
-    fn parse_delta_type(type_str: &str) -> Result<deltalake::kernel::DataType> {
-        use deltalake::kernel::{DataType, PrimitiveType};
-
-        let dt = match type_str.to_lowercase().as_str() {
-            "string" | "utf8" | "varchar" | "text" => DataType::Primitive(PrimitiveType::String),
-            "long" | "int64" | "bigint" => DataType::Primitive(PrimitiveType::Long),
-            "integer" | "int32" | "int" => DataType::Primitive(PrimitiveType::Integer),
-            "short" | "int16" | "smallint" => DataType::Primitive(PrimitiveType::Short),
-            "byte" | "int8" | "tinyint" => DataType::Primitive(PrimitiveType::Byte),
-            "float" | "float32" => DataType::Primitive(PrimitiveType::Float),
-            "double" | "float64" => DataType::Primitive(PrimitiveType::Double),
-            "boolean" | "bool" => DataType::Primitive(PrimitiveType::Boolean),
-            "binary" | "bytes" => DataType::Primitive(PrimitiveType::Binary),
-            "date" | "date32" => DataType::Primitive(PrimitiveType::Date),
-            "timestamp" | "datetime" => DataType::Primitive(PrimitiveType::Timestamp),
-            "timestamp_ntz" => DataType::Primitive(PrimitiveType::TimestampNtz),
-            _ => {
-                return Err(Error::General(format!(
-                    "Unsupported Delta type: {}. Supported: string, long, integer, short, byte, float, double, boolean, binary, date, timestamp, timestamp_ntz",
-                    type_str
-                )));
-            }
-        };
-        Ok(dt)
-    }
-
-    #[cfg(feature = "iceberg")]
     async fn create_iceberg_table(
         args: &InitArgs,
         schema: Option<SchemaDefinition>,
@@ -210,9 +92,8 @@ impl InitCommand {
         })?;
 
         let metadata_dir = table_path.join("metadata");
-        fs::create_dir_all(&metadata_dir).map_err(|e| {
-            Error::General(format!("Failed to create metadata directory: {}", e))
-        })?;
+        fs::create_dir_all(&metadata_dir)
+            .map_err(|e| Error::General(format!("Failed to create metadata directory: {}", e)))?;
 
         let data_dir = table_path.join("data");
         fs::create_dir_all(&data_dir)
@@ -224,12 +105,14 @@ impl InitCommand {
         } else {
             // Default schema
             iceberg::spec::Schema::builder()
-                .with_fields(vec![iceberg::spec::NestedField::required(
-                    1,
-                    "id",
-                    iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::Long),
-                )
-                .into()])
+                .with_fields(vec![
+                    iceberg::spec::NestedField::required(
+                        1,
+                        "id",
+                        iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::Long),
+                    )
+                    .into(),
+                ])
                 .build()
                 .map_err(|e| Error::General(format!("Failed to build default schema: {}", e)))?
         };
@@ -319,7 +202,6 @@ impl InitCommand {
         Ok(())
     }
 
-    #[cfg(feature = "iceberg")]
     fn build_iceberg_schema(schema_def: &SchemaDefinition) -> Result<iceberg::spec::Schema> {
         let mut fields = Vec::new();
 
@@ -343,7 +225,6 @@ impl InitCommand {
             .map_err(|e| Error::General(format!("Failed to build Iceberg schema: {}", e)))
     }
 
-    #[cfg(feature = "iceberg")]
     fn parse_iceberg_type(type_str: &str) -> Result<iceberg::spec::Type> {
         use iceberg::spec::{PrimitiveType, Type};
 

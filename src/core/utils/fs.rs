@@ -66,7 +66,11 @@ fn scan_directory_recursive(
     files: &mut Vec<ScannedFile>,
 ) -> Result<()> {
     let entries = std::fs::read_dir(dir).map_err(|e| {
-        Error::General(format!("Failed to read directory '{}': {}", dir.display(), e))
+        Error::General(format!(
+            "Failed to read directory '{}': {}",
+            dir.display(),
+            e
+        ))
     })?;
 
     for entry in entries {

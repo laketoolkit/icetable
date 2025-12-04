@@ -1,9 +1,9 @@
 //! Output formatting utilities
 
-use colored::Colorize;
-use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use colored::Colorize;
+use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::formats::{ColumnStats, FileMetadata};
@@ -678,9 +678,8 @@ impl OutputFormatter {
                     let cell = Cell::new("null").fg(Color::Red);
                     row_data.push(cell);
                 } else {
-                    let value =
-                        arrow::util::display::array_value_to_string(col, row_idx)
-                            .unwrap_or_else(|_| "Error".to_string());
+                    let value = arrow::util::display::array_value_to_string(col, row_idx)
+                        .unwrap_or_else(|_| "Error".to_string());
                     row_data.push(Cell::new(value));
                 }
             }
@@ -1272,5 +1271,4 @@ impl OutputFormatter {
 
         output
     }
-
 }

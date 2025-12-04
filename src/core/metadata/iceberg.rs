@@ -12,74 +12,268 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use iceberg::TableIdent;
 use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{
-    DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, ManifestList,
-    ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Snapshot, Struct, Summary,
-    TableMetadata, TableMetadataBuilder, MAIN_BRANCH,
+    DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, MAIN_BRANCH,
+    ManifestList, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Snapshot, Struct,
+    Summary, TableMetadata, TableMetadataBuilder,
 };
 use iceberg::table::StaticTable;
-use iceberg::TableIdent;
 
-use super::traits::{
-    DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo,
-};
+use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
+use crate::core::storage::{StorageBackend, StorageBackendFactory};
 use crate::error::{Error, Result};
 
 /// Iceberg metadata service for transactional operations
 pub struct IcebergMetadataService {
-    table_path: PathBuf,
+    table_path: String,
     file_io: FileIO,
+    storage: Arc<dyn StorageBackend>,
 }
 
 impl IcebergMetadataService {
     /// Create a new Iceberg metadata service
-    pub fn new(table_path: PathBuf) -> Result<Self> {
+    pub fn new(table_path: String) -> Result<Self> {
+        // This is a sync constructor, so we create a minimal version
+        // The actual initialization happens in new_async
         let file_io = FileIOBuilder::new_fs_io()
             .build()
             .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))?;
 
+        // Create a dummy storage for now - will be replaced in new_async
+        let storage: Arc<dyn StorageBackend> = Arc::new(DummyStorage);
+
         Ok(Self {
             table_path,
             file_io,
+            storage,
         })
     }
 
-    /// Get the metadata directory path
-    fn metadata_dir(&self) -> PathBuf {
-        self.table_path.join("metadata")
+    /// Create a new Iceberg metadata service with async initialization
+    pub async fn new_async(table_path: String) -> Result<Self> {
+        let file_io = Self::create_file_io(&table_path)?;
+        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+
+        Ok(Self {
+            table_path,
+            file_io,
+            storage,
+        })
     }
 
-    /// Read current version from version-hint.text
-    fn read_version_hint(&self) -> Result<i32> {
-        let version_hint_path = self.metadata_dir().join("version-hint.text");
-        Ok(std::fs::read_to_string(&version_hint_path)
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(1))
+    /// Create FileIO based on path scheme
+    fn create_file_io(path: &str) -> Result<FileIO> {
+        if path.starts_with("s3://") || path.starts_with("s3a://") {
+            let mut builder = FileIOBuilder::new("s3");
+
+            if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
+                builder = builder.with_prop("s3.access-key-id", key);
+            }
+            if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+                builder = builder.with_prop("s3.secret-access-key", secret);
+            }
+            if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
+                builder = builder.with_prop("s3.session-token", token);
+            }
+            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+                builder = builder.with_prop("s3.endpoint", endpoint);
+            }
+            if let Ok(region) = std::env::var("AWS_REGION") {
+                builder = builder.with_prop("s3.region", region);
+            } else if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
+                builder = builder.with_prop("s3.region", region);
+            } else {
+                builder = builder.with_prop("s3.region", "us-east-1");
+            }
+            builder = builder.with_prop("s3.path-style-access", "true");
+
+            builder
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
+        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
+            FileIOBuilder::new("gcs")
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
+        } else if path.starts_with("az://")
+            || path.starts_with("abfs://")
+            || path.starts_with("abfss://")
+        {
+            FileIOBuilder::new("azblob")
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
+        } else {
+            FileIOBuilder::new_fs_io()
+                .build()
+                .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
+        }
+    }
+
+    /// Get the metadata directory path
+    fn metadata_dir(&self) -> String {
+        format!("{}/metadata", self.table_path.trim_end_matches('/'))
+    }
+
+    /// Find the latest metadata file
+    async fn find_latest_metadata(&self) -> Result<String> {
+        use crate::core::storage::traits::{GetOptions, ListOptions};
+
+        let metadata_dir = self.metadata_dir();
+
+        // First try to read version-hint.text for authoritative version
+        // This avoids S3 eventual consistency issues with list operations
+        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
+        let get_opts = GetOptions::default();
+
+        if let Ok(version_bytes) = self.storage.get(&version_hint_path, &get_opts).await {
+            if let Ok(version_str) = String::from_utf8(version_bytes.to_vec()) {
+                if let Ok(version) = version_str.trim().parse::<i32>() {
+                    let metadata_path = format!("{}/v{}.metadata.json", metadata_dir, version);
+                    // Verify file exists by trying to read it
+                    if self.storage.get(&metadata_path, &get_opts).await.is_ok() {
+                        return Ok(metadata_path);
+                    }
+                }
+            }
+        }
+
+        // Fallback to listing if version-hint doesn't exist or is invalid
+        let list_opts = ListOptions {
+            prefix: Some(format!("{}/", metadata_dir)),
+            delimiter: None,
+            max_results: Some(500),
+            continuation_token: None,
+        };
+
+        let files = self.storage.list(&list_opts).await?;
+
+        // Find the latest metadata.json file by version number
+        let metadata_file = files
+            .objects
+            .iter()
+            .filter(|obj| obj.path.contains(".metadata.json"))
+            .max_by_key(|obj| {
+                let name = obj.path.rsplit('/').next().unwrap_or("");
+                if name.starts_with('v') {
+                    name.trim_start_matches('v')
+                        .split('.')
+                        .next()
+                        .and_then(|n| n.parse::<i64>().ok())
+                        .unwrap_or(0)
+                } else {
+                    name.split('-')
+                        .next()
+                        .and_then(|n| n.parse::<i64>().ok())
+                        .unwrap_or(0)
+                }
+            })
+            .ok_or_else(|| Error::General("No metadata.json file found".to_string()))?;
+
+        Ok(metadata_file.path.clone())
     }
 
     /// Load current table metadata
-    async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
-        let current_version = self.read_version_hint()?;
-        let metadata_file = self
-            .metadata_dir()
-            .join(format!("v{}.metadata.json", current_version));
+    pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
+        let metadata_file = self.find_latest_metadata().await?;
+
+        // Extract version from filename
+        let filename = metadata_file.rsplit('/').next().unwrap_or("");
+        let version = if filename.starts_with('v') {
+            filename
+                .trim_start_matches('v')
+                .split('.')
+                .next()
+                .and_then(|n| n.parse::<i32>().ok())
+                .unwrap_or(1)
+        } else {
+            filename
+                .split('-')
+                .next()
+                .and_then(|n| n.parse::<i32>().ok())
+                .unwrap_or(1)
+        };
 
         let table_ident = TableIdent::from_strs(&["iceberg", "table"])
             .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;
 
-        let static_table = StaticTable::from_metadata_file(
-            &metadata_file.to_string_lossy(),
-            table_ident,
-            self.file_io.clone(),
-        )
-        .await
-        .map_err(|e| Error::General(format!("Failed to load table metadata: {}", e)))?;
+        let static_table =
+            StaticTable::from_metadata_file(&metadata_file, table_ident, self.file_io.clone())
+                .await
+                .map_err(|e| Error::General(format!("Failed to load table metadata: {}", e)))?;
 
-        Ok((static_table.metadata(), current_version))
+        Ok((static_table.metadata(), version))
     }
 
+    /// Get the FileIO for loading manifests
+    pub fn file_io(&self) -> &FileIO {
+        &self.file_io
+    }
+
+    /// Get current metadata file path
+    pub async fn current_metadata_path(&self) -> Result<String> {
+        self.find_latest_metadata().await
+    }
+}
+
+/// Dummy storage for sync constructor (will be replaced in async init)
+struct DummyStorage;
+
+#[async_trait]
+impl StorageBackend for DummyStorage {
+    fn storage_type(&self) -> &str {
+        "dummy"
+    }
+
+    async fn exists(&self, _path: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn head(&self, path: &str) -> Result<crate::core::storage::traits::ObjectMetadata> {
+        Err(Error::General(format!(
+            "DummyStorage: cannot head {}",
+            path
+        )))
+    }
+
+    async fn get(
+        &self,
+        path: &str,
+        _options: &crate::core::storage::traits::GetOptions,
+    ) -> Result<bytes::Bytes> {
+        Err(Error::General(format!("DummyStorage: cannot get {}", path)))
+    }
+
+    async fn put(
+        &self,
+        _path: &str,
+        _data: bytes::Bytes,
+        _options: &crate::core::storage::traits::PutOptions,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        _options: &crate::core::storage::traits::ListOptions,
+    ) -> Result<crate::core::storage::traits::ListResult> {
+        Ok(crate::core::storage::traits::ListResult {
+            objects: vec![],
+            prefixes: vec![],
+            continuation_token: None,
+        })
+    }
+
+    async fn delete(&self, _path: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn copy(&self, _from: &str, _to: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl IcebergMetadataService {
     /// Write a manifest file containing the given data files
     async fn write_manifest(
         &self,
@@ -93,11 +287,11 @@ impl IcebergMetadataService {
         let partition_spec = metadata.default_partition_spec();
 
         let manifest_filename = format!("{:016x}-m0.avro", timestamp_nanos);
-        let manifest_path = self.metadata_dir().join(&manifest_filename);
+        let manifest_path = format!("{}/{}", self.metadata_dir(), manifest_filename);
 
         let output_file = self
             .file_io
-            .new_output(&manifest_path.to_string_lossy())
+            .new_output(&manifest_path)
             .map_err(|e| Error::General(format!("Failed to create manifest output: {}", e)))?;
 
         let mut manifest_writer = ManifestWriterBuilder::new(
@@ -132,11 +326,11 @@ impl IcebergMetadataService {
     ) -> Result<String> {
         let manifest_list_filename =
             format!("snap-{}-0-{:016x}.avro", snapshot_id, timestamp_nanos);
-        let manifest_list_path = self.metadata_dir().join(&manifest_list_filename);
+        let manifest_list_path = format!("{}/{}", self.metadata_dir(), manifest_list_filename);
 
         let manifest_list_output = self
             .file_io
-            .new_output(&manifest_list_path.to_string_lossy())
+            .new_output(&manifest_list_path)
             .map_err(|e| Error::General(format!("Failed to create manifest list output: {}", e)))?;
 
         let mut manifest_list_writer = ManifestListWriter::v2(
@@ -155,7 +349,7 @@ impl IcebergMetadataService {
             .await
             .map_err(|e| Error::General(format!("Failed to close manifest list: {}", e)))?;
 
-        Ok(manifest_list_path.to_string_lossy().to_string())
+        Ok(manifest_list_path)
     }
 
     /// Build a snapshot object
@@ -190,38 +384,59 @@ impl IcebergMetadataService {
     ) -> Result<TableMetadata> {
         let metadata_log_path = format!("v{}.metadata.json", current_version);
 
-        let build_result = TableMetadataBuilder::new_from_metadata(
-            old_metadata,
-            Some(metadata_log_path),
-        )
-        .set_branch_snapshot(snapshot, MAIN_BRANCH)
-        .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
-        .build()
-        .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        let build_result =
+            TableMetadataBuilder::new_from_metadata(old_metadata, Some(metadata_log_path))
+                .set_branch_snapshot(snapshot, MAIN_BRANCH)
+                .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
         Ok(build_result.metadata)
     }
 
     /// Write metadata to file
     async fn write_metadata_file(&self, metadata: &TableMetadata, version: i32) -> Result<()> {
-        let metadata_path = self
-            .metadata_dir()
-            .join(format!("v{}.metadata.json", version));
+        use crate::core::storage::traits::PutOptions;
+
+        let metadata_path = format!("{}/v{}.metadata.json", self.metadata_dir(), version);
 
         let metadata_json = serde_json::to_string_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
-        std::fs::write(&metadata_path, metadata_json)
+        let put_opts = PutOptions {
+            content_type: Some("application/json".to_string()),
+            metadata: std::collections::HashMap::new(),
+            if_none_match: None,
+        };
+
+        self.storage
+            .put(&metadata_path, bytes::Bytes::from(metadata_json), &put_opts)
+            .await
             .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
 
         Ok(())
     }
 
     /// Update version-hint.text
-    fn update_version_hint(&self, version: i32) -> Result<()> {
-        let version_hint_path = self.metadata_dir().join("version-hint.text");
-        std::fs::write(&version_hint_path, version.to_string())
+    async fn update_version_hint(&self, version: i32) -> Result<()> {
+        use crate::core::storage::traits::PutOptions;
+
+        let version_hint_path = format!("{}/version-hint.text", self.metadata_dir());
+        let put_opts = PutOptions {
+            content_type: Some("text/plain".to_string()),
+            metadata: std::collections::HashMap::new(),
+            if_none_match: None,
+        };
+
+        self.storage
+            .put(
+                &version_hint_path,
+                bytes::Bytes::from(version.to_string()),
+                &put_opts,
+            )
+            .await
             .map_err(|e| Error::General(format!("Failed to update version hint: {}", e)))?;
+
         Ok(())
     }
 
@@ -260,10 +475,14 @@ impl IcebergMetadataService {
     fn extract_partition_values(data_file: &DataFile) -> HashMap<String, String> {
         // The partition struct contains the partition field values
         // For now, we extract what we can from the file path as a fallback
+        Self::extract_partition_from_path_static(data_file.file_path())
+    }
+
+    /// Extract partition information from a file path string
+    fn extract_partition_from_path_static(path: &str) -> HashMap<String, String> {
         let mut partition = HashMap::new();
 
         // Parse partition values from the file path (e.g., "year=2024/month=01/file.parquet")
-        let path = data_file.file_path();
         for component in path.split('/') {
             if let Some(eq_pos) = component.find('=') {
                 let key = component[..eq_pos].to_string();
@@ -303,6 +522,8 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn list_data_files(&self) -> Result<Vec<DataFileInfo>> {
+        use std::collections::HashSet;
+
         let (metadata, _) = self.load_metadata().await?;
 
         let current_snapshot = match metadata.current_snapshot() {
@@ -320,24 +541,94 @@ impl MetadataService for IcebergMetadataService {
             .await
             .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
 
-        let manifest_list = ManifestList::parse_with_version(&manifest_list_content, FormatVersion::V2)
-            .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+        let manifest_list =
+            ManifestList::parse_with_version(&manifest_list_content, metadata.format_version())
+                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
 
         // Read all manifests and collect data files
+        // Track deleted paths separately to handle cross-manifest deletions
+        let mut seen_paths: HashSet<String> = HashSet::new();
+        let mut deleted_paths: HashSet<String> = HashSet::new();
         let mut data_files = Vec::new();
 
+        // Debug counters
+        let mut total_entries = 0usize;
+        let mut added_count = 0usize;
+        let mut existing_count = 0usize;
+        let mut deleted_count = 0usize;
+
+        // First pass: collect all deleted paths from all manifests
         for manifest_file_entry in manifest_list.entries() {
+            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
+                continue;
+            }
+
             let manifest = manifest_file_entry
                 .load_manifest(&self.file_io)
                 .await
                 .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
 
             for entry in manifest.entries() {
-                if entry.status != ManifestStatus::Deleted {
-                    data_files.push(Self::from_iceberg_data_file(&entry.data_file));
+                if entry.status() == ManifestStatus::Deleted {
+                    deleted_paths.insert(entry.data_file().file_path().to_string());
                 }
             }
         }
+
+        // Second pass: collect alive files that are not in deleted set
+        for manifest_file_entry in manifest_list.entries() {
+            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
+                continue;
+            }
+
+            let manifest = manifest_file_entry
+                .load_manifest(&self.file_io)
+                .await
+                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
+
+            for entry in manifest.entries() {
+                total_entries += 1;
+                match entry.status() {
+                    ManifestStatus::Added => added_count += 1,
+                    ManifestStatus::Existing => existing_count += 1,
+                    ManifestStatus::Deleted => {
+                        deleted_count += 1;
+                        continue;
+                    }
+                }
+
+                let data_file = entry.data_file();
+                let path = data_file.file_path().to_string();
+
+                // Skip if this file was deleted in any manifest
+                if deleted_paths.contains(&path) {
+                    continue;
+                }
+
+                // Deduplicate by full path
+                if seen_paths.contains(&path) {
+                    continue;
+                }
+                seen_paths.insert(path.clone());
+
+                data_files.push(DataFileInfo {
+                    path,
+                    size: data_file.file_size_in_bytes() as u64,
+                    record_count: data_file.record_count(),
+                    partition: Self::extract_partition_from_path_static(data_file.file_path()),
+                });
+            }
+        }
+
+        eprintln!(
+            "[DEBUG list_data_files] total_entries={}, added={}, existing={}, deleted={}, deleted_paths={}, final_count={}",
+            total_entries,
+            added_count,
+            existing_count,
+            deleted_count,
+            deleted_paths.len(),
+            data_files.len()
+        );
 
         Ok(data_files)
     }
@@ -453,15 +744,14 @@ impl MetadataService for IcebergMetadataService {
         );
 
         // Update metadata
-        let new_metadata =
-            self.update_metadata((*metadata).clone(), snapshot, current_version)?;
+        let new_metadata = self.update_metadata((*metadata).clone(), snapshot, current_version)?;
 
         // Write new metadata file
         let new_version = current_version + 1;
         self.write_metadata_file(&new_metadata, new_version).await?;
 
         // Update version hint
-        self.update_version_hint(new_version)?;
+        self.update_version_hint(new_version).await?;
 
         Ok(SnapshotInfo {
             id: snapshot_id,
@@ -473,7 +763,132 @@ impl MetadataService for IcebergMetadataService {
     }
 
     fn data_directory(&self) -> PathBuf {
-        self.table_path.join("data")
+        PathBuf::from(format!("{}/data", self.table_path.trim_end_matches('/')))
+    }
+
+    async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>> {
+        use crate::core::storage::traits::ListOptions;
+        use indicatif::{ProgressBar, ProgressStyle};
+
+        let data_prefix = format!("{}/data/", self.table_path.trim_end_matches('/'));
+
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("  {spinner:.cyan} Listing files on storage...")
+                .unwrap(),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        // Don't set max_results - let object_store handle pagination internally
+        let list_opts = ListOptions {
+            prefix: Some(data_prefix),
+            delimiter: None,
+            max_results: None,
+            continuation_token: None,
+        };
+
+        let result = self.storage.list(&list_opts).await?;
+
+        pb.finish_and_clear();
+
+        let all_files: Vec<DataFileInfo> = result
+            .objects
+            .iter()
+            .filter(|obj| obj.path.ends_with(".parquet"))
+            .map(|obj| {
+                let partition = Self::extract_partition_from_path_static(&obj.path);
+                DataFileInfo {
+                    path: obj.path.clone(),
+                    size: obj.size,
+                    record_count: 0,
+                    partition,
+                }
+            })
+            .collect();
+
+        Ok(all_files)
+    }
+
+    async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>> {
+        use indicatif::{ProgressBar, ProgressStyle};
+        use std::collections::HashSet;
+
+        let (metadata, _) = self.load_metadata().await?;
+
+        // Collect unique manifest entries from ALL snapshots (deduplicated by path)
+        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
+        let mut manifest_entries: Vec<iceberg::spec::ManifestFile> = Vec::new();
+
+        for snapshot in metadata.snapshots() {
+            let manifest_list_path = snapshot.manifest_list();
+
+            let manifest_list_content = match self
+                .file_io
+                .new_input(manifest_list_path)
+                .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
+                .read()
+                .await
+            {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            let manifest_list = match ManifestList::parse_with_version(
+                &manifest_list_content,
+                metadata.format_version(),
+            ) {
+                Ok(ml) => ml,
+                Err(_) => continue,
+            };
+
+            for entry in manifest_list.entries() {
+                if entry.content == iceberg::spec::ManifestContentType::Data {
+                    if !seen_manifest_paths.contains(&entry.manifest_path) {
+                        seen_manifest_paths.insert(entry.manifest_path.clone());
+                        manifest_entries.push(entry.clone());
+                    }
+                }
+            }
+        }
+
+        let total_manifests = manifest_entries.len();
+
+        let pb = ProgressBar::new(total_manifests as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("  {spinner:.cyan} Scanning manifests {bar:30.dim.white/dim} {pos}/{len}")
+                .unwrap()
+                .progress_chars("━━╺"),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        // Process manifests sequentially (load_manifest requires &self.file_io)
+        // but we only process each unique manifest once
+        let mut all_alive: HashSet<String> = HashSet::new();
+
+        for manifest_entry in manifest_entries {
+            let manifest = match manifest_entry.load_manifest(&self.file_io).await {
+                Ok(m) => m,
+                Err(_) => {
+                    pb.inc(1);
+                    continue;
+                }
+            };
+
+            for entry in manifest.entries() {
+                // For orphan detection: if a file appears as Added/Existing in ANY manifest,
+                // it's referenced and not an orphan
+                if entry.status() != ManifestStatus::Deleted {
+                    all_alive.insert(entry.data_file().file_path().to_string());
+                }
+            }
+            pb.inc(1);
+        }
+
+        pb.finish_and_clear();
+
+        Ok(all_alive)
     }
 
     async fn schema(&self) -> Result<Arc<arrow::datatypes::Schema>> {
@@ -510,8 +925,12 @@ fn iceberg_to_arrow_type(iceberg_type: &iceberg::spec::Type) -> arrow::datatypes
             PrimitiveType::String => DataType::Utf8,
             PrimitiveType::Binary => DataType::Binary,
             PrimitiveType::Date => DataType::Date32,
-            PrimitiveType::Timestamp => DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
-            PrimitiveType::Timestamptz => DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
+            PrimitiveType::Timestamp => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+            }
+            PrimitiveType::Timestamptz => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into()))
+            }
             _ => DataType::Utf8, // Fallback for other types
         },
         _ => arrow::datatypes::DataType::Utf8, // Fallback for complex types

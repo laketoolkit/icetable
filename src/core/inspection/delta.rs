@@ -238,6 +238,7 @@ impl PhysicalInspector for DeltaInspector {
             schema,
             layout,
             statistics,
+            orphan_files: None, // TODO: Implement orphan detection for Delta
         })
     }
 

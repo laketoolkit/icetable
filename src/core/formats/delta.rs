@@ -7,13 +7,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use bytes::Bytes;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use async_trait::async_trait;
+use bytes::Bytes;
 use deltalake::DeltaTable;
 use deltalake::kernel::StructField;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
@@ -119,14 +119,12 @@ impl DeltaHandler {
                     PrimitiveType::Boolean => DataType::Boolean,
                     PrimitiveType::Binary => DataType::Binary,
                     PrimitiveType::Date => DataType::Date32,
-                    PrimitiveType::Timestamp => DataType::Timestamp(
-                        arrow::datatypes::TimeUnit::Microsecond,
-                        None,
-                    ),
-                    PrimitiveType::TimestampNtz => DataType::Timestamp(
-                        arrow::datatypes::TimeUnit::Microsecond,
-                        None,
-                    ),
+                    PrimitiveType::Timestamp => {
+                        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+                    }
+                    PrimitiveType::TimestampNtz => {
+                        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+                    }
                     _ => DataType::Utf8, // Fallback for unknown types
                 }
             }
@@ -187,14 +185,12 @@ impl DeltaHandler {
                     PrimitiveType::Boolean => DataType::Boolean,
                     PrimitiveType::Binary => DataType::Binary,
                     PrimitiveType::Date => DataType::Date32,
-                    PrimitiveType::Timestamp => DataType::Timestamp(
-                        arrow::datatypes::TimeUnit::Microsecond,
-                        None,
-                    ),
-                    PrimitiveType::TimestampNtz => DataType::Timestamp(
-                        arrow::datatypes::TimeUnit::Microsecond,
-                        None,
-                    ),
+                    PrimitiveType::Timestamp => {
+                        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+                    }
+                    PrimitiveType::TimestampNtz => {
+                        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+                    }
                     _ => DataType::Utf8,
                 }
             }

@@ -1,11 +1,11 @@
-//! TableTools CLI entry point
+//! icectl CLI entry point
 
 use clap::Parser;
 use colored::Colorize;
 use std::process;
 
-use tablectl::cli::commands::*;
-use tablectl::cli::parser::{Cli, Commands};
+use icectl::cli::commands::*;
+use icectl::cli::parser::{Cli, Commands, ImportCommands};
 
 #[tokio::main]
 async fn main() {
@@ -13,7 +13,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize logger with settings from CLI
-    tablectl::utils::init_logger(cli.log_level);
+    icectl::utils::init_logger(cli.log_level);
 
     // Register cloud storage handlers (required for Delta Lake S3/GCS/Azure support)
     #[cfg(feature = "delta")]
@@ -37,6 +37,15 @@ async fn main() {
         Commands::Restore(args) => RestoreCommand::execute(args).await,
         Commands::Snapshot(args) => SnapshotCommand::execute(args).await,
         Commands::Repair(args) => RepairCommand::execute(args).await,
+        Commands::Import(cmd) => match cmd {
+            #[cfg(feature = "delta")]
+            ImportCommands::Delta(args) => ImportCommand::delta(args).await,
+            ImportCommands::Parquet(args) => ImportCommand::parquet(args).await,
+        },
+        Commands::Branch(args) => BranchCommand::execute(args).await,
+        Commands::Tag(args) => TagCommand::execute(args).await,
+        Commands::Generate(args) => GenerateCommand::execute(args).await,
+        Commands::Config(args) => ConfigCommand::execute(args).await,
         #[cfg(feature = "tui")]
         Commands::Tui(args) => TuiCommand::execute(args).await,
     };

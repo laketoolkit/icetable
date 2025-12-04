@@ -48,7 +48,7 @@ fn visual_width(s: &str) -> usize {
 ///
 /// # Example
 /// ```
-/// use tablectl::utils::create_box_frame;
+/// use icebergctl::utils::create_box_frame;
 /// let frame = create_box_frame(
 ///     Some("Arrow Diff"),
 ///     vec!["file1.arrow → file2.arrow".to_string()],

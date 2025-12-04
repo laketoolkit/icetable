@@ -23,6 +23,8 @@ pub struct PhysicalInspectOptions {
     pub show_stats: bool,
     /// Verbosity level
     pub verbosity: VerbosityLevel,
+    /// Deep scan: check all snapshots for orphan detection
+    pub deep_scan: bool,
 }
 
 impl PhysicalInspectOptions {
@@ -32,6 +34,7 @@ impl PhysicalInspectOptions {
         layout: bool,
         stats: bool,
         verbosity: VerbosityLevel,
+        deep_scan: bool,
     ) -> Self {
         let any_flag = schema || layout || stats;
 
@@ -40,6 +43,7 @@ impl PhysicalInspectOptions {
             show_layout: if any_flag { layout } else { true },
             show_stats: if any_flag { stats } else { true },
             verbosity,
+            deep_scan,
         }
     }
 }
@@ -67,34 +71,24 @@ impl PhysicalInspectResult {
         let mut container = Box::titled(title);
 
         // Table Information section
-        container = container.section(
-            BoxSection::titled("Table Information")
-                .items(self.file_info.clone())
-        );
+        container = container
+            .section(BoxSection::titled("Table Information").items(self.file_info.clone()));
 
         // Schema section
         if let Some(schema_items) = &self.schema {
-            container = container.section(
-                BoxSection::titled("Schema")
-                    .items(schema_items.clone())
-            );
+            container = container.section(BoxSection::titled("Schema").items(schema_items.clone()));
         }
 
         // Physical Layout section
         if let Some(layout_items) = &self.layout {
-            container = container.section(
-                BoxSection::titled("Physical Layout")
-                    .items(layout_items.clone())
-            );
+            container = container
+                .section(BoxSection::titled("Physical Layout").items(layout_items.clone()));
         }
 
         // Statistics section (or custom title if provided)
         if let Some(stats_items) = &self.statistics {
             let title = self.stats_title.as_deref().unwrap_or("Statistics");
-            container = container.section(
-                BoxSection::titled(title)
-                    .items(stats_items.clone())
-            );
+            container = container.section(BoxSection::titled(title).items(stats_items.clone()));
         }
 
         renderer.render(container)

@@ -94,10 +94,7 @@ pub fn build_s3_storage_options(
     let mut options = HashMap::new();
 
     options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key.to_string());
-    options.insert(
-        "AWS_SECRET_ACCESS_KEY".to_string(),
-        secret_key.to_string(),
-    );
+    options.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key.to_string());
     options.insert("AWS_REGION".to_string(), region.to_string());
 
     if let Some(endpoint_url) = endpoint {
@@ -109,10 +106,7 @@ pub fn build_s3_storage_options(
     }
 
     if allow_unsafe_rename {
-        options.insert(
-            "AWS_S3_ALLOW_UNSAFE_RENAME".to_string(),
-            "true".to_string(),
-        );
+        options.insert("AWS_S3_ALLOW_UNSAFE_RENAME".to_string(), "true".to_string());
     }
 
     options
@@ -130,10 +124,7 @@ pub fn build_gcs_storage_options(
     }
 
     if let Some(key) = service_account_key {
-        options.insert(
-            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
-            key.to_string(),
-        );
+        options.insert("GOOGLE_SERVICE_ACCOUNT_KEY".to_string(), key.to_string());
     }
 
     options
@@ -178,7 +169,10 @@ mod tests {
             true,
         );
 
-        assert_eq!(options.get("AWS_ACCESS_KEY_ID"), Some(&"access_key".to_string()));
+        assert_eq!(
+            options.get("AWS_ACCESS_KEY_ID"),
+            Some(&"access_key".to_string())
+        );
         assert_eq!(
             options.get("AWS_SECRET_ACCESS_KEY"),
             Some(&"secret_key".to_string())
@@ -214,11 +208,8 @@ mod tests {
 
     #[test]
     fn test_build_azure_storage_options() {
-        let options = build_azure_storage_options(
-            "myaccount",
-            Some("account_key"),
-            Some("sas_token"),
-        );
+        let options =
+            build_azure_storage_options("myaccount", Some("account_key"), Some("sas_token"));
 
         assert_eq!(
             options.get("AZURE_STORAGE_ACCOUNT_NAME"),
