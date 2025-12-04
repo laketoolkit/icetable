@@ -323,6 +323,7 @@ impl PhysicalInspectorFactory for DeltaInspectorFactory {
 // ============================================================================
 
 #[cfg(feature = "delta")]
+#[allow(dead_code)]
 #[derive(Debug)]
 struct CommitInfo {
     timestamp: Option<i64>,
@@ -349,6 +350,7 @@ struct FileStats {
 }
 
 #[cfg(feature = "delta")]
+#[allow(dead_code)]
 /// Read commit information from Delta transaction log
 async fn read_commit_info(
     storage: Arc<dyn StorageBackend>,

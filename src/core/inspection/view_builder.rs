@@ -17,8 +17,11 @@ pub struct ViewSection {
 pub enum ViewItem {
     /// Key-value pair with optional key width
     KeyValue {
+        /// The key/label for this item
         key: String,
+        /// The value to display
         value: String,
+        /// Optional fixed width for key alignment
         key_width: Option<usize>,
     },
     /// Plain text
@@ -29,7 +32,9 @@ pub enum ViewItem {
     List(Vec<String>),
     /// Table with headers and rows
     Table {
+        /// Column headers
         headers: Vec<String>,
+        /// Table rows (each row is a vector of cell values)
         rows: Vec<Vec<String>>,
     },
 }

@@ -3,14 +3,14 @@
 //! Thin wrapper that delegates to RepairService for both Delta Lake and Iceberg tables.
 
 use colored::Colorize;
-use std::sync::Arc;
 
 use crate::cli::parser::RepairArgs;
 use crate::config::ResolvePath;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
-use crate::core::{TableFormat, format_bytes};
+use crate::core::storage::StorageBackendFactory;
+use crate::core::utils::detect_table_format_with_storage;
+use crate::core::{format_bytes, TableFormat};
 use crate::error::{Error, Result};
 
 /// Repair options specifying what actions to take
@@ -49,7 +49,7 @@ impl RepairCommand {
                 _ => TableFormat::Unknown,
             }
         } else {
-            Self::detect_format(&table_path, &storage).await
+            detect_table_format_with_storage(&table_path, &storage).await
         };
 
         // Determine repair options
@@ -76,41 +76,6 @@ impl RepairCommand {
         }
     }
 
-    /// Detect table format using storage backend (supports cloud paths)
-    async fn detect_format(path: &str, storage: &Arc<dyn StorageBackend>) -> TableFormat {
-        use crate::core::storage::traits::ListOptions;
-
-        // Check for Delta Lake (_delta_log directory)
-        let delta_prefix = format!("{}/_delta_log/", path.trim_end_matches('/'));
-        let list_opts = ListOptions {
-            prefix: Some(delta_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-        if let Ok(result) = storage.list(&list_opts).await {
-            if !result.objects.is_empty() {
-                return TableFormat::Delta;
-            }
-        }
-
-        // Check for Iceberg (metadata directory)
-        let iceberg_prefix = format!("{}/metadata/", path.trim_end_matches('/'));
-        let list_opts = ListOptions {
-            prefix: Some(iceberg_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-        if let Ok(result) = storage.list(&list_opts).await {
-            if !result.objects.is_empty() {
-                return TableFormat::Iceberg;
-            }
-        }
-
-        TableFormat::Unknown
-    }
-
     /// Repair Delta Lake table - not supported, use Iceberg instead
     async fn repair_delta(
         _args: &RepairArgs,
@@ -118,7 +83,7 @@ impl RepairCommand {
         _options: RepairOptions,
     ) -> Result<()> {
         Err(Error::UnsupportedFeature {
-            feature: "Delta Lake repair is not supported. Use 'icebergctl import delta' to convert to Iceberg.".to_string(),
+            feature: "Delta Lake repair is not supported. Use 'icectl import delta' to convert to Iceberg.".to_string(),
         })
     }
 

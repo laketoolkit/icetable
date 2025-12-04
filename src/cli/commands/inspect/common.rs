@@ -3,6 +3,9 @@
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use std::path::Path;
 
+// Re-export format_bytes from core for convenience
+pub use crate::core::format_bytes;
+
 /// Verbosity level for inspection output
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VerbosityLevel {
@@ -111,26 +114,9 @@ pub fn text_item(text: impl Into<String>) -> BoxItem {
     BoxItem::Text(text.into())
 }
 
-/// Format file size in human-readable format
+/// Alias for format_bytes (backwards compatibility)
 pub fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
-}
-
-/// Alias for format_size
-pub fn format_bytes(bytes: u64) -> String {
-    format_size(bytes)
+    format_bytes(bytes)
 }
 
 /// Format number with thousands separators

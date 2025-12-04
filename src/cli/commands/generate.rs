@@ -45,11 +45,11 @@ impl GenerateCommand {
         );
         println!(
             "{}",
-            "Use 'icebergctl repair --sync-metadata' to fix manifest issues".dimmed()
+            "Use 'icectl repair --sync-metadata' to fix manifest issues".dimmed()
         );
         println!(
             "{}",
-            "Use 'icebergctl optimize manifests' to compact manifests".dimmed()
+            "Use 'icectl optimize manifests' to compact manifests".dimmed()
         );
         Ok(())
     }

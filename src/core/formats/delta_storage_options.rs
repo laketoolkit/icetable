@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use crate::core::storage::{S3Backend, StorageBackend};
-use crate::error::{Error, Result};
+use crate::core::storage::StorageBackend;
+use crate::error::Result;
 
 /// Build storage options for delta-rs from a StorageBackend
 pub fn build_storage_options(

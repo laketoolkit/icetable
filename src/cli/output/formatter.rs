@@ -7,6 +7,7 @@ use comfy_table::{Attribute, Cell, CellAlignment, Color, Table, presets};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::formats::{ColumnStats, FileMetadata};
+use crate::core::format_bytes;
 use crate::core::operations::inspect::InspectResult;
 
 /// Status icons for overall status (valid/invalid/warning)
@@ -378,11 +379,11 @@ impl OutputFormatter {
                 if let Some(uncompressed) = metadata.uncompressed_size {
                     file_content.push(format!(
                         "Size:   {} (compressed), {} (uncompressed)",
-                        Self::format_bytes(compressed),
-                        Self::format_bytes(uncompressed)
+                        format_bytes(compressed),
+                        format_bytes(uncompressed)
                     ));
                 } else {
-                    file_content.push(format!("Size:   {}", Self::format_bytes(compressed)));
+                    file_content.push(format!("Size:   {}", format_bytes(compressed)));
                 }
             }
         }
@@ -559,14 +560,14 @@ impl OutputFormatter {
         if let Some(compressed) = metadata.compressed_size {
             output.push(format!(
                 "  Compressed Size: {}",
-                Self::format_bytes(compressed).bright_white()
+                format_bytes(compressed).bright_white()
             ));
         }
 
         if let Some(uncompressed) = metadata.uncompressed_size {
             output.push(format!(
                 "  Uncompressed Size: {}",
-                Self::format_bytes(uncompressed).bright_white()
+                format_bytes(uncompressed).bright_white()
             ));
 
             if let Some(compressed) = metadata.compressed_size {
@@ -591,24 +592,6 @@ impl OutputFormatter {
         }
 
         output.join("\n")
-    }
-
-    /// Format bytes to human-readable size
-    fn format_bytes(bytes: u64) -> String {
-        const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-        let mut size = bytes as f64;
-        let mut unit_index = 0;
-
-        while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-            size /= 1024.0;
-            unit_index += 1;
-        }
-
-        if unit_index == 0 {
-            format!("{} {}", size as u64, UNITS[unit_index])
-        } else {
-            format!("{:.2} {}", size, UNITS[unit_index])
-        }
     }
 
     /// Format column statistics
@@ -1112,12 +1095,12 @@ impl OutputFormatter {
             if left != right {
                 output.push(format!(
                     "  Size:         {} {} {}",
-                    Self::format_bytes(left),
+                    format_bytes(left),
                     "→".cyan().bold(),
-                    Self::format_bytes(right)
+                    format_bytes(right)
                 ));
             } else {
-                output.push(format!("  Size:         {}", Self::format_bytes(left)));
+                output.push(format!("  Size:         {}", format_bytes(left)));
             }
         }
 

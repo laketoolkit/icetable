@@ -8,7 +8,8 @@ use super::traits::{
 };
 use crate::core::metadata::{IcebergMetadataService, MetadataService};
 use crate::core::storage::StorageBackend;
-use crate::core::storage::traits::{GetOptions, ListOptions};
+use crate::core::storage::traits::GetOptions;
+use crate::core::utils::find_latest_metadata;
 use crate::error::{Error, Result};
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -48,66 +49,9 @@ impl IcebergInspector {
         Self { path, storage }
     }
 
-    #[cfg(feature = "iceberg")]
-    async fn find_latest_metadata(&self) -> Result<String> {
-        let metadata_dir = format!(
-            "{}/metadata",
-            self.path.to_str().unwrap_or("").trim_end_matches('/')
-        );
-
-        // First try to read version-hint.text for authoritative version
-        // This avoids S3 eventual consistency issues with list operations
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        let get_opts = GetOptions::default();
-
-        if let Ok(version_bytes) = self.storage.get(&version_hint_path, &get_opts).await {
-            if let Ok(version_str) = String::from_utf8(version_bytes.to_vec()) {
-                if let Ok(version) = version_str.trim().parse::<i32>() {
-                    let metadata_path = format!("{}/v{}.metadata.json", metadata_dir, version);
-                    // Verify file exists by trying to read it
-                    if self.storage.get(&metadata_path, &get_opts).await.is_ok() {
-                        return Ok(metadata_path);
-                    }
-                }
-            }
-        }
-
-        // Fallback to listing if version-hint doesn't exist or is invalid
-        let list_opts = ListOptions {
-            prefix: Some(format!("{}/", metadata_dir)),
-            delimiter: None,
-            max_results: Some(500),
-            continuation_token: None,
-        };
-
-        let files = self.storage.list(&list_opts).await?;
-
-        // Find latest metadata by version number in filename
-        // Supports both formats: v1.metadata.json and 00001-uuid.metadata.json
-        let metadata_file = files
-            .objects
-            .iter()
-            .filter(|obj| obj.path.contains(".metadata.json"))
-            .max_by_key(|obj| {
-                let name = obj.path.rsplit('/').next().unwrap_or("");
-                if name.starts_with('v') {
-                    name.trim_start_matches('v')
-                        .split('.')
-                        .next()
-                        .and_then(|n| n.parse::<i64>().ok())
-                        .unwrap_or(0)
-                } else {
-                    name.split('-')
-                        .next()
-                        .and_then(|n| n.parse::<i64>().ok())
-                        .unwrap_or(0)
-                }
-            })
-            .ok_or_else(|| {
-                Error::General("No metadata.json file found in metadata/ directory".to_string())
-            })?;
-
-        Ok(metadata_file.path.clone())
+    /// Get the table path as a string
+    fn table_path(&self) -> &str {
+        self.path.to_str().unwrap_or("")
     }
 
     #[cfg(feature = "iceberg")]
@@ -356,7 +300,7 @@ impl IcebergInspector {
             .filter_map(|f| {
                 let source_id = f.get("source-id").and_then(|id| id.as_i64())?;
                 let direction = f.get("direction").and_then(|d| d.as_str()).unwrap_or("asc");
-                let null_order = f
+                let _null_order = f
                     .get("null-order")
                     .and_then(|n| n.as_str())
                     .unwrap_or("nulls-first");
@@ -509,7 +453,7 @@ impl IcebergInspector {
                             // Manifest Files count (from manifest-list if available)
                             // Note: actual manifest count requires reading manifest-list avro file
                             // For now we show added manifests from summary
-                            let added_manifests = summary
+                            let _added_manifests = summary
                                 .get("manifests-created")
                                 .or_else(|| summary.get("added-files-size"))
                                 .and_then(|f| f.as_str())
@@ -1098,7 +1042,7 @@ impl IcebergInspector {
 impl PhysicalInspector for IcebergInspector {
     #[cfg(feature = "iceberg")]
     async fn extract_metadata(&self, options: &PhysicalInspectOptions) -> Result<PhysicalMetadata> {
-        let metadata_path = self.find_latest_metadata().await?;
+        let metadata_path = find_latest_metadata(self.table_path(), &self.storage).await?;
         let metadata = self.read_metadata(&metadata_path).await?;
 
         // Load iceberg-rs TableMetadata for accurate snapshot count (consistent with vacuum)

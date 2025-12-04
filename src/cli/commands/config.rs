@@ -54,7 +54,7 @@ impl ConfigCommand {
             let json = serde_json::json!({
                 "current_table": config.get_current_table(),
             });
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
         } else {
             match config.get_current_table() {
                 Some(table) => println!("{}", table.cyan()),
@@ -125,7 +125,7 @@ impl ConfigCommand {
                     })
                 }).collect::<Vec<_>>(),
             });
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
         } else {
             // Show current table
             println!("{}", "Current table:".bold());

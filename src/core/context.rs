@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::config::ResolvePath;
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::utils::detect_table_format_with_storage;
 use crate::core::TableFormat;
 use crate::error::{Error, Result};
 
@@ -42,50 +43,13 @@ impl TableContext {
     /// Create context from an explicit path string
     pub async fn new(path: &str) -> Result<Self> {
         let storage = StorageBackendFactory::create_backend(path).await?;
-        let format = Self::detect_format_internal(path, &storage).await;
+        let format = detect_table_format_with_storage(path, &storage).await;
 
         Ok(Self {
             path: path.to_string(),
             storage,
             format,
         })
-    }
-
-    /// Detect table format using storage backend
-    async fn detect_format_internal(path: &str, storage: &Arc<dyn StorageBackend>) -> TableFormat {
-        use crate::core::storage::traits::ListOptions;
-
-        let base_path = path.trim_end_matches('/');
-
-        // Check for Delta Lake (_delta_log directory)
-        let delta_prefix = format!("{}/_delta_log/", base_path);
-        let list_opts = ListOptions {
-            prefix: Some(delta_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-        if let Ok(result) = storage.list(&list_opts).await {
-            if !result.objects.is_empty() {
-                return TableFormat::Delta;
-            }
-        }
-
-        // Check for Iceberg (metadata directory)
-        let iceberg_prefix = format!("{}/metadata/", base_path);
-        let list_opts = ListOptions {
-            prefix: Some(iceberg_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-        if let Ok(result) = storage.list(&list_opts).await {
-            if !result.objects.is_empty() {
-                return TableFormat::Iceberg;
-            }
-        }
-
-        TableFormat::Unknown
     }
 
     /// Check if the table is Iceberg format

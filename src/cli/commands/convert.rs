@@ -30,7 +30,7 @@ impl ConvertCommand {
         if let Some(ref target_format) = args.target_format {
             if target_format.to_lowercase() != "iceberg" {
                 return Err(Error::UnsupportedFeature {
-                    feature: "Only Iceberg is supported as target format. Use 'icebergctl import' for Delta sources.".to_string(),
+                    feature: "Only Iceberg is supported as target format. Use 'icectl import' for Delta sources.".to_string(),
                 });
             }
         }
@@ -225,7 +225,7 @@ impl ConvertCommand {
 
         // Write temporary schema file
         let schema_file =
-            std::env::temp_dir().join(format!("icebergctl_schema_{}.json", std::process::id()));
+            std::env::temp_dir().join(format!("icectl_schema_{}.json", std::process::id()));
         std::fs::write(&schema_file, &schema_json)
             .map_err(|e| Error::General(format!("Failed to write schema file: {}", e)))?;
 

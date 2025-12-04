@@ -4,12 +4,14 @@
 
 pub mod format_detection;
 pub mod fs;
+pub mod iceberg;
 pub mod parquet;
 
 pub use format_detection::{
     TableFormat, detect_table_format, detect_table_format_async, detect_table_format_with_storage,
 };
 pub use fs::{ScannedFile, normalize_path, scan_parquet_files};
+pub use iceberg::{extract_version_from_filename, find_latest_metadata};
 pub use parquet::read_parquet_record_count;
 
 /// Default file sizes for maintenance operations (in bytes)
@@ -29,8 +31,11 @@ pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
 
-    if bytes >= GB {
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
         format!("{:.2} GB", bytes as f64 / GB as f64)
     } else if bytes >= MB {
         format!("{:.2} MB", bytes as f64 / MB as f64)

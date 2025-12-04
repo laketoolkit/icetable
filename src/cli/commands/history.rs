@@ -7,7 +7,6 @@ use chrono::{DateTime, TimeZone, Utc};
 use colored::Colorize;
 
 use crate::cli::parser::HistoryArgs;
-use crate::config::ResolvePath;
 use crate::core::TableContext;
 use crate::error::{Error, Result};
 

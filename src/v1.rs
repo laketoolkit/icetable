@@ -1,6 +1,6 @@
 //! Stable Public API (v1.x)
 //!
-//! This module contains the stable public API for tablectl that follows
+//! This module contains the stable public API for icectl that follows
 //! semantic versioning guarantees. Items in this module are considered stable
 //! and breaking changes will only occur in major version bumps.
 //!
@@ -14,9 +14,9 @@
 //! # Usage
 //!
 //! ```ignore
-//! use icebergctl::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
-//! use icebergctl::v1::storage::StorageBackendFactory;
-//! use icebergctl::v1::Result;
+//! use icectl::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
+//! use icectl::v1::storage::StorageBackendFactory;
+//! use icectl::v1::Result;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {

@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::config::ResolvePath;
-use crate::core::TableFormat;
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::utils::detect_table_format_with_storage;
+use crate::core::{format_bytes, TableFormat};
 use crate::error::{Error, Result};
 
 /// Handler for snapshot command
@@ -31,7 +32,7 @@ impl SnapshotCommand {
         let storage = StorageBackendFactory::create_backend(&path).await?;
 
         // Detect table format
-        let format = Self::detect_format(&path, &storage).await;
+        let format = detect_table_format_with_storage(&path, &storage).await;
 
         match format {
             TableFormat::Delta => Self::execute_delta(args, &path, storage).await,
@@ -41,41 +42,6 @@ impl SnapshotCommand {
                 path
             ))),
         }
-    }
-
-    /// Detect table format using storage backend
-    async fn detect_format(path: &str, storage: &Arc<dyn StorageBackend>) -> TableFormat {
-        use crate::core::storage::traits::ListOptions;
-
-        // Check for Delta Lake
-        let delta_prefix = format!("{}/_delta_log/", path.trim_end_matches('/'));
-        let list_opts = ListOptions {
-            prefix: Some(delta_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-        if let Ok(result) = storage.list(&list_opts).await {
-            if !result.objects.is_empty() {
-                return TableFormat::Delta;
-            }
-        }
-
-        // Check for Iceberg
-        let iceberg_prefix = format!("{}/metadata/", path.trim_end_matches('/'));
-        let list_opts = ListOptions {
-            prefix: Some(iceberg_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-        if let Ok(result) = storage.list(&list_opts).await {
-            if !result.objects.is_empty() {
-                return TableFormat::Iceberg;
-            }
-        }
-
-        TableFormat::Unknown
     }
 
     // =========================================================================
@@ -417,7 +383,7 @@ impl SnapshotCommand {
             println!();
             println!(
                 "{}",
-                "Note: Data files are NOT deleted. Use 'icebergctl vacuum' to remove orphaned data files.".dimmed()
+                "Note: Data files are NOT deleted. Use 'icectl vacuum' to remove orphaned data files.".dimmed()
             );
         }
 
@@ -496,7 +462,7 @@ impl SnapshotCommand {
             );
             println!(
                 "{}",
-                "To restore permanently, use 'icebergctl restore --version'".dimmed()
+                "To restore permanently, use 'icectl restore --version'".dimmed()
             );
         }
 
@@ -867,7 +833,7 @@ impl SnapshotCommand {
             println!();
             println!(
                 "{}",
-                "Note: Data files are NOT deleted. Use 'icebergctl vacuum' to remove orphaned data files.".dimmed()
+                "Note: Data files are NOT deleted. Use 'icectl vacuum' to remove orphaned data files.".dimmed()
             );
         }
 
@@ -937,7 +903,7 @@ impl SnapshotCommand {
             println!();
             println!(
                 "{}",
-                "Note: To set as current, use 'icebergctl restore --version'".dimmed()
+                "Note: To set as current, use 'icectl restore --version'".dimmed()
             );
         }
 
@@ -1067,19 +1033,3 @@ fn parse_relative_duration(s: &str) -> Option<chrono::Duration> {
     }
 }
 
-/// Format bytes to human-readable string
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
-}

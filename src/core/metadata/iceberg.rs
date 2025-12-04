@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use iceberg::TableIdent;
 use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{
-    DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, MAIN_BRANCH,
+    DataContentType, DataFile, DataFileBuilder, DataFileFormat, MAIN_BRANCH,
     ManifestList, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Snapshot, Struct,
     Summary, TableMetadata, TableMetadataBuilder,
 };
@@ -23,6 +23,7 @@ use iceberg::table::StaticTable;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::utils::{extract_version_from_filename, find_latest_metadata};
 use crate::error::{Error, Result};
 
 /// Iceberg metadata service for transactional operations
@@ -115,84 +116,10 @@ impl IcebergMetadataService {
         format!("{}/metadata", self.table_path.trim_end_matches('/'))
     }
 
-    /// Find the latest metadata file
-    async fn find_latest_metadata(&self) -> Result<String> {
-        use crate::core::storage::traits::{GetOptions, ListOptions};
-
-        let metadata_dir = self.metadata_dir();
-
-        // First try to read version-hint.text for authoritative version
-        // This avoids S3 eventual consistency issues with list operations
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        let get_opts = GetOptions::default();
-
-        if let Ok(version_bytes) = self.storage.get(&version_hint_path, &get_opts).await {
-            if let Ok(version_str) = String::from_utf8(version_bytes.to_vec()) {
-                if let Ok(version) = version_str.trim().parse::<i32>() {
-                    let metadata_path = format!("{}/v{}.metadata.json", metadata_dir, version);
-                    // Verify file exists by trying to read it
-                    if self.storage.get(&metadata_path, &get_opts).await.is_ok() {
-                        return Ok(metadata_path);
-                    }
-                }
-            }
-        }
-
-        // Fallback to listing if version-hint doesn't exist or is invalid
-        let list_opts = ListOptions {
-            prefix: Some(format!("{}/", metadata_dir)),
-            delimiter: None,
-            max_results: Some(500),
-            continuation_token: None,
-        };
-
-        let files = self.storage.list(&list_opts).await?;
-
-        // Find the latest metadata.json file by version number
-        let metadata_file = files
-            .objects
-            .iter()
-            .filter(|obj| obj.path.contains(".metadata.json"))
-            .max_by_key(|obj| {
-                let name = obj.path.rsplit('/').next().unwrap_or("");
-                if name.starts_with('v') {
-                    name.trim_start_matches('v')
-                        .split('.')
-                        .next()
-                        .and_then(|n| n.parse::<i64>().ok())
-                        .unwrap_or(0)
-                } else {
-                    name.split('-')
-                        .next()
-                        .and_then(|n| n.parse::<i64>().ok())
-                        .unwrap_or(0)
-                }
-            })
-            .ok_or_else(|| Error::General("No metadata.json file found".to_string()))?;
-
-        Ok(metadata_file.path.clone())
-    }
-
     /// Load current table metadata
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
-        let metadata_file = self.find_latest_metadata().await?;
-
-        // Extract version from filename
-        let filename = metadata_file.rsplit('/').next().unwrap_or("");
-        let version = if filename.starts_with('v') {
-            filename
-                .trim_start_matches('v')
-                .split('.')
-                .next()
-                .and_then(|n| n.parse::<i32>().ok())
-                .unwrap_or(1)
-        } else {
-            filename
-                .split('-')
-                .next()
-                .and_then(|n| n.parse::<i32>().ok())
-                .unwrap_or(1)
-        };
+        let metadata_file = find_latest_metadata(&self.table_path, &self.storage).await?;
+        let version = extract_version_from_filename(&metadata_file);
 
         let table_ident = TableIdent::from_strs(&["iceberg", "table"])
             .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;
@@ -212,7 +139,7 @@ impl IcebergMetadataService {
 
     /// Get current metadata file path
     pub async fn current_metadata_path(&self) -> Result<String> {
-        self.find_latest_metadata().await
+        find_latest_metadata(&self.table_path, &self.storage).await
     }
 }
 
@@ -459,6 +386,7 @@ impl IcebergMetadataService {
     }
 
     /// Convert Iceberg DataFile to DataFileInfo
+    #[allow(dead_code)]
     fn from_iceberg_data_file(data_file: &DataFile) -> DataFileInfo {
         // Extract partition values from the data file
         let partition = Self::extract_partition_values(data_file);
@@ -472,6 +400,7 @@ impl IcebergMetadataService {
     }
 
     /// Extract partition values from an Iceberg DataFile
+    #[allow(dead_code)]
     fn extract_partition_values(data_file: &DataFile) -> HashMap<String, String> {
         // The partition struct contains the partition field values
         // For now, we extract what we can from the file path as a fallback
@@ -551,11 +480,11 @@ impl MetadataService for IcebergMetadataService {
         let mut deleted_paths: HashSet<String> = HashSet::new();
         let mut data_files = Vec::new();
 
-        // Debug counters
-        let mut total_entries = 0usize;
-        let mut added_count = 0usize;
-        let mut existing_count = 0usize;
-        let mut deleted_count = 0usize;
+        // Debug counters (prefixed with _ as they're for debugging)
+        let mut _total_entries = 0usize;
+        let mut _added_count = 0usize;
+        let mut _existing_count = 0usize;
+        let mut _deleted_count = 0usize;
 
         // First pass: collect all deleted paths from all manifests
         for manifest_file_entry in manifest_list.entries() {
@@ -587,12 +516,12 @@ impl MetadataService for IcebergMetadataService {
                 .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
 
             for entry in manifest.entries() {
-                total_entries += 1;
+                _total_entries += 1;
                 match entry.status() {
-                    ManifestStatus::Added => added_count += 1,
-                    ManifestStatus::Existing => existing_count += 1,
+                    ManifestStatus::Added => _added_count += 1,
+                    ManifestStatus::Existing => _existing_count += 1,
                     ManifestStatus::Deleted => {
-                        deleted_count += 1;
+                        _deleted_count += 1;
                         continue;
                     }
                 }
@@ -619,16 +548,6 @@ impl MetadataService for IcebergMetadataService {
                 });
             }
         }
-
-        eprintln!(
-            "[DEBUG list_data_files] total_entries={}, added={}, existing={}, deleted={}, deleted_paths={}, final_count={}",
-            total_entries,
-            added_count,
-            existing_count,
-            deleted_count,
-            deleted_paths.len(),
-            data_files.len()
-        );
 
         Ok(data_files)
     }
