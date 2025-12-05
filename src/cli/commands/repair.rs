@@ -85,7 +85,7 @@ impl RepairCommand {
         _options: RepairOptions,
     ) -> Result<()> {
         Err(Error::UnsupportedFeature {
-            feature: "Delta Lake repair is not supported. Use 'icectl import delta' to convert to Iceberg.".to_string(),
+            feature: "Delta Lake repair is not supported. Use 'icetable import delta' to convert to Iceberg.".to_string(),
         })
     }
 

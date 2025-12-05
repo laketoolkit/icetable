@@ -160,8 +160,24 @@ impl IcebergSnapshotWriter {
     }
 
     /// Write metadata to file
+    ///
+    /// Validates metadata before writing to ensure consistency.
+    /// Also performs conflict detection to prevent concurrent modifications.
     pub async fn write_metadata_file(&self, metadata: &TableMetadata, version: i32) -> Result<()> {
         use crate::core::storage::traits::PutOptions;
+
+        // Validate metadata before writing
+        super::iceberg_validator::validate_or_error(metadata)?;
+
+        // Check for conflicts before writing (optimistic concurrency control)
+        // Expected previous version is version - 1
+        let expected_version = version - 1;
+        super::iceberg_conflict::check_and_fail_on_conflict(
+            &self.table_path,
+            &self.storage,
+            expected_version,
+        )
+        .await?;
 
         let metadata_path = format!("{}/v{}.metadata.json", self.metadata_dir(), version);
 

@@ -122,7 +122,7 @@ impl ImportCommand {
             Err(_) => {
                 // Table doesn't exist - create it
                 return Err(Error::General(format!(
-                    "Target Iceberg table does not exist at '{}'. Use 'icectl init iceberg {}' first.",
+                    "Target Iceberg table does not exist at '{}'. Use 'icetable init iceberg {}' first.",
                     target_path, target_path
                 )));
             }
@@ -280,7 +280,7 @@ impl ImportCommand {
             Ok(service) => service,
             Err(_) => {
                 return Err(Error::General(format!(
-                    "Target Iceberg table does not exist at '{}'. Use 'icectl init iceberg {}' first.",
+                    "Target Iceberg table does not exist at '{}'. Use 'icetable init iceberg {}' first.",
                     target_path, target_path
                 )));
             }

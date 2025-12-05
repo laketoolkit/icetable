@@ -1,11 +1,11 @@
-//! icectl CLI entry point
+//! icetable CLI entry point
 
 use clap::Parser;
 use colored::Colorize;
 use std::process;
 
-use icectl::cli::commands::*;
-use icectl::cli::parser::{Cli, Commands, ImportCommands};
+use icetable::cli::commands::*;
+use icetable::cli::parser::{Cli, Commands, ImportCommands};
 
 #[tokio::main]
 async fn main() {
@@ -13,7 +13,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize logger with settings from CLI
-    icectl::utils::init_logger(cli.log_level);
+    icetable::utils::init_logger(cli.log_level);
 
     // Register cloud storage handlers (required for Delta Lake S3/GCS/Azure support)
     #[cfg(feature = "delta")]
@@ -44,6 +44,11 @@ async fn main() {
         Commands::Branch(args) => BranchCommand::execute(args).await,
         Commands::Tag(args) => TagCommand::execute(args).await,
         Commands::Config(args) => ConfigCommand::execute(args).await,
+        Commands::Completions(args) => {
+            args.generate();
+            Ok(())
+        }
+        Commands::Doctor(args) => DoctorCommand::execute(args).await,
         #[cfg(feature = "tui")]
         Commands::Tui(args) => TuiCommand::execute(args).await,
     };

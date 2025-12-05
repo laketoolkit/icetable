@@ -20,7 +20,7 @@ impl InitCommand {
         if args.format != "iceberg" {
             return Err(Error::UnsupportedFeature {
                 feature: format!(
-                    "Only Iceberg tables are supported. Use 'icectl init iceberg {}' instead.",
+                    "Only Iceberg tables are supported. Use 'icetable init iceberg {}' instead.",
                     args.path
                 ),
             });

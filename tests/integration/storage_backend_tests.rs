@@ -1,7 +1,7 @@
 //! Unit tests for LocalStorageBackend
 
 use bytes::Bytes;
-use icectl::core::storage::{GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend};
+use icetable::core::storage::{GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend};
 use tempfile::TempDir;
 
 fn create_backend() -> LocalBackend {

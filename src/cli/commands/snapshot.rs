@@ -59,7 +59,7 @@ impl SnapshotCommand {
         _storage: Arc<dyn StorageBackend>,
     ) -> Result<()> {
         Err(Error::General(
-            "Delta Lake snapshot management is not supported. Use 'icectl import delta' to convert Delta tables to Iceberg.".to_string(),
+            "Delta Lake snapshot management is not supported. Use 'icetable import delta' to convert Delta tables to Iceberg.".to_string(),
         ))
     }
 
@@ -287,7 +287,7 @@ impl SnapshotCommand {
                 println!();
                 println!(
                     "{}",
-                    "Note: Data files are NOT deleted. Use 'icectl vacuum' to remove orphaned data files.".dimmed()
+                    "Note: Data files are NOT deleted. Use 'icetable vacuum' to remove orphaned data files.".dimmed()
                 );
             }
         }
@@ -420,67 +420,83 @@ impl SnapshotCommand {
                 serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
             );
         } else {
+            use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
+
             println!("{} snapshot lineage at {}", "Showing".green(), path);
             println!();
-            println!(
-                "{:<14} {:<12} {}",
-                "SNAPSHOT".cyan(),
-                "OPERATION".cyan(),
-                "TIMESTAMP".cyan()
-            );
-            println!("{}", "─".repeat(50));
+
+            let mut table = comfy_table::Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_content_arrangement(ContentArrangement::Dynamic);
+
+            table.set_header(vec![
+                Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
+                Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
+                Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
+                Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+            ]);
 
             // Show items up to limit
             let display_count = if is_truncated { max_items - 1 } else { total_count };
 
-            for (i, (id, parent, ts, op)) in full_lineage.iter().take(display_count).enumerate() {
+            for (_, (id, parent, ts, op)) in full_lineage.iter().take(display_count).enumerate() {
                 let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
                     .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                     .unwrap_or_else(|| ts.to_string());
 
                 let is_current = Some(*id) == current_id;
-                let is_root = parent.is_none();
+                let is_root = parent.is_none() && !is_truncated;
 
-                let marker = if is_current {
-                    " (current)".green().to_string()
+                let status = if is_current {
+                    "● current".green().to_string()
                 } else if is_root {
-                    " (root)".dimmed().to_string()
+                    "● root".green().to_string()
                 } else {
                     "".to_string()
                 };
 
-                // Arrow indicates lineage direction
-                let arrow = if i == 0 { "←" } else { " " };
-
-                println!(
-                    "{:<12} {} {:<12} {}{}",
-                    id, arrow, op, ts_str.dimmed(), marker
-                );
+                table.add_row(vec![
+                    Cell::new(id.to_string()).set_alignment(CellAlignment::Right),
+                    Cell::new(op),
+                    Cell::new(ts_str),
+                    Cell::new(status),
+                ]);
             }
 
-            // Show truncation indicator and root
+            println!("{}", table);
+
+            // Show truncation indicator and root outside the table
             if is_truncated {
                 let skipped = total_count - max_items;
-                println!(
-                    "{:<12}   {:<12}",
-                    "...".dimmed(),
-                    format!("({} more)", skipped).dimmed()
-                );
+                println!("         {} ({})", "...".dimmed(), format!("{} more", skipped).dimmed());
 
-                // Show root
+                // Show root in a separate mini-table
                 if let Some((id, _, ts, op)) = full_lineage.last() {
                     let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                         .unwrap_or_else(|| ts.to_string());
-                    println!(
-                        "{:<12}   {:<12} {}{}",
-                        id, op, ts_str.dimmed(), " (root)".dimmed()
-                    );
+
+                    let mut root_table = comfy_table::Table::new();
+                    root_table.load_preset(UTF8_FULL);
+                    root_table.set_content_arrangement(ContentArrangement::Dynamic);
+                    root_table.set_header(vec![
+                        Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
+                        Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
+                        Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
+                        Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+                    ]);
+                    root_table.add_row(vec![
+                        Cell::new(id.to_string()).set_alignment(CellAlignment::Right),
+                        Cell::new(op),
+                        Cell::new(ts_str),
+                        Cell::new("● root".green().to_string()),
+                    ]);
+                    println!("{}", root_table);
                 }
             }
 
             println!();
-            println!("{} snapshots total", total_count);
+            println!("{}", format!("{} snapshots total", total_count).dimmed());
         }
 
         Ok(())

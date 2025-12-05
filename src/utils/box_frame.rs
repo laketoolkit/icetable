@@ -16,7 +16,7 @@ use crate::utils::visual_width;
 ///
 /// # Example
 /// ```
-/// use icectl::utils::create_box_frame;
+/// use icetable::utils::create_box_frame;
 /// let frame = create_box_frame(
 ///     Some("Arrow Diff"),
 ///     vec!["file1.arrow → file2.arrow".to_string()],

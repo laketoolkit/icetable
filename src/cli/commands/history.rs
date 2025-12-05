@@ -39,7 +39,7 @@ impl HistoryCommand {
             && fmt.to_lowercase() != "iceberg"
         {
             return Err(Error::UnsupportedFeature {
-                    feature: "Only Iceberg tables are supported. Use 'icectl import delta' to convert Delta tables.".to_string(),
+                    feature: "Only Iceberg tables are supported. Use 'icetable import delta' to convert Delta tables.".to_string(),
                 });
         }
         ctx.require_iceberg()?;

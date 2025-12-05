@@ -1,6 +1,6 @@
-//! Configuration management for icectl
+//! Configuration management for icetable
 //!
-//! Stores configuration in ~/.config/icectl/config.toml
+//! Stores configuration in ~/.config/icetable/config.toml
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use crate::error::{Error, Result};
 
 /// Configuration file name
-const CONFIG_DIR: &str = "icectl";
+const CONFIG_DIR: &str = "icetable";
 const CONFIG_FILE: &str = "config.toml";
 
-/// icectl configuration
+/// icetable configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Current table context (like kubectl current-context)
@@ -135,7 +135,7 @@ impl ResolvePath for Option<String> {
                 .map(|s| s.to_string())
                 .ok_or_else(|| {
                     Error::General(
-                        "No table specified. Use -t <path> or set default with 'icectl config use <path>'".to_string()
+                        "No table specified. Use -t <path> or set default with 'icetable config use <path>'".to_string()
                     )
                 }),
         }

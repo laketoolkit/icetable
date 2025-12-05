@@ -66,11 +66,11 @@ impl OptimizeService {
         groups
             .into_iter()
             .filter(|(key, g)| {
-                // Filter by partition if specified
-                if let Some(ref filter) = self.config.partition_filter
-                    && key != filter
-                {
-                    return false;
+                // Filter by partition if specified (supports wildcards)
+                if let Some(ref filter) = self.config.partition_filter {
+                    if !super::matches_partition_filter(key, filter) {
+                        return false;
+                    }
                 }
                 g.needs_compaction(self.config.min_size)
             })

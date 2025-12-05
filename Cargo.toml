@@ -1,11 +1,11 @@
 [package]
-name = "icectl"
+name = "icetable"
 version = "0.1.0"
 edition = "2024"
 authors = ["Juan José de las Heras Herrera"]
 description = "CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and migrate from Delta Lake"
 license = "Apache-2.0"
-repository = "https://github.com/datatools-hub/icectl"
+repository = "https://github.com/datatools-hub/icetable"
 keywords = ["iceberg", "parquet", "arrow", "lakehouse", "cli"]
 categories = ["command-line-utilities", "database"]
 
@@ -90,7 +90,7 @@ tui = ["dep:ratatui", "dep:crossterm"]
 all = ["delta", "tui"]
 
 [[bin]]
-name = "icectl"
+name = "icetable"
 path = "src/main.rs"
 
 [[bin]]
@@ -98,7 +98,7 @@ name = "build_fixtures"
 path = "build_fixtures.rs"
 
 [lib]
-name = "icectl"
+name = "icetable"
 path = "src/lib.rs"
 
 [profile.release]

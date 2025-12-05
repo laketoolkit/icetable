@@ -1,4 +1,4 @@
-//! icectl - CLI for Apache Iceberg table management
+//! icetable - CLI for Apache Iceberg table management
 //!
 //! This library provides a unified interface for inspecting, validating,
 //! converting, and managing Apache Iceberg tables across storage systems
@@ -16,9 +16,9 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use icectl::v1::formats::{FormatHandlerRegistry, ReadOptions};
-//! use icectl::v1::storage::StorageBackendFactory;
-//! use icectl::v1::Result;
+//! use icetable::v1::formats::{FormatHandlerRegistry, ReadOptions};
+//! use icetable::v1::storage::StorageBackendFactory;
+//! use icetable::v1::Result;
 //! use std::path::Path;
 //!
 //! #[tokio::main]
@@ -46,7 +46,7 @@
 //! # Extending with Custom Formats
 //!
 //! ```rust,ignore
-//! use icectl::v1::formats::{FormatHandler, FormatHandlerRegistry};
+//! use icetable::v1::formats::{FormatHandler, FormatHandlerRegistry};
 //!
 //! // Register a custom format handler
 //! FormatHandlerRegistry::global().register("xml", 75, |path, storage| {
@@ -57,7 +57,7 @@
 //! # Custom Transformations
 //!
 //! ```rust,ignore
-//! use icectl::v1::transform::{TransformPipeline, FilterStep, CustomTransformStep};
+//! use icetable::v1::transform::{TransformPipeline, FilterStep, CustomTransformStep};
 //!
 //! let pipeline = TransformPipeline::new()
 //!     .add_step(FilterStep::new("age > 18"))

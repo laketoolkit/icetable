@@ -1,148 +1,272 @@
-# TableCtl
+# icetable
 
-Universal CLI for inspecting, validating, converting, and managing tabular data files.
+A fast, modern CLI for Apache Iceberg table management.
 
-## Status
+## Installation
 
-🚧 **Project Status**: Architecture Complete, Implementation In Progress
+```bash
+cargo install --path .
+```
 
-This project is currently in the architectural phase. The complete module structure, traits, and scaffolding are in place. Implementation of core functionality is delegated to the Rust-Developer agent.
+Or build from source:
 
-## Features (Planned)
-
-- **Multi-Format Support**: Parquet, Arrow IPC, Delta Lake, Iceberg
-- **Cloud-Native**: First-class support for S3, GCS, Azure Blob Storage
-- **Fast**: Streaming operations, never loads entire files into memory
-- **User-Friendly**: Actionable error messages, progress indicators
-- **Zero Config**: Works out of the box for common operations
+```bash
+cargo build --release
+# Binary at ./target/release/icetable
+```
 
 ## Quick Start
 
 ```bash
-# Build the project
-cargo build --release
+# Inspect a table
+icetable inspect s3://warehouse/my_table
 
-# Inspect a Parquet file
-tablectl inspect data.parquet
+# Analyze table health
+icetable analyze s3://warehouse/my_table
 
-# Validate a file
-tablectl validate s3://bucket/data.parquet
+# List snapshots
+icetable snapshot list s3://warehouse/my_table
 
-# Compare two tables
-tablectl diff old.parquet new.parquet
+# Optimize small files
+icetable optimize data s3://warehouse/my_table --dry-run
 
-# Convert formats
-tablectl convert data.csv -o data.parquet
+# Clean up old snapshots
+icetable snapshot expire s3://warehouse/my_table --older-than 7d --dry-run
 
-# Compute statistics
-tablectl stats data.parquet --histogram
-
-# Query with SQL
-tablectl query "SELECT * FROM data.parquet WHERE age > 30"
+# Remove orphan files
+icetable vacuum s3://warehouse/my_table --dry-run
 ```
 
-## Architecture
+## Commands
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
+### inspect
 
-Key architectural decisions:
-- Trait-based design for extensibility
-- Async-first for efficient I/O
-- Streaming to minimize memory usage
-- User-friendly error messages with suggestions
-
-## Project Structure
-
-```
-tablectl/
-├── src/
-│   ├── main.rs              # CLI entry point
-│   ├── lib.rs               # Library interface
-│   ├── error.rs             # Error types
-│   ├── core/                # Core abstractions
-│   │   ├── formats/         # Format handlers
-│   │   ├── storage/         # Storage backends
-│   │   └── operations/      # Business logic
-│   ├── cli/                 # CLI layer
-│   │   ├── parser.rs        # Argument parsing
-│   │   ├── output.rs        # Output formatting
-│   │   └── commands/        # Command implementations
-│   └── utils/               # Utilities
-├── tests/                   # Integration tests
-├── benches/                 # Benchmarks
-├── examples/                # Usage examples
-├── ARCHITECTURE.md          # Architecture documentation
-└── DEV-GUIDE.md            # Development specifications
-```
-
-## Development
-
-### Prerequisites
-
-- Rust 1.70+ (2021 edition)
-- Cargo
-
-### Build
+Display table metadata including schema, partitioning, snapshots, and statistics.
 
 ```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-
-# With all features
-cargo build --all-features
-
-# Minimal build (Parquet/Arrow only)
-cargo build --no-default-features
+icetable inspect <TABLE_PATH>
+icetable inspect s3://warehouse/orders --output json
 ```
 
-### Test
+### analyze
+
+Analyze table health and get optimization recommendations.
 
 ```bash
-# Run tests
-cargo test
-
-# Run with logging
-RUST_LOG=debug cargo test
-
-# Run benchmarks
-cargo bench
+icetable analyze <TABLE_PATH>
+icetable analyze s3://warehouse/orders --verbose
+icetable analyze s3://warehouse/orders --skip-orphans  # Skip orphan file scan
 ```
 
-### Features
+Output shows a summary table with status indicators:
+- `✓` (green) - OK
+- `⚠` (yellow) - Needs attention
+- `✗` (red) - Critical issue
 
-- `delta`: Delta Lake support (default: enabled)
-- `iceberg`: Iceberg support (default: disabled)
-- `serve`: Web UI server (default: enabled)
+### optimize
 
-## Documentation
+Optimize table performance by compacting files.
 
-- [DEV-GUIDE.md](DEV-GUIDE.md): Complete product specifications
-- [ARCHITECTURE.md](ARCHITECTURE.md): System architecture and design decisions
+```bash
+# Compact small data files
+icetable optimize data <TABLE_PATH> --dry-run
+icetable optimize data s3://warehouse/orders --partition "date=2024-01-01"
 
-## Contributing
+# Rewrite manifests
+icetable optimize manifests <TABLE_PATH> --dry-run
+```
 
-Contributions are welcome! This project follows standard Rust conventions:
+### vacuum
 
-1. Run `cargo fmt` before committing
-2. Run `cargo clippy` and fix warnings
-3. Add tests for new functionality
-4. Update documentation
+Remove orphan files (data files not referenced by any snapshot).
+
+```bash
+icetable vacuum <TABLE_PATH> --dry-run
+icetable vacuum s3://warehouse/orders --older-than 7d
+```
+
+### snapshot
+
+Manage table snapshots.
+
+```bash
+# List all snapshots
+icetable snapshot list <TABLE_PATH>
+
+# Show snapshot lineage (ancestor chain)
+icetable snapshot lineage <TABLE_PATH>
+icetable snapshot lineage <TABLE_PATH> --all           # Show full history
+icetable snapshot lineage <TABLE_PATH> -n 20           # Show last 20
+
+# Expire old snapshots
+icetable snapshot expire <TABLE_PATH> --older-than 7d --dry-run
+icetable snapshot expire <TABLE_PATH> --older-than 30d
+
+# Time travel - set current snapshot
+icetable snapshot set <TABLE_PATH> --id <SNAPSHOT_ID>
+icetable snapshot set <TABLE_PATH> --as-of "2024-01-15T10:00:00Z"
+
+# Cherry-pick changes from a snapshot
+icetable snapshot cherrypick <TABLE_PATH> <SNAPSHOT_ID>
+```
+
+### branch
+
+Manage table branches (mutable named references).
+
+```bash
+# List branches
+icetable branch list <TABLE_PATH>
+
+# Create a branch
+icetable branch create <TABLE_PATH> <BRANCH_NAME>
+icetable branch create <TABLE_PATH> dev --snapshot-id 123456789
+
+# Delete a branch
+icetable branch delete <TABLE_PATH> <BRANCH_NAME> --dry-run
+
+# Rename a branch
+icetable branch rename <TABLE_PATH> <OLD_NAME> <NEW_NAME>
+```
+
+### tag
+
+Manage table tags (immutable named references).
+
+```bash
+# List tags
+icetable tag list <TABLE_PATH>
+
+# Create a tag
+icetable tag create <TABLE_PATH> <TAG_NAME>
+icetable tag create <TABLE_PATH> v1.0.0 --snapshot-id 123456789
+
+# Delete a tag
+icetable tag delete <TABLE_PATH> <TAG_NAME> --dry-run
+
+# Rename a tag
+icetable tag rename <TABLE_PATH> <OLD_NAME> <NEW_NAME>
+```
+
+### repair
+
+Fix table metadata issues by syncing with actual storage state.
+
+```bash
+# Remove references to files that no longer exist on storage
+icetable repair <TABLE_PATH> --remove-missing --dry-run
+
+# Add orphan parquet files (on storage but not in metadata) to the table
+icetable repair <TABLE_PATH> --add-orphans --dry-run
+
+# Full sync: remove missing references AND add orphan files
+icetable repair <TABLE_PATH> --sync-metadata --dry-run
+```
+
+## Storage Support
+
+icetable supports multiple storage backends:
+
+- **Local filesystem**: `/path/to/table`
+- **Amazon S3**: `s3://bucket/path/to/table`
+- **MinIO**: `s3://bucket/path` (with `AWS_ENDPOINT_URL`)
+- **Google Cloud Storage**: `gs://bucket/path/to/table`
+- **Azure Blob Storage**: `az://container/path/to/table`
+
+### S3/MinIO Configuration
+
+```bash
+export AWS_ACCESS_KEY_ID=your_key
+export AWS_SECRET_ACCESS_KEY=your_secret
+export AWS_REGION=us-east-1
+
+# For MinIO or S3-compatible storage
+export AWS_ENDPOINT_URL=http://localhost:9000
+```
+
+## Output Formats
+
+All commands support JSON output for scripting:
+
+```bash
+icetable inspect s3://warehouse/orders --output json
+icetable snapshot list s3://warehouse/orders --output json | jq '.[] | .id'
+```
+
+## Common Options
+
+| Option | Description |
+|--------|-------------|
+| `--output json` | Output as JSON instead of formatted tables |
+| `--dry-run` | Preview changes without applying them |
+| `--verbose` | Show detailed information |
+| `--help` | Show help for command |
+
+## Examples
+
+### Daily maintenance workflow
+
+```bash
+# 1. Check table health
+icetable analyze s3://warehouse/orders
+
+# 2. Compact small files if needed
+icetable optimize data s3://warehouse/orders --dry-run
+icetable optimize data s3://warehouse/orders
+
+# 3. Expire old snapshots (keep 7 days)
+icetable snapshot expire s3://warehouse/orders --older-than 7d --dry-run
+icetable snapshot expire s3://warehouse/orders --older-than 7d
+
+# 4. Remove orphan files
+icetable vacuum s3://warehouse/orders --dry-run
+icetable vacuum s3://warehouse/orders
+```
+
+### Debug a table issue
+
+```bash
+# View current state
+icetable inspect s3://warehouse/orders
+
+# Check snapshot history
+icetable snapshot list s3://warehouse/orders
+
+# View lineage of current snapshot
+icetable snapshot lineage s3://warehouse/orders
+
+# Roll back to previous snapshot
+icetable snapshot set s3://warehouse/orders --id 1234567890123
+```
+
+### Tag a release
+
+```bash
+# Create a tag for the current snapshot
+icetable tag create s3://warehouse/orders v2.0.0
+
+# Or tag a specific snapshot
+icetable tag create s3://warehouse/orders v1.5.0 --snapshot-id 1234567890123
+```
+
+## Shell Completions
+
+Generate shell completions for your preferred shell:
+
+```bash
+# Bash
+icetable completions bash > ~/.bash_completion.d/icetable
+
+# Zsh
+icetable completions zsh > ~/.zfunc/_icetable
+
+# Fish
+icetable completions fish > ~/.config/fish/completions/icetable.fish
+
+# PowerShell
+icetable completions powershell > icetable.ps1
+```
 
 ## License
 
-MIT OR Apache-2.0 (dual licensed)
-
-## Roadmap
-
-- [ ] v0.1 (MVP): Parquet inspect, validate, convert (local only)
-- [ ] v0.5: Cloud storage support (S3, GCS, Azure)
-- [ ] v1.0: Full feature set with Delta/Iceberg read support
-- [ ] v1.5: Web UI, plugin system
-- [ ] v2.0: Write support for table formats
-
----
-
-**Note**: This project is currently in active development. The architecture is complete, but implementations are in progress. See [ARCHITECTURE.md](ARCHITECTURE.md) for details on extension points and how to contribute.
+Apache-2.0

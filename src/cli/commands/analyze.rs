@@ -4,6 +4,7 @@
 //! The business logic is delegated to AnalyzeService in core::analysis.
 
 use colored::Colorize;
+use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
 
 use crate::cli::parser::AnalyzeArgs;
 use crate::config::ResolvePath;
@@ -31,7 +32,7 @@ impl AnalyzeCommand {
             TableFormat::Delta => {
                 println!(
                     "{}",
-                    "Delta Lake analysis is not supported. Use 'icectl import delta' to convert to Iceberg."
+                    "Delta Lake analysis is not supported. Use 'icetable import delta' to convert to Iceberg."
                         .yellow()
                 );
                 Ok(())
@@ -117,7 +118,7 @@ impl AnalyzeCommand {
     }
 
     fn print_analysis(
-        table_path: &str,
+        _table_path: &str,
         data: &DataCompactionAnalysis,
         manifest: &ManifestCompactionAnalysis,
         snapshot: &SnapshotExpirationAnalysis,
@@ -126,189 +127,174 @@ impl AnalyzeCommand {
         verbose: bool,
     ) -> Result<()> {
         if output == "json" {
-            return Self::print_json(table_path, data, manifest, snapshot, orphan);
+            return Self::print_json(_table_path, data, manifest, snapshot, orphan);
         }
 
-        println!("{}", "Recommendations:".bold());
+        // Build summary table
+        let mut table = comfy_table::Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+
+        table.set_header(vec![
+            Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Count".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Size".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+        ]);
+
+        // Data row
+        let data_status = if data.needs_action() {
+            "⚠".yellow().to_string()
+        } else {
+            "✓".green().to_string()
+        };
+        table.add_row(vec![
+            Cell::new("Data files"),
+            Cell::new(format_count(data.total_files)).set_alignment(CellAlignment::Right),
+            Cell::new(format_bytes(data.total_size)).set_alignment(CellAlignment::Right),
+            Cell::new(data_status).set_alignment(CellAlignment::Center),
+        ]);
+
+        // Manifests row
+        let manifest_status = if manifest.needs_action() {
+            "⚠".yellow().to_string()
+        } else {
+            "✓".green().to_string()
+        };
+        table.add_row(vec![
+            Cell::new("Manifests"),
+            Cell::new(format_count(manifest.total_manifests as usize))
+                .set_alignment(CellAlignment::Right),
+            Cell::new("-").set_alignment(CellAlignment::Right),
+            Cell::new(manifest_status).set_alignment(CellAlignment::Center),
+        ]);
+
+        // Snapshots row
+        let snapshot_status = if snapshot.needs_action() {
+            "⚠".yellow().to_string()
+        } else {
+            "✓".green().to_string()
+        };
+        table.add_row(vec![
+            Cell::new("Snapshots"),
+            Cell::new(format_count(snapshot.total_snapshots)).set_alignment(CellAlignment::Right),
+            Cell::new("-").set_alignment(CellAlignment::Right),
+            Cell::new(snapshot_status).set_alignment(CellAlignment::Center),
+        ]);
+
+        // Orphans row (if checked)
+        if let Some(orphan) = orphan {
+            let orphan_status = if orphan.has_missing_files() {
+                "✗".red().to_string()
+            } else if orphan.has_orphan_files() {
+                "⚠".yellow().to_string()
+            } else {
+                "✓".green().to_string()
+            };
+            table.add_row(vec![
+                Cell::new("Orphans"),
+                Cell::new(format_count(orphan.orphan_count)).set_alignment(CellAlignment::Right),
+                Cell::new(format_bytes(orphan.orphan_size)).set_alignment(CellAlignment::Right),
+                Cell::new(orphan_status).set_alignment(CellAlignment::Center),
+            ]);
+        }
+
+        println!("{}", table);
         println!();
 
-        let mut has_recommendations = false;
+        // Collect recommendations
+        let mut recommendations: Vec<(String, String)> = Vec::new();
 
-        // Data compaction
+        // Data compaction recommendation
         if data.needs_action() {
-            has_recommendations = true;
-            println!(
-                "  {} {}",
-                "!".yellow(),
-                "Data compaction recommended".yellow().bold()
+            let detail = format!(
+                "Compact {} small files in {} partitions",
+                data.small_files, data.groups_needing_compaction
             );
-            println!(
-                "    Small files: {} of {} (< {})",
-                data.small_files.to_string().cyan(),
-                data.total_files.to_string().cyan(),
-                format_bytes(data.min_size_threshold)
-            );
-            println!(
-                "    Partitions to compact: {}",
-                data.groups_needing_compaction.to_string().cyan()
-            );
-
-            // Verbose: show partition details
-            if verbose && !data.partitions.is_empty() {
-                println!();
-                println!("    {}", "Top partitions by priority:".dimmed());
-                let max_show = 10;
-                for (i, p) in data.partitions.iter().take(max_show).enumerate() {
-                    let priority_color = match p.priority.as_str() {
-                        "high" => p.priority.red(),
-                        "medium" => p.priority.yellow(),
-                        _ => p.priority.dimmed(),
-                    };
-                    let records_str = if p.records > 1_000_000 {
-                        format!("{:.1}M rows", p.records as f64 / 1_000_000.0)
-                    } else if p.records > 1_000 {
-                        format!("{:.1}K rows", p.records as f64 / 1_000.0)
-                    } else {
-                        format!("{} rows", p.records)
-                    };
-                    println!(
-                        "      {}. {} {} files, {} ({}) [{}]",
-                        i + 1,
-                        p.partition.cyan(),
-                        p.files.to_string().white(),
-                        records_str,
-                        format_bytes(p.size_bytes),
-                        priority_color
-                    );
-                }
-                if data.partitions.len() > max_show {
-                    println!(
-                        "      {} ({} more)",
-                        "...".dimmed(),
-                        data.partitions.len() - max_show
-                    );
-                }
-            }
-
-            println!();
-            println!(
-                "    Run: {}",
-                "icectl optimize data --partition <partition> --dry-run".dimmed()
-            );
-            println!();
+            recommendations.push((detail, "icetable optimize data --dry-run".to_string()));
         }
 
-        // Manifest compaction
+        // Manifest compaction recommendation
         if manifest.needs_action() {
-            has_recommendations = true;
-            println!(
-                "  {} {}",
-                "!".yellow(),
-                "Manifest compaction recommended".yellow().bold()
+            let detail = format!(
+                "Rewrite {} manifests (target: {})",
+                manifest.total_manifests, manifest.recommended_max
             );
-            println!(
-                "    Current manifests: {} (recommended: < {})",
-                manifest.total_manifests.to_string().cyan(),
-                manifest.recommended_max
-            );
-            println!(
-                "    Run: {}",
-                "icectl optimize manifests --dry-run".dimmed()
-            );
-            println!();
+            recommendations.push((detail, "icetable optimize manifests --dry-run".to_string()));
         }
 
-        // Snapshot expiration
+        // Snapshot expiration recommendation
         if snapshot.needs_action() {
-            has_recommendations = true;
-            println!(
-                "  {} {}",
-                "!".yellow(),
-                "Old snapshots can be expired".yellow().bold()
+            let detail = format!(
+                "Expire {} snapshots older than 7 days",
+                snapshot.snapshots_older_than_7d
             );
-            println!(
-                "    Total snapshots: {}",
-                snapshot.total_snapshots.to_string().cyan()
-            );
-            println!(
-                "    Older than 7 days: {}",
-                snapshot.snapshots_older_than_7d.to_string().cyan()
-            );
-            if snapshot.snapshots_older_than_30d > 0 {
-                println!(
-                    "    Older than 30 days: {}",
-                    snapshot.snapshots_older_than_30d.to_string().cyan()
-                );
-            }
-            println!(
-                "    Oldest snapshot: {} days old",
-                snapshot.oldest_snapshot_age_days.to_string().cyan()
-            );
-            println!(
-                "    Run: {}",
-                "icectl snapshot expire --older-than 7d --dry-run".dimmed()
-            );
-            println!();
+            recommendations.push((detail, "icetable snapshot expire --older-than 7d --dry-run".to_string()));
         }
 
-        // Orphan files (if checked)
+        // Orphan files recommendation
         if let Some(orphan) = orphan {
             if orphan.has_orphan_files() {
-                has_recommendations = true;
-                println!(
-                    "  {} {}",
-                    "!".yellow(),
-                    "Orphan files detected".yellow().bold()
-                );
-                println!(
-                    "    Orphan files: {} ({})",
-                    orphan.orphan_count.to_string().cyan(),
+                let detail = format!(
+                    "Remove {} orphan files ({})",
+                    orphan.orphan_count,
                     format_bytes(orphan.orphan_size)
                 );
-                println!("    Run: {}", "icectl vacuum --dry-run".dimmed());
-                println!();
+                recommendations.push((detail, "icetable vacuum --dry-run".to_string()));
             }
-
             if orphan.has_missing_files() {
-                has_recommendations = true;
-                println!("  {} {}", "x".red(), "Missing files detected".red().bold());
-                println!(
-                    "    Missing files: {}",
-                    orphan.missing_count.to_string().red()
-                );
-                println!(
-                    "    Run: {}",
-                    "icectl repair --remove-missing --dry-run".dimmed()
-                );
-                println!();
-            }
-
-            if !orphan.needs_action() {
-                println!("  {} {}", "+".green(), "No orphan or missing files".green());
-                println!();
+                let detail = format!("Repair {} missing file references", orphan.missing_count);
+                recommendations.push((detail, "icetable repair --remove-missing --dry-run".to_string()));
             }
         }
 
-        if !has_recommendations {
-            println!("  {} {}", "+".green(), "Table is healthy!".green());
+        // Print recommendations
+        if recommendations.is_empty() {
+            println!("{}", "✓ Table is healthy!".green().bold());
+        } else {
+            println!("{}", "Recommendations:".bold());
+            for (detail, command) in &recommendations {
+                println!("  {} {}", "⚠".yellow(), detail.yellow());
+                println!("    → {}", command.dimmed());
+            }
+        }
+
+        // Verbose: show partition details for data compaction
+        if verbose && data.needs_action() && !data.partitions.is_empty() {
             println!();
+            println!("{}", "Top partitions by priority:".dimmed());
+            let max_show = 10;
+            for (i, p) in data.partitions.iter().take(max_show).enumerate() {
+                let priority_color = match p.priority.as_str() {
+                    "high" => p.priority.red(),
+                    "medium" => p.priority.yellow(),
+                    _ => p.priority.dimmed(),
+                };
+                let records_str = if p.records > 1_000_000 {
+                    format!("{:.1}M rows", p.records as f64 / 1_000_000.0)
+                } else if p.records > 1_000 {
+                    format!("{:.1}K rows", p.records as f64 / 1_000.0)
+                } else {
+                    format!("{} rows", p.records)
+                };
+                println!(
+                    "  {}. {} {} files, {} ({}) [{}]",
+                    i + 1,
+                    p.partition.cyan(),
+                    p.files.to_string().white(),
+                    records_str,
+                    format_bytes(p.size_bytes),
+                    priority_color
+                );
+            }
+            if data.partitions.len() > max_show {
+                println!(
+                    "  {} ({} more)",
+                    "...".dimmed(),
+                    data.partitions.len() - max_show
+                );
+            }
         }
-
-        // Summary stats
-        println!("{}", "Summary:".bold());
-        println!(
-            "  Data files:  {} ({})",
-            data.total_files.to_string().cyan(),
-            format_bytes(data.total_size)
-        );
-        println!(
-            "  Manifests:   {}",
-            manifest.total_manifests.to_string().cyan()
-        );
-        println!(
-            "  Snapshots:   {}",
-            snapshot.total_snapshots.to_string().cyan()
-        );
 
         Ok(())
     }
@@ -357,5 +343,16 @@ impl AnalyzeCommand {
         );
 
         Ok(())
+    }
+}
+
+/// Format a count with thousands separators
+fn format_count(count: usize) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}K", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
     }
 }

@@ -87,7 +87,7 @@ impl OptimizeCommand {
         _service: &OptimizeService,
     ) -> Result<MaintenanceResult> {
         Err(Error::UnsupportedFeature {
-            feature: "Delta Lake optimize is not supported. Use 'icectl import delta' to convert to Iceberg.".to_string(),
+            feature: "Delta Lake optimize is not supported. Use 'icetable import delta' to convert to Iceberg.".to_string(),
         })
     }
 
@@ -424,7 +424,7 @@ impl OptimizeCommand {
         // Build summary for the new snapshot
         // Note: don't add "operation" to additional_properties - it comes from the `operation` field
         let mut summary_map: HashMap<String, String> = HashMap::new();
-        summary_map.insert("spark.app.id".to_string(), "icectl".to_string());
+        summary_map.insert("spark.app.id".to_string(), "icetable".to_string());
         summary_map.insert(
             "manifests-rewritten".to_string(),
             data_manifests.len().to_string(),

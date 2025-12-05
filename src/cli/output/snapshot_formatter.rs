@@ -1,7 +1,7 @@
 //! Snapshot command formatting utilities
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, Color, ContentArrangement};
+use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
 use serde_json::Value;
 
 use crate::core::format_bytes;
@@ -27,11 +27,11 @@ impl SnapshotFormatter {
         table.set_content_arrangement(ContentArrangement::Dynamic);
 
         table.set_header(vec![
-            Cell::new("ID").fg(Color::Cyan),
-            Cell::new("Timestamp").fg(Color::Cyan),
-            Cell::new("Operation").fg(Color::Cyan),
-            Cell::new("Parent").fg(Color::Cyan),
-            Cell::new("Status").fg(Color::Cyan),
+            Cell::new("ID".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Parent".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
         ]);
 
         for snap in snapshots {
@@ -148,7 +148,7 @@ impl SnapshotFormatter {
 
         if !dry_run {
             output.push(String::new());
-            output.push("Note: Data files are NOT deleted. Use 'icectl vacuum' to remove orphaned data files.".dimmed().to_string());
+            output.push("Note: Data files are NOT deleted. Use 'icetable vacuum' to remove orphaned data files.".dimmed().to_string());
         }
 
         output.join("\n")

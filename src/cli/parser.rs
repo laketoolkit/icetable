@@ -1,11 +1,12 @@
 //! Command-line argument parsing
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use std::path::PathBuf;
 
-/// icectl - CLI for Apache Iceberg table management
+/// icetable - CLI for Apache Iceberg table management
 #[derive(Parser, Debug)]
-#[command(name = "icectl")]
+#[command(name = "icetable")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// Suppress non-error output
@@ -75,9 +76,43 @@ pub enum Commands {
     /// Manage configuration (default table context)
     Config(ConfigArgs),
 
+    /// Generate shell completions
+    Completions(CompletionsArgs),
+
+    /// Diagnose environment health (credentials, connectivity)
+    Doctor(DoctorArgs),
+
     /// Interactive Terminal UI
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
+}
+
+/// Arguments for completions command
+#[derive(Parser, Debug)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+
+impl CompletionsArgs {
+    /// Generate completions and print to stdout
+    pub fn generate(&self) {
+        let mut cmd = Cli::command();
+        clap_complete::generate(self.shell, &mut cmd, "icetable", &mut std::io::stdout());
+    }
+}
+
+/// Arguments for doctor command
+#[derive(Parser, Debug)]
+pub struct DoctorArgs {
+    /// Optional path to test storage connectivity
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
+
+    /// Output format: human or json
+    #[arg(short, long, default_value = "human")]
+    pub output: String,
 }
 
 /// Arguments for init command

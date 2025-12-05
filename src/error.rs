@@ -140,6 +140,10 @@ pub enum Error {
     #[error("{0}")]
     General(String),
 
+    /// Concurrent modification conflict (optimistic concurrency)
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     /// Multiple errors accumulated during batch operations
     #[error("Multiple errors occurred: {}", format_errors(.0))]
     Multiple(Vec<Error>),
@@ -220,7 +224,7 @@ impl Error {
 
     fn corrupted_file_suggestion(path: &Path, reason: &str) -> String {
         format!(
-            "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: icectl validate {}\n  3. Check file type: file {}",
+            "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: icetable validate {}\n  3. Check file type: file {}",
             path.display(),
             reason,
             path.display(),
@@ -248,6 +252,13 @@ impl Error {
         )
     }
 
+    fn conflict_suggestion(message: &str) -> String {
+        format!(
+            "Conflict detected: {}\n\nAnother process modified the table while this operation was in progress.\n\nTo resolve:\n  1. Retry the operation - it will use the latest table state\n  2. If using automation, implement retry logic with backoff\n  3. Consider using table locks in high-concurrency scenarios",
+            message
+        )
+    }
+
     /// Get a user-friendly error message with suggestions
     pub fn user_message(&self) -> String {
         match self {
@@ -258,6 +269,7 @@ impl Error {
                 Self::authentication_failed_suggestion(provider, message)
             }
             Error::Timeout { operation, seconds } => Self::timeout_suggestion(operation, *seconds),
+            Error::Conflict(message) => Self::conflict_suggestion(message),
             _ => self.to_string(),
         }
     }

@@ -170,7 +170,7 @@ impl SnapshotService {
     /// Expire snapshots based on configuration
     ///
     /// This removes snapshots from metadata but does NOT delete data files.
-    /// Use `icectl vacuum` to remove orphaned data files after expiring snapshots.
+    /// Use `icetable vacuum` to remove orphaned data files after expiring snapshots.
     pub async fn expire_snapshots(
         &self,
         service: &IcebergMetadataService,

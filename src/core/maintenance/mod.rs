@@ -5,12 +5,14 @@
 //! Delta Lake and Iceberg tables through a unified interface.
 
 mod optimize;
+mod partition_filter;
 mod refs;
 mod repair;
 mod snapshot;
 mod vacuum;
 
 pub use optimize::OptimizeService;
+pub use partition_filter::{matches_partition_filter, PartitionFilter};
 pub use refs::{RefConfig, RefResult, RefService};
 pub use repair::{RepairAnalysis, RepairService};
 pub use snapshot::{

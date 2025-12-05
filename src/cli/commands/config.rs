@@ -1,6 +1,6 @@
 //! Config command implementation
 //!
-//! Manages icectl configuration like kubectl config.
+//! Manages icetable configuration like kubectl config.
 
 use colored::Colorize;
 
