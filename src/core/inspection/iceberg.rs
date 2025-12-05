@@ -265,11 +265,9 @@ impl IcebergInspector {
             }
         }
 
-        // Sort order info (always show in verbose, show (unsorted) if not defined)
+        // Sort order info (always show in verbose, or if actually sorted)
         let sort_order_str = self.extract_sort_order(metadata);
-        if options.verbosity >= VerbosityLevel::Verbose {
-            details.insert("Sort Order".to_string(), sort_order_str);
-        } else if sort_order_str != "(unsorted)" {
+        if options.verbosity >= VerbosityLevel::Verbose || sort_order_str != "(unsorted)" {
             details.insert("Sort Order".to_string(), sort_order_str);
         }
 
@@ -842,8 +840,6 @@ impl PhysicalInspector for IcebergInspector {
             orphan_files,
         })
     }
-
-
 
     fn format_name(&self) -> &str {
         "Apache Iceberg"

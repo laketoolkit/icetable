@@ -394,7 +394,7 @@ impl FormatHandlerFactory {
             "iceberg" => {
                 let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
                 Ok(Box::new(handler))
-            },
+            }
             _ => Err(crate::error::Error::InvalidFormat {
                 message: format!("Unknown format: {}", format),
             }),

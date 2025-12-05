@@ -32,7 +32,9 @@ impl Default for ExpirationConfig {
 
 /// Information about a snapshot for expiration decisions
 pub trait SnapshotItem {
+    /// Get the snapshot ID
     fn id(&self) -> i64;
+    /// Get the snapshot timestamp
     fn timestamp(&self) -> Option<DateTime<Utc>>;
 }
 
@@ -63,13 +65,13 @@ where
     if let Some(older_than) = &config.older_than {
         let cutoff = parse_timestamp(older_than)?;
         for item in items {
-            if let Some(ts) = item.timestamp() {
-                if ts < cutoff {
-                    if config.skip_current && Some(item.id()) == current_id {
-                        continue;
-                    }
-                    to_expire.push(item.id());
+            if let Some(ts) = item.timestamp()
+                && ts < cutoff
+            {
+                if config.skip_current && Some(item.id()) == current_id {
+                    continue;
                 }
+                to_expire.push(item.id());
             }
         }
         return Ok(to_expire);
@@ -98,13 +100,13 @@ where
     // Default: 7 days retention
     let cutoff = Utc::now() - chrono::Duration::days(7);
     for item in items {
-        if let Some(ts) = item.timestamp() {
-            if ts < cutoff {
-                if config.skip_current && Some(item.id()) == current_id {
-                    continue;
-                }
-                to_expire.push(item.id());
+        if let Some(ts) = item.timestamp()
+            && ts < cutoff
+        {
+            if config.skip_current && Some(item.id()) == current_id {
+                continue;
             }
+            to_expire.push(item.id());
         }
     }
 

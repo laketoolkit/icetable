@@ -3,7 +3,6 @@
 //! Encapsulates the logic for writing Iceberg snapshots, manifests, and metadata files.
 //! This module is used by `IcebergMetadataService` to perform transactional writes.
 
-
 use std::sync::Arc;
 
 use super::traits::DataFileInfo;

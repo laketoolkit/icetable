@@ -84,16 +84,18 @@ impl FormatHandlerRegistry {
         }
 
         // Otherwise, use the standard factory-based approach
-        let handlers = self.handlers.read().unwrap();
+        // Collect handlers first to avoid holding MutexGuard across await
+        let candidate_handlers: Vec<_> = {
+            let handlers = self.handlers.read().unwrap();
+            handlers
+                .iter()
+                .filter_map(|(_name, _priority, factory)| factory(path, storage.clone()).ok())
+                .collect()
+        };
 
-        for (_name, _priority, factory) in handlers.iter() {
-            match factory(path, storage.clone()) {
-                Ok(handler) => {
-                    if handler.can_handle(path).await? {
-                        return Ok(handler);
-                    }
-                }
-                Err(_) => continue, // Try next handler
+        for handler in candidate_handlers {
+            if handler.can_handle(path).await? {
+                return Ok(handler);
             }
         }
 

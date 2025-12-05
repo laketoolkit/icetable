@@ -14,9 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use iceberg::TableIdent;
 use iceberg::io::{FileIO, FileIOBuilder};
-use iceberg::spec::{
-    DataFile, ManifestList, ManifestStatus, Summary, TableMetadata,
-};
+use iceberg::spec::{DataFile, ManifestList, ManifestStatus, Summary, TableMetadata};
 use iceberg::table::StaticTable;
 use object_store::ObjectStore;
 
@@ -97,8 +95,6 @@ impl IcebergMetadataService {
                 .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
         }
     }
-
-    /// Get the metadata directory path
 
     /// Load current table metadata
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {

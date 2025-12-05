@@ -2,7 +2,6 @@
 
 use colored::Colorize;
 
-
 use crate::core::format_bytes;
 use crate::core::inspection::formatters::format_number;
 use crate::core::operations::diff::{ColumnStatsDiff, DiffResult, MetadataDiff, SchemaDiff};

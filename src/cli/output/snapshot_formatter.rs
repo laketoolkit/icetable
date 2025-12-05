@@ -217,14 +217,20 @@ impl SnapshotFormatter {
 /// Common snapshot information for formatting
 #[derive(Debug, Clone)]
 pub struct SnapshotInfo {
+    /// Snapshot ID
     pub id: i64,
+    /// Timestamp when snapshot was created
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Parent snapshot ID (if any)
     pub parent_id: Option<i64>,
+    /// Whether this is the current snapshot
     pub is_current: bool,
+    /// Operation that created this snapshot
     pub operation: Option<String>,
 }
 
 impl SnapshotInfo {
+    /// Create a new SnapshotInfo with ID and timestamp
     pub fn new(id: i64, timestamp: Option<chrono::DateTime<chrono::Utc>>) -> Self {
         Self {
             id,
@@ -235,16 +241,19 @@ impl SnapshotInfo {
         }
     }
 
+    /// Set the parent snapshot ID
     pub fn with_parent(mut self, parent_id: Option<i64>) -> Self {
         self.parent_id = parent_id;
         self
     }
 
+    /// Mark whether this is the current snapshot
     pub fn with_current(mut self, is_current: bool) -> Self {
         self.is_current = is_current;
         self
     }
 
+    /// Set the operation that created this snapshot
     pub fn with_operation(mut self, operation: String) -> Self {
         self.operation = Some(operation);
         self

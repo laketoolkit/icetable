@@ -58,7 +58,7 @@ impl PhysicalInspectorRegistry {
         self.factories.push(Box::new(factory));
         // Sort by priority (highest first)
         self.factories
-            .sort_by(|a, b| b.priority().cmp(&a.priority()));
+            .sort_by_key(|f| std::cmp::Reverse(f.priority()));
     }
 
     /// Create an inspector for the given path

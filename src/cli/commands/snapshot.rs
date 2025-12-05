@@ -10,10 +10,11 @@ use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::config::ResolvePath;
 use crate::core::TableFormat;
+use crate::core::maintenance::{SnapshotConfig, SnapshotService};
+use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
 use crate::core::utils::detect_table_format_with_storage;
 use crate::error::{Error, Result};
-use crate::utils::parse_timestamp;
 
 /// Handler for snapshot command
 pub struct SnapshotCommand;
@@ -38,7 +39,7 @@ impl SnapshotCommand {
 
         match format {
             TableFormat::Delta => Self::execute_delta(args, &path, storage).await,
-            TableFormat::Iceberg => Self::execute_iceberg(args, &path, storage).await,
+            TableFormat::Iceberg => Self::execute_iceberg(args, &path).await,
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 path
@@ -76,11 +77,7 @@ impl SnapshotCommand {
     // Iceberg implementation
     // =========================================================================
 
-    async fn execute_iceberg(
-        args: SnapshotArgs,
-        table_path: &str,
-        _storage: Arc<dyn StorageBackend>,
-    ) -> Result<()> {
+    async fn execute_iceberg(args: SnapshotArgs, table_path: &str) -> Result<()> {
         match args.command {
             SnapshotCommands::List(a) => {
                 Self::iceberg_list(table_path, a.limit, a.all, &a.output).await
@@ -109,37 +106,25 @@ impl SnapshotCommand {
     }
 
     async fn iceberg_list(path: &str, limit: usize, all: bool, output: &str) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
-
         println!("{} Iceberg snapshots at {}", "Listing".green(), path);
         println!();
 
-        let service = IcebergMetadataService::new_async(path.to_string()).await?;
-        let (metadata, _) = service.load_metadata().await?;
+        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        let snapshot_service = SnapshotService::new();
 
-        let mut snapshots: Vec<_> = metadata.snapshots().collect();
+        let limit = if all { None } else { Some(limit) };
+        let result = snapshot_service
+            .list_snapshots(&metadata_service, limit)
+            .await?;
 
-        // Sort by timestamp descending (most recent first)
-        #[allow(clippy::unnecessary_sort_by)]
-        snapshots.sort_by(|a, b| b.timestamp_ms().cmp(&a.timestamp_ms()));
-
-        let limit = if all {
-            snapshots.len()
-        } else {
-            limit.min(snapshots.len())
-        };
-
-        let current_snapshot_id = metadata.current_snapshot_id();
-
-        // Convert to SnapshotInfo
-        let snapshot_infos: Vec<SnapshotInfo> = snapshots
+        // Convert to SnapshotInfo for formatting
+        let snapshot_infos: Vec<SnapshotInfo> = result
+            .snapshots
             .iter()
-            .take(limit)
             .map(|snap| {
-                let timestamp = chrono::DateTime::from_timestamp_millis(snap.timestamp_ms());
-                SnapshotInfo::new(snap.snapshot_id(), timestamp)
-                    .with_parent(snap.parent_snapshot_id())
-                    .with_current(Some(snap.snapshot_id()) == current_snapshot_id)
+                SnapshotInfo::new(snap.id, snap.timestamp)
+                    .with_parent(snap.parent_id)
+                    .with_current(snap.is_current)
             })
             .collect();
 
@@ -159,59 +144,28 @@ impl SnapshotCommand {
     async fn iceberg_create(path: &str, _force: bool, output: &str) -> Result<()> {
         // Iceberg creates snapshots automatically on data modifications
         // This command creates a metadata backup for safety
-
         println!(
             "{} Iceberg metadata snapshot at {}",
             "Creating".green(),
             path
         );
 
-        let table_path = std::path::Path::new(path);
-        let metadata_dir = table_path.join("metadata");
-
-        // Get current version
-        let version_hint = metadata_dir.join("version-hint.text");
-        let current_version: i32 = std::fs::read_to_string(&version_hint)
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(1);
-
-        let metadata_file = metadata_dir.join(format!("v{}.metadata.json", current_version));
-
-        if !metadata_file.exists() {
-            return Err(Error::General(format!(
-                "Metadata file not found: {}",
-                metadata_file.display()
-            )));
-        }
-
-        // Create backup with timestamp
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let backup_file = metadata_dir.join(format!(
-            "v{}.metadata.{}.backup.json",
-            current_version, timestamp
-        ));
-
-        std::fs::copy(&metadata_file, &backup_file)
-            .map_err(|e| Error::General(format!("Failed to create backup: {}", e)))?;
-
-        let backup_size = std::fs::metadata(&backup_file)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let snapshot_service = SnapshotService::new();
+        let result = snapshot_service.create_metadata_backup(path).await?;
 
         if output == "json" {
             let json_str = SnapshotFormatter::format_create_json(
-                current_version as i64,
-                &backup_file.to_string_lossy(),
-                backup_size,
+                result.version,
+                &result.backup_path,
+                result.size_bytes,
             )
             .map_err(|e| Error::General(e.to_string()))?;
             println!("{}", json_str);
         } else {
             let table_str = SnapshotFormatter::format_create_table(
-                current_version as i64,
-                &backup_file.to_string_lossy(),
-                backup_size,
+                result.version,
+                &result.backup_path,
+                result.size_bytes,
                 "Metadata snapshot",
             );
             println!("{}", table_str);
@@ -228,68 +182,38 @@ impl SnapshotCommand {
         dry_run: bool,
         output: &str,
     ) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
-        use crate::core::storage::StorageBackendFactory;
-        use crate::core::storage::traits::PutOptions;
-        use crate::core::utils::snapshot::{
-            ExpirationConfig, determine_cutoff_timestamp, determine_snapshots_to_expire,
-        };
         use std::collections::HashSet;
 
-        let service = IcebergMetadataService::new_async(path.to_string()).await?;
-        let (metadata, current_version) = service.load_metadata().await?;
+        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        let config = SnapshotConfig { dry_run };
+        let snapshot_service = SnapshotService::with_config(config);
 
-        // Get all snapshots from iceberg-rs
-        let snapshots: Vec<_> = metadata.snapshots().collect();
-        let _total_snapshots = snapshots.len();
-        let current_id = metadata.current_snapshot_id();
+        // Validate explicit IDs and show warnings
+        if let Some(ref explicit_ids) = ids {
+            let (metadata, _) = metadata_service.load_metadata().await?;
+            let snapshots: Vec<_> = metadata.snapshots().collect();
+            let current_id = metadata.current_snapshot_id();
 
-        // Determine which snapshots to expire
-        let mut to_expire: Vec<i64> = Vec::new();
-
-        if let Some(ids) = &ids {
-            // Explicit IDs with warnings
-            let mut valid_ids = Vec::new();
-            for id in ids {
+            for id in explicit_ids {
                 if Some(*id) == current_id {
                     eprintln!("{}", format!("Cannot expire current snapshot {}", id).red());
-                    continue;
-                }
-                if snapshots.iter().any(|s| s.snapshot_id() == *id) {
-                    valid_ids.push(*id);
-                } else {
+                } else if !snapshots.iter().any(|s| s.snapshot_id() == *id) {
                     eprintln!("{}", format!("Snapshot {} not found", id).yellow());
                 }
             }
-            if !valid_ids.is_empty() {
-                let config = ExpirationConfig {
-                    ids: Some(valid_ids),
-                    skip_current: true,
-                    ..Default::default()
-                };
-                to_expire = determine_snapshots_to_expire(&snapshots, &config, current_id)?;
-            }
-        } else {
-            // Use configuration-based expiration
-            let config = ExpirationConfig {
-                older_than: older_than.clone(),
-                retain_last,
-                ids: None,
-                skip_current: true,
-            };
-            to_expire = determine_snapshots_to_expire(&snapshots, &config, current_id)?;
         }
 
-        let cutoff_timestamp =
-            determine_cutoff_timestamp(&snapshots, older_than.as_deref(), retain_last)?;
+        let result = snapshot_service
+            .expire_snapshots(&metadata_service, path, older_than, retain_last, ids)
+            .await?;
 
-        if to_expire.is_empty() {
+        if result.expired_count == 0 {
             if output == "json" {
                 let json_str = SnapshotFormatter::format_expire_json(
                     0,
-                    cutoff_timestamp,
-                    dry_run,
-                    Some(&to_expire),
+                    result.cutoff_timestamp,
+                    result.dry_run,
+                    Some(&result.expired_ids),
                 )
                 .map_err(|e| Error::General(e.to_string()))?;
                 println!("{}", json_str);
@@ -300,11 +224,14 @@ impl SnapshotCommand {
             return Ok(());
         }
 
-        // Get snapshot details for display
+        // Show snapshots to expire (for non-JSON output)
         if output != "json" {
-            let expire_set: HashSet<i64> = to_expire.iter().cloned().collect();
+            let (metadata, _) = metadata_service.load_metadata().await?;
+            let snapshots: Vec<_> = metadata.snapshots().collect();
+            let expire_set: HashSet<i64> = result.expired_ids.iter().cloned().collect();
+
             println!();
-            println!("Snapshots to expire: {}", to_expire.len());
+            println!("Snapshots to expire: {}", result.expired_count);
             for snap in snapshots
                 .iter()
                 .filter(|s| expire_set.contains(&s.snapshot_id()))
@@ -316,93 +243,40 @@ impl SnapshotCommand {
             }
         }
 
-        // Calculate cutoff timestamp for display
-        let cutoff_timestamp =
-            determine_cutoff_timestamp(&snapshots, older_than.as_deref(), retain_last)?;
-
-        if dry_run {
+        if result.dry_run {
             println!();
             println!("{}", "DRY RUN - No changes made".yellow().bold());
-
-            if output == "json" {
-                let json_str = SnapshotFormatter::format_expire_json(
-                    to_expire.len(),
-                    cutoff_timestamp,
-                    true,
-                    Some(&to_expire),
-                )
-                .map_err(|e| Error::General(e.to_string()))?;
-                println!("{}", json_str);
-            } else {
-                let table_str =
-                    SnapshotFormatter::format_expire_table(to_expire.len(), cutoff_timestamp, true);
-                println!("{}", table_str);
-            }
-            return Ok(());
         }
-
-        // Use TableMetadataBuilder to properly remove snapshots
-        // This handles snapshots, snapshot-log, and refs correctly
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path.clone()))
-            .remove_snapshots(&to_expire)
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
-
-        let new_metadata = build_result.metadata;
-
-        // Write new metadata file with incremented version
-        let storage = StorageBackendFactory::create_backend(path).await?;
-        let metadata_dir = format!("{}/metadata", path.trim_end_matches('/'));
-        let new_version = (current_version + 1) as i64;
-        let new_metadata_filename = format!("v{}.metadata.json", new_version);
-        let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
-
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
-            .await?;
-
-        // Update version-hint.text
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(new_version.to_string()),
-                &PutOptions::default(),
-            )
-            .await?;
 
         if output == "json" {
             let json_str = SnapshotFormatter::format_expire_json(
-                to_expire.len(),
-                cutoff_timestamp,
-                false,
-                Some(&to_expire),
+                result.expired_count,
+                result.cutoff_timestamp,
+                result.dry_run,
+                Some(&result.expired_ids),
             )
             .map_err(|e| Error::General(e.to_string()))?;
             println!("{}", json_str);
         } else {
-            let table_str =
-                SnapshotFormatter::format_expire_table(to_expire.len(), cutoff_timestamp, false);
-            println!("{}", table_str);
-            println!();
-            println!(
-                "{}",
-                "Note: Data files are NOT deleted. Use 'icectl vacuum' to remove orphaned data files.".dimmed()
+            let table_str = SnapshotFormatter::format_expire_table(
+                result.expired_count,
+                result.cutoff_timestamp,
+                result.dry_run,
             );
+            println!("{}", table_str);
+
+            if !result.dry_run {
+                println!();
+                println!(
+                    "{}",
+                    "Note: Data files are NOT deleted. Use 'icectl vacuum' to remove orphaned data files.".dimmed()
+                );
+            }
         }
 
         Ok(())
     }
+
     async fn iceberg_set(
         path: &str,
         id: Option<i64>,
@@ -410,127 +284,29 @@ impl SnapshotCommand {
         dry_run: bool,
         output: &str,
     ) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
-        use crate::core::storage::StorageBackendFactory;
-        use crate::core::storage::traits::PutOptions;
-        use iceberg::spec::MAIN_BRANCH;
+        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        let config = SnapshotConfig { dry_run };
+        let snapshot_service = SnapshotService::with_config(config);
 
-        let service = IcebergMetadataService::new_async(path.to_string()).await?;
-        let (metadata, current_version) = service.load_metadata().await?;
-
-        let target_id = if let Some(id) = id {
-            id
-        } else if let Some(as_of) = &as_of {
-            let cutoff = parse_timestamp(as_of)?;
-            let cutoff_ms = cutoff.timestamp_millis();
-
-            // Find snapshot at or before timestamp
-            let snapshots: Vec<_> = metadata.snapshots().collect();
-            let mut best: Option<i64> = None;
-            let mut best_ts = i64::MIN;
-
-            for snap in &snapshots {
-                if snap.timestamp_ms() <= cutoff_ms && snap.timestamp_ms() > best_ts {
-                    best = Some(snap.snapshot_id());
-                    best_ts = snap.timestamp_ms();
-                }
-            }
-
-            best.ok_or_else(|| Error::General(format!("No snapshot found before {}", as_of)))?
-        } else {
-            return Err(Error::General("Must specify --id or --as-of".to_string()));
-        };
-
-        // Verify snapshot exists
-        let _ = metadata
-            .snapshot_by_id(target_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", target_id)))?;
-
-        let current_id = metadata.current_snapshot_id();
-
-        if dry_run {
-            if output == "json" {
-                let json_str =
-                    SnapshotFormatter::format_set_json(current_id, target_id, None, true)
-                        .map_err(|e| Error::General(e.to_string()))?;
-                println!("{}", json_str);
-            } else {
-                let table_str =
-                    SnapshotFormatter::format_set_table(current_id, target_id, None, true);
-                println!("{}", table_str);
-            }
-            return Ok(());
-        }
-
-        // Build new metadata with target snapshot as current
-        // Use set_ref instead of set_branch_snapshot because the snapshot already exists
-        use iceberg::spec::{SnapshotReference, SnapshotRetention};
-
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-
-        // Create a branch reference pointing to the existing snapshot
-        let branch_ref = SnapshotReference {
-            snapshot_id: target_id,
-            retention: SnapshotRetention::Branch {
-                min_snapshots_to_keep: None,
-                max_snapshot_age_ms: None,
-                max_ref_age_ms: None,
-            },
-        };
-
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path.clone()))
-            .set_ref(MAIN_BRANCH, branch_ref)
-            .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
-
-        let new_metadata = build_result.metadata;
-
-        // Write new metadata file
-        let storage = StorageBackendFactory::create_backend(path).await?;
-        let metadata_dir = format!("{}/metadata", path.trim_end_matches('/'));
-        let new_version = ((current_version + 1) as i64) as i64;
-        let new_metadata_filename = format!("v{}.metadata.json", new_version);
-        let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
-
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
-            .await?;
-
-        // Update version-hint.text
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(new_version.to_string()),
-                &PutOptions::default(),
-            )
+        let result = snapshot_service
+            .set_current_snapshot(&metadata_service, path, id, as_of)
             .await?;
 
         if output == "json" {
             let json_str = SnapshotFormatter::format_set_json(
-                current_id,
-                target_id,
-                Some(new_version as i64),
-                false,
+                result.previous_id,
+                result.current_id,
+                result.new_version,
+                result.dry_run,
             )
             .map_err(|e| Error::General(e.to_string()))?;
             println!("{}", json_str);
         } else {
             let table_str = SnapshotFormatter::format_set_table(
-                current_id,
-                target_id,
-                Some(new_version as i64),
-                false,
+                result.previous_id,
+                result.current_id,
+                result.new_version,
+                result.dry_run,
             );
             println!("{}", table_str);
         }
@@ -539,25 +315,9 @@ impl SnapshotCommand {
     }
 
     async fn iceberg_cherrypick(_path: &str, snapshot_id: i64, _output: &str) -> Result<()> {
-        // TODO: Implement cherry-pick using iceberg-rs Transaction API
-        // Cherry-pick in Iceberg creates a new snapshot that applies the changes
-        // from a specific snapshot onto the current table state. This requires:
-        // 1. Reading the manifest files from the source snapshot
-        // 2. Applying those data file additions/deletions to current state
-        // 3. Creating a new snapshot with the merged changes
-        //
-        // This is a complex operation that needs careful handling of:
-        // - Conflict detection with current snapshot
-        // - Schema compatibility validation
-        // - Partition spec compatibility
-        //
-        // For now, users should use catalog tools (e.g., Spark, Trino) for cherry-pick.
-        Err(Error::General(format!(
-            "Cherry-pick is not yet implemented. Snapshot {} cannot be cherry-picked.\n\
-             This feature requires the iceberg-rs Transaction API.\n\
-             Workaround: Use Spark or Trino SQL: \
-             CALL system.cherrypick_snapshot('table', {})",
-            snapshot_id, snapshot_id
-        )))
+        let snapshot_service = SnapshotService::new();
+        snapshot_service
+            .cherry_pick_snapshot(_path, snapshot_id)
+            .await
     }
 }

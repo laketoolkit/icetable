@@ -177,8 +177,7 @@ impl VacuumCommand {
             referenced_files.len().to_string().cyan()
         );
         println!(
-            "Files {}:   {} ({})",
-            "to delete",
+            "Files to delete:   {} ({})",
             orphan_files.len().to_string().cyan(),
             format_bytes(orphan_bytes)
         );

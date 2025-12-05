@@ -304,7 +304,7 @@ fn generate_larger_arrow() -> Result<(), Box<dyn std::error::Error>> {
     ]));
 
     let num_rows = 100;
-    let categories = vec!["A", "B", "C", "D"];
+    let categories = ["A", "B", "C", "D"];
 
     let id_data: Vec<i64> = (0..num_rows).collect();
     let category_data: Vec<&str> = (0..num_rows)
@@ -549,7 +549,6 @@ fn generate_parquet_with_advanced_features() -> Result<(), Box<dyn std::error::E
 }
 
 /// Generate a complete Iceberg table with manifests
-#[cfg(feature = "iceberg")]
 fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     use apache_avro::{Writer, types::Record};
     use serde_json::json;
@@ -858,11 +857,5 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTo upload to S3:");
     println!("  aws s3 sync {} s3://tablectl/iceberg-table/", table_dir);
 
-    Ok(())
-}
-
-#[cfg(not(feature = "iceberg"))]
-fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Skipping Iceberg table generation (iceberg feature not enabled)");
     Ok(())
 }

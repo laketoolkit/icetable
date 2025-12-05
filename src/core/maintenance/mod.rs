@@ -6,10 +6,15 @@
 
 mod optimize;
 mod repair;
+mod snapshot;
 mod vacuum;
 
 pub use optimize::OptimizeService;
 pub use repair::{RepairAnalysis, RepairService};
+pub use snapshot::{
+    CreateBackupResult, ExpireSnapshotsResult, ListSnapshotsResult, SetSnapshotResult,
+    SnapshotConfig, SnapshotDetails, SnapshotService,
+};
 pub use vacuum::{VacuumAnalysis, VacuumConfig, VacuumService};
 
 use std::collections::HashMap;

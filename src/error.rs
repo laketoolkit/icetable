@@ -4,7 +4,7 @@
 //! All errors implement std::error::Error and are designed to provide actionable
 //! error messages to users.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// The main error type for TableTools operations
@@ -203,14 +203,14 @@ impl Error {
         }
     }
 
-    fn file_not_found_suggestion(path: &PathBuf) -> String {
+    fn file_not_found_suggestion(path: &Path) -> String {
         format!(
             "File not found: {}\n\nPossible solutions:\n  1. Check the file path is correct\n  2. Verify you have read permissions\n  3. If on cloud storage, ensure credentials are configured",
             path.display()
         )
     }
 
-    fn permission_denied_suggestion(path: &PathBuf) -> String {
+    fn permission_denied_suggestion(path: &Path) -> String {
         format!(
             "Permission denied: {}\n\nTry:\n  1. Check file permissions: ls -l {}\n  2. Verify you have the necessary access rights",
             path.display(),
@@ -218,7 +218,7 @@ impl Error {
         )
     }
 
-    fn corrupted_file_suggestion(path: &PathBuf, reason: &str) -> String {
+    fn corrupted_file_suggestion(path: &Path, reason: &str) -> String {
         format!(
             "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: icectl validate {}\n  3. Check file type: file {}",
             path.display(),

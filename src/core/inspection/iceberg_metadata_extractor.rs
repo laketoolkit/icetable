@@ -1,7 +1,7 @@
 //! Iceberg metadata extraction utilities
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::core::inspection::PhysicalInspectOptions;
 use crate::core::inspection::traits::{ColumnInfo, FileInfo, VerbosityLevel};
@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 
 /// Extract file information from Iceberg metadata
 pub fn extract_file_info(
-    path: &PathBuf,
+    path: &Path,
     metadata: &serde_json::Value,
     metadata_path: &str,
     options: &PhysicalInspectOptions,
