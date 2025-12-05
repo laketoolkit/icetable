@@ -9,6 +9,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use futures::StreamExt;
 use iceberg::TableIdent;
 use iceberg::io::FileIOBuilder;
 use iceberg::table::StaticTable;
@@ -150,7 +151,7 @@ impl IcebergHandler {
         let file_io = Self::create_file_io(&table_path)?;
 
         // Create a table identifier (just for identification purposes)
-        let table_ident = TableIdent::from_strs(&["iceberg", "table"])
+        let table_ident = TableIdent::from_strs(["iceberg", "table"])
             .map_err(|e| Error::General(format!("Failed to create table identifier: {}", e)))?;
 
         // Load the static table from the metadata file
@@ -395,38 +396,50 @@ impl FormatHandler for IcebergHandler {
 
         // Get format version
         let format_version = metadata.format_version();
-        metadata_map.insert("format_version".to_string(), format_version.to_string());
 
-        // Get current snapshot info
+        // Extract snapshot summary statistics
+        let mut num_rows: Option<i64> = None;
+        let mut compressed_size: Option<u64> = None;
+        let mut created_at: Option<chrono::DateTime<chrono::Utc>> = None;
+
         if let Some(snapshot) = metadata.current_snapshot() {
-            metadata_map.insert(
-                "snapshot_id".to_string(),
-                snapshot.snapshot_id().to_string(),
-            );
-            metadata_map.insert(
-                "timestamp_ms".to_string(),
-                snapshot.timestamp_ms().to_string(),
-            );
+            // Snapshot timestamp
+            created_at = chrono::DateTime::from_timestamp_millis(snapshot.timestamp_ms());
 
-            // snapshot.summary() returns &Summary, iterate over additional_properties
-            let summary = snapshot.summary();
-            for (key, value) in summary.additional_properties.iter() {
-                metadata_map.insert(format!("snapshot.{}", key), value.clone());
+            // Extract summary properties
+            let summary = &snapshot.summary().additional_properties;
+
+            if let Some(records) = summary.get("total-records") {
+                num_rows = records.parse().ok();
+            }
+
+            if let Some(size) = summary.get("total-files-size") {
+                compressed_size = size.parse().ok();
+            }
+
+            // Copy useful summary fields directly (without prefix)
+            for key in &[
+                "operation",
+                "total-data-files",
+                "total-delete-files",
+                "added-records",
+                "deleted-records",
+                "added-data-files",
+                "deleted-data-files",
+            ] {
+                if let Some(value) = summary.get(*key) {
+                    metadata_map.insert(key.to_string(), value.clone());
+                }
             }
         }
 
-        // Get table properties
-        for (key, value) in metadata.properties() {
-            metadata_map.insert(format!("property.{}", key), value.clone());
-        }
-
         Ok(FileMetadata {
-            num_rows: None, // Would need to parse from snapshot summary
-            compressed_size: None,
+            num_rows,
+            compressed_size,
             uncompressed_size: None,
             compression: None,
             format_version: Some(format_version.to_string()),
-            created_at: None,
+            created_at,
             metadata: metadata_map,
         })
     }
@@ -469,7 +482,6 @@ impl FormatHandler for IcebergHandler {
             .map_err(|e| Error::General(format!("Failed to execute Iceberg scan: {}", e)))?;
 
         // Read all batches from the stream
-        use futures::stream::StreamExt;
         let mut batches = Vec::new();
 
         let mut stream = std::pin::pin!(stream);
@@ -486,36 +498,140 @@ impl FormatHandler for IcebergHandler {
     }
 
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>> {
-        let schema = self.read_schema().await?;
+        use iceberg::spec::{ManifestContentType, ManifestList, ManifestStatus};
+        use std::collections::{HashMap, HashSet};
+
         let table = self.open_table().await?;
         let metadata = table.metadata();
+        let schema = metadata.current_schema();
 
-        // Get total record count from snapshot summary
         let total_records = metadata
             .current_snapshot()
             .and_then(|s| s.summary().additional_properties.get("total-records"))
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(0);
 
-        // Build stats with row count
-        // Note: We store total_records in distinct_count only for the first column
-        // to pass it to the stats operation for row count calculation
-        let stats: Vec<ColumnStats> = schema
-            .fields
+        // Initialize stats per field_id
+        let mut null_counts: HashMap<i32, i64> = HashMap::new();
+        let mut min_values: HashMap<i32, String> = HashMap::new();
+        let mut max_values: HashMap<i32, String> = HashMap::new();
+
+        for field in schema.as_struct().fields() {
+            null_counts.insert(field.id, 0);
+        }
+
+        // Helper closure to build result
+        let build_result = |nulls: &HashMap<i32, i64>,
+                            mins: &HashMap<i32, String>,
+                            maxs: &HashMap<i32, String>| {
+            schema
+                .as_struct()
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(idx, field)| ColumnStats {
+                    name: field.name.clone(),
+                    null_count: nulls.get(&field.id).copied(),
+                    distinct_count: if idx == 0 { Some(total_records) } else { None },
+                    min_value: mins.get(&field.id).cloned(),
+                    max_value: maxs.get(&field.id).cloned(),
+                    mean: None,
+                    std_dev: None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let current_snapshot = match metadata.current_snapshot() {
+            Some(s) => s,
+            None => return Ok(build_result(&null_counts, &min_values, &max_values)),
+        };
+
+        let file_io = Self::create_file_io(&self.path.to_string_lossy())?;
+
+        let content = file_io
+            .new_input(current_snapshot.manifest_list())
+            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
+            .read()
+            .await
+            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
+
+        let manifest_list =
+            ManifestList::parse_with_version(&content, metadata.format_version())
+                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+
+        // Filter to data manifests only
+        let data_entries: Vec<_> = manifest_list
+            .entries()
             .iter()
-            .enumerate()
-            .map(|(idx, field)| ColumnStats {
-                name: field.name().clone(),
-                null_count: Some(0), // Assume no nulls unless we read manifests
-                distinct_count: if idx == 0 { Some(total_records) } else { None },
-                min_value: None,
-                max_value: None,
-                mean: None,
-                std_dev: None,
-            })
+            .filter(|e| e.content == ManifestContentType::Data)
             .collect();
 
-        Ok(stats)
+        // Load all manifests in parallel
+        let manifest_futures: Vec<_> = data_entries
+            .iter()
+            .map(|entry| entry.load_manifest(&file_io))
+            .collect();
+
+        let manifests: Vec<_> = futures::future::join_all(manifest_futures)
+            .await
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Single pass: collect deleted paths and aggregate stats
+        let mut deleted: HashSet<String> = HashSet::new();
+
+        // First collect all deleted file paths
+        for manifest in &manifests {
+            for entry in manifest.entries() {
+                if entry.status() == ManifestStatus::Deleted {
+                    deleted.insert(entry.data_file().file_path().to_string());
+                }
+            }
+        }
+
+        // Then aggregate stats from alive files
+        for manifest in &manifests {
+            for entry in manifest.entries() {
+                if entry.status() == ManifestStatus::Deleted {
+                    continue;
+                }
+                let df = entry.data_file();
+                if deleted.contains(df.file_path()) {
+                    continue;
+                }
+
+                for (&fid, &cnt) in df.null_value_counts() {
+                    *null_counts.entry(fid).or_insert(0) += cnt as i64;
+                }
+
+                for (&fid, datum) in df.lower_bounds() {
+                    let v = format!("{}", datum);
+                    min_values
+                        .entry(fid)
+                        .and_modify(|cur| {
+                            if v < *cur {
+                                *cur = v.clone();
+                            }
+                        })
+                        .or_insert(v);
+                }
+
+                for (&fid, datum) in df.upper_bounds() {
+                    let v = format!("{}", datum);
+                    max_values
+                        .entry(fid)
+                        .and_modify(|cur| {
+                            if v > *cur {
+                                *cur = v.clone();
+                            }
+                        })
+                        .or_insert(v);
+                }
+            }
+        }
+
+        Ok(build_result(&null_counts, &min_values, &max_values))
     }
 
     async fn validate(&self, _quick: bool) -> Result<ValidationReport> {
@@ -783,10 +899,10 @@ impl FormatHandler for IcebergHandler {
 fn get_current_version(metadata_dir: &str) -> Result<i32> {
     // Try version-hint.text first
     let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-    if let Ok(content) = std::fs::read_to_string(&version_hint_path) {
-        if let Ok(version) = content.trim().parse::<i32>() {
-            return Ok(version);
-        }
+    if let Ok(content) = std::fs::read_to_string(&version_hint_path)
+        && let Ok(version) = content.trim().parse::<i32>()
+    {
+        return Ok(version);
     }
 
     // Fallback: scan for v*.metadata.json files
@@ -794,15 +910,14 @@ fn get_current_version(metadata_dir: &str) -> Result<i32> {
     if let Ok(entries) = std::fs::read_dir(metadata_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('v') && name.ends_with(".metadata.json") {
-                if let Some(version_str) = name
+            if name.starts_with('v')
+                && name.ends_with(".metadata.json")
+                && let Some(version_str) = name
                     .strip_prefix('v')
                     .and_then(|s| s.strip_suffix(".metadata.json"))
-                {
-                    if let Ok(v) = version_str.parse::<i32>() {
-                        max_version = max_version.max(v);
-                    }
-                }
+                && let Ok(v) = version_str.parse::<i32>()
+            {
+                max_version = max_version.max(v);
             }
         }
     }

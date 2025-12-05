@@ -15,7 +15,6 @@ pub mod delta;
 #[cfg(feature = "delta")]
 pub mod delta_storage_options;
 
-#[cfg(feature = "iceberg")]
 pub mod iceberg;
 
 // Re-export core types
@@ -28,5 +27,4 @@ pub use traits::{
 #[cfg(feature = "delta")]
 pub use delta::DeltaHandler;
 
-#[cfg(feature = "iceberg")]
 pub use iceberg::IcebergHandler;

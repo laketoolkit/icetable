@@ -392,22 +392,14 @@ impl FormatHandlerFactory {
                 ));
             }
             "iceberg" => {
-                #[cfg(feature = "iceberg")]
-                {
-                    let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
-                    return Ok(Box::new(handler));
-                }
-                #[cfg(not(feature = "iceberg"))]
-                return Err(crate::error::Error::General(
-                    "Iceberg support not enabled".to_string(),
-                ));
-            }
+                let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
+                Ok(Box::new(handler))
+            },
             _ => Err(crate::error::Error::InvalidFormat {
                 message: format!("Unknown format: {}", format),
             }),
         }
     }
-
     /// Detect the table format and create an appropriate handler
     #[allow(unused_variables)]
     pub async fn create_handler(
@@ -430,7 +422,6 @@ impl FormatHandlerFactory {
 
             // Check for Iceberg (metadata directory with .metadata.json files)
             if Self::check_iceberg_exists(path_str, &storage).await {
-                #[cfg(feature = "iceberg")]
                 {
                     let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
                     return Ok(Box::new(handler));
@@ -453,7 +444,6 @@ impl FormatHandlerFactory {
         }
 
         // Try Iceberg
-        #[cfg(feature = "iceberg")]
         {
             let iceberg_handler = crate::core::formats::IcebergHandler::new(path, storage)?;
             if iceberg_handler.can_handle(path).await? {

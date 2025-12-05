@@ -48,7 +48,6 @@ impl PhysicalInspectorRegistry {
         registry.register(super::delta::DeltaInspectorFactory);
 
         // Register Iceberg inspector (priority 75)
-        #[cfg(feature = "iceberg")]
         registry.register(super::iceberg::IcebergInspectorFactory);
 
         registry

@@ -1,38 +1,6 @@
 //! Box frame utility for creating perfectly aligned text boxes
 
-use unicode_width::UnicodeWidthStr;
-
-/// Strip ANSI escape codes from a string to calculate visual width
-fn strip_ansi_codes(s: &str) -> String {
-    let mut result = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1B' {
-            // ESC character - start of escape sequence
-            if chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
-                // Skip until we hit a letter (the command character)
-                while let Some(&next_ch) = chars.peek() {
-                    chars.next();
-                    if next_ch.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result
-}
-
-/// Get the visual width of a string (after stripping ANSI codes)
-fn visual_width(s: &str) -> usize {
-    let stripped = strip_ansi_codes(s);
-    UnicodeWidthStr::width(stripped.as_str())
-}
+use crate::utils::visual_width;
 
 /// Create a framed box with optional title and content lines
 ///
@@ -93,6 +61,7 @@ pub fn create_box_frame(title: Option<&str>, lines: Vec<String>, width: Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::strip_ansi_codes;
 
     #[test]
     fn test_visual_width() {

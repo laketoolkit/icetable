@@ -6,10 +6,12 @@
 
 mod traits;
 
-#[cfg(feature = "iceberg")]
 mod iceberg;
+mod iceberg_operations;
+mod iceberg_partition;
+mod iceberg_writer;
 
 pub use traits::*;
 
-#[cfg(feature = "iceberg")]
 pub use iceberg::IcebergMetadataService;
+pub use iceberg_writer::IcebergSnapshotWriter;

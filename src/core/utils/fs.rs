@@ -6,9 +6,54 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 
-/// Normalize a file path by stripping the file:// prefix if present
+/// Normalize a file path for consistent comparison
+///
+/// This function ensures paths are consistently formatted:
+/// - Strips `file://` prefix if present
+/// - Removes trailing slashes (except for root "/")
+///
+/// Use this function when comparing paths from different sources
+/// (e.g., metadata vs filesystem) to avoid false mismatches.
 pub fn normalize_path(path: &str) -> String {
-    path.strip_prefix("file://").unwrap_or(path).to_string()
+    let path = path.strip_prefix("file://").unwrap_or(path);
+    // Remove trailing slash unless it's the root path
+    let path = path.strip_suffix('/').unwrap_or(path);
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Normalize both paths and compute the relative path from base to full
+///
+/// Returns the relative portion of `full_path` after removing `base_path`.
+/// Handles `file://` prefixes transparently.
+///
+/// # Examples
+/// ```ignore
+/// normalize_relative_path("/data/table/file.parquet", "/data/table")
+/// // Returns: "file.parquet"
+///
+/// normalize_relative_path("file:///data/table/file.parquet", "/data/table")
+/// // Returns: "file.parquet"
+/// ```
+pub fn normalize_relative_path(full_path: &str, base_path: &str) -> Option<String> {
+    let normalized_full = normalize_path(full_path);
+    let normalized_base = normalize_path(base_path);
+
+    // Try to strip the base path
+    if let Some(relative) = normalized_full.strip_prefix(&normalized_base) {
+        let relative = relative.trim_start_matches('/');
+        if relative.is_empty() {
+            None
+        } else {
+            Some(relative.to_string())
+        }
+    } else {
+        // Paths don't share the same base
+        None
+    }
 }
 
 /// Information about a scanned file
@@ -94,7 +139,7 @@ fn scan_directory_recursive(
             scan_directory_recursive(&path, config, files)?;
         } else if path
             .extension()
-            .map_or(false, |ext| ext == config.extension.as_str())
+            .is_some_and(|ext| ext == config.extension.as_str())
         {
             let scanned = scan_single_file(&path, config.cutoff_timestamp)?;
             if let Some(file) = scanned {
@@ -129,10 +174,10 @@ fn scan_single_file(path: &Path, cutoff_timestamp: Option<i64>) -> Result<Option
         .unwrap_or(0);
 
     // Apply cutoff filter if specified
-    if let Some(cutoff) = cutoff_timestamp {
-        if mtime >= cutoff {
-            return Ok(None);
-        }
+    if let Some(cutoff) = cutoff_timestamp
+        && mtime >= cutoff
+    {
+        return Ok(None);
     }
 
     Ok(Some(ScannedFile {

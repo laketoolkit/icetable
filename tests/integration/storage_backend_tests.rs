@@ -1,9 +1,7 @@
 //! Unit tests for LocalStorageBackend
 
 use bytes::Bytes;
-use icebergctl::core::storage::{
-    GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend,
-};
+use icectl::core::storage::{GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend};
 
 fn create_backend() -> LocalBackend {
     LocalBackend::new().unwrap()

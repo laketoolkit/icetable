@@ -25,16 +25,15 @@ async fn main() {
 
     // Execute command and handle errors
     let result = match cli.command {
+        Commands::Analyze(args) => AnalyzeCommand::execute(args).await,
         Commands::Init(args) => InitCommand::execute(args).await,
         Commands::Inspect(args) => InspectCommand::execute(args).await,
         Commands::Validate(args) => ValidateCommand::execute(args).await,
         Commands::Diff(args) => DiffCommand::execute(args).await,
-        Commands::Convert(args) => ConvertCommand::execute(args).await,
         Commands::Stats(args) => StatsCommand::execute(args).await,
         Commands::History(args) => HistoryCommand::execute(args).await,
         Commands::Vacuum(args) => VacuumCommand::execute(args).await,
         Commands::Optimize(args) => OptimizeCommand::execute(args).await,
-        Commands::Restore(args) => RestoreCommand::execute(args).await,
         Commands::Snapshot(args) => SnapshotCommand::execute(args).await,
         Commands::Repair(args) => RepairCommand::execute(args).await,
         Commands::Import(cmd) => match cmd {
@@ -44,7 +43,6 @@ async fn main() {
         },
         Commands::Branch(args) => BranchCommand::execute(args).await,
         Commands::Tag(args) => TagCommand::execute(args).await,
-        Commands::Generate(args) => GenerateCommand::execute(args).await,
         Commands::Config(args) => ConfigCommand::execute(args).await,
         #[cfg(feature = "tui")]
         Commands::Tui(args) => TuiCommand::execute(args).await,

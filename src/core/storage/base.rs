@@ -198,17 +198,17 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
 
             objects.push(ObjectMetadata {
                 path: full_path,
-                size: meta.size as u64,
+                size: meta.size,
                 last_modified: meta.last_modified,
                 e_tag: meta.e_tag,
                 content_type: None,
             });
 
             // Respect max_results limit
-            if let Some(max) = options.max_results {
-                if objects.len() >= max {
-                    break;
-                }
+            if let Some(max) = options.max_results
+                && objects.len() >= max
+            {
+                break;
             }
         }
 

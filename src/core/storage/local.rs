@@ -159,10 +159,10 @@ impl StorageBackend for LocalBackend {
             }
 
             // Apply max_results limit if specified
-            if let Some(max) = options.max_results {
-                if objects.len() + prefixes.len() >= max {
-                    break;
-                }
+            if let Some(max) = options.max_results
+                && objects.len() + prefixes.len() >= max
+            {
+                break;
             }
         }
 

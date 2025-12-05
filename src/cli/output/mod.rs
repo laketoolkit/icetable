@@ -5,7 +5,11 @@ mod box_item;
 mod box_layout;
 mod box_renderer;
 mod box_section;
+mod diff_formatter;
 pub mod formatter;
+mod icons;
+mod inspect_formatter;
+mod snapshot_formatter;
 
 // Re-exports públicos
 pub use box_container::Box;
@@ -13,4 +17,8 @@ pub use box_item::BoxItem;
 pub use box_layout::{BoxLayout, BoxStyle};
 pub use box_renderer::BoxRenderer;
 pub use box_section::{BoxSection, SectionStyle};
-pub use formatter::{OutputFormatter, SeverityIcon, StatusIcon};
+pub use diff_formatter::DiffFormatter;
+pub use formatter::OutputFormatter;
+pub use icons::{SeverityIcon, StatusIcon};
+pub use inspect_formatter::InspectionFormatter;
+pub use snapshot_formatter::{SnapshotFormatter, SnapshotInfo};

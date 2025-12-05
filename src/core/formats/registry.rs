@@ -121,7 +121,6 @@ impl FormatHandlerRegistry {
         }
 
         // Try Iceberg
-        #[cfg(feature = "iceberg")]
         {
             let handler = super::IcebergHandler::with_time_travel(path, storage, time_travel)?;
             if handler.can_handle(path).await? {
@@ -143,7 +142,6 @@ impl FormatHandlerRegistry {
         });
 
         // Iceberg (feature-gated)
-        #[cfg(feature = "iceberg")]
         self.register("iceberg", 80, |path, storage| {
             Ok(Box::new(super::IcebergHandler::new(path, storage)?))
         });

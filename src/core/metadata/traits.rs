@@ -4,8 +4,10 @@
 //! on Iceberg tables.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -166,6 +168,11 @@ pub trait MetadataService: Send + Sync {
 
     /// Get the table's schema (as Arrow schema)
     async fn schema(&self) -> Result<std::sync::Arc<arrow::datatypes::Schema>>;
+
+    /// Get an ObjectStore implementation for async I/O operations
+    ///
+    /// This is used for async parquet reading/writing during compaction.
+    fn object_store(&self) -> Arc<dyn ObjectStore>;
 }
 
 /// Result of a maintenance operation

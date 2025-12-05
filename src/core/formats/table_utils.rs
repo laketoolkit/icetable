@@ -101,11 +101,7 @@ pub fn apply_batch_pagination(
         }
 
         // Calculate which portion of this batch to include
-        let skip_rows = if total_rows_processed < offset {
-            offset - total_rows_processed
-        } else {
-            0
-        };
+        let skip_rows = offset.saturating_sub(total_rows_processed);
 
         let take_rows = (batch_rows - skip_rows).min(limit - total_rows_collected);
 

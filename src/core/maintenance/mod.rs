@@ -30,6 +30,8 @@ pub struct MaintenanceConfig {
     pub dry_run: bool,
     /// Number of parallel operations
     pub parallelism: usize,
+    /// Filter to specific partition (e.g., "day=2024-01-01/currency=USD")
+    pub partition_filter: Option<String>,
 }
 
 impl Default for MaintenanceConfig {
@@ -40,6 +42,7 @@ impl Default for MaintenanceConfig {
             max_size: sizes::DEFAULT_MAX_SIZE,
             dry_run: false,
             parallelism: 4,
+            partition_filter: None,
         }
     }
 }

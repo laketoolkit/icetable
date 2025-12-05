@@ -17,7 +17,7 @@ pub fn format_number(n: i64) -> String {
     let chars: Vec<char> = s.chars().collect();
 
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 && *c != '-' {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) && *c != '-' {
             result.push(',');
         }
         result.push(*c);

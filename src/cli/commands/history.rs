@@ -21,6 +21,8 @@ pub struct HistoryEntry {
     pub operation: String,
     /// Additional details about the operation
     pub details: std::collections::HashMap<String, String>,
+    /// Whether this is the current snapshot
+    pub is_current: bool,
 }
 
 /// Handler for history command
@@ -33,12 +35,12 @@ impl HistoryCommand {
         let ctx = TableContext::from_path(args.path.clone()).await?;
 
         // 2. Verify format
-        if let Some(ref fmt) = args.format {
-            if fmt.to_lowercase() != "iceberg" {
-                return Err(Error::UnsupportedFeature {
+        if let Some(ref fmt) = args.format
+            && fmt.to_lowercase() != "iceberg"
+        {
+            return Err(Error::UnsupportedFeature {
                     feature: "Only Iceberg tables are supported. Use 'icectl import delta' to convert Delta tables.".to_string(),
                 });
-            }
         }
         ctx.require_iceberg()?;
 
@@ -53,10 +55,11 @@ impl HistoryCommand {
     async fn get_history(ctx: &TableContext, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
         let (metadata, _) = ctx.iceberg_metadata().await?;
 
-        let limit = if args.all { usize::MAX } else { args.limit };
+        let current_snapshot_id = metadata.current_snapshot_id();
         let mut entries = Vec::new();
 
-        for snapshot in metadata.snapshots().take(limit) {
+        // Collect ALL snapshots first, then sort, then apply limit
+        for snapshot in metadata.snapshots() {
             let summary = snapshot.summary();
             let mut details = std::collections::HashMap::new();
 
@@ -75,11 +78,17 @@ impl HistoryCommand {
                 timestamp,
                 operation: format!("{:?}", summary.operation),
                 details,
+                is_current: Some(snapshot.snapshot_id()) == current_snapshot_id,
             });
         }
 
         // Sort by timestamp descending (newest first)
         entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+        // Apply limit AFTER sorting
+        if !args.all {
+            entries.truncate(args.limit);
+        }
 
         Ok(entries)
     }
@@ -99,21 +108,28 @@ impl HistoryCommand {
             return Ok(());
         }
 
+        // Snapshot IDs can be up to 19 digits (i64), use 20 char width
         println!(
-            "{:>18} | {:^19} | {:^15} | {}",
+            "    {:>20} | {:^19} | {:^10} | {}",
             "Snapshot ID".bold(),
             "Timestamp".bold(),
             "Operation".bold(),
             "Details".bold()
         );
-        println!("{}", "-".repeat(80));
+        println!("{}", "─".repeat(105));
 
         for entry in entries {
             let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
             let details_str = Self::format_details(&entry.details);
+            let marker = if entry.is_current {
+                "●".green().bold().to_string()
+            } else {
+                " ".to_string()
+            };
 
             println!(
-                "{:>18} | {} | {:^15} | {}",
+                " {}  {:>20} | {} | {:^10} | {}",
+                marker,
                 entry.version.to_string().cyan(),
                 timestamp,
                 entry.operation.green(),
@@ -158,6 +174,7 @@ impl HistoryCommand {
                     "timestamp": e.timestamp.to_rfc3339(),
                     "operation": e.operation,
                     "details": e.details,
+                    "is_current": e.is_current,
                 })
             })
             .collect();

@@ -15,16 +15,21 @@ use async_trait::async_trait;
 use iceberg::TableIdent;
 use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::spec::{
-    DataContentType, DataFile, DataFileBuilder, DataFileFormat, MAIN_BRANCH,
-    ManifestList, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, Snapshot, Struct,
-    Summary, TableMetadata, TableMetadataBuilder,
+    DataFile, ManifestList, ManifestStatus, Summary, TableMetadata,
 };
 use iceberg::table::StaticTable;
+use object_store::ObjectStore;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
-use crate::core::utils::{extract_version_from_filename, find_latest_metadata};
+use crate::core::storage::{ObjectStoreAdapter, StorageBackend, StorageBackendFactory, s3};
+use crate::core::utils::{
+    extract_version_from_filename, find_latest_metadata, iceberg_to_arrow_type,
+};
 use crate::error::{Error, Result};
+
+use super::iceberg_operations;
+use super::iceberg_partition;
+use super::iceberg_writer::IcebergSnapshotWriter;
 
 /// Iceberg metadata service for transactional operations
 pub struct IcebergMetadataService {
@@ -35,24 +40,6 @@ pub struct IcebergMetadataService {
 
 impl IcebergMetadataService {
     /// Create a new Iceberg metadata service
-    pub fn new(table_path: String) -> Result<Self> {
-        // This is a sync constructor, so we create a minimal version
-        // The actual initialization happens in new_async
-        let file_io = FileIOBuilder::new_fs_io()
-            .build()
-            .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))?;
-
-        // Create a dummy storage for now - will be replaced in new_async
-        let storage: Arc<dyn StorageBackend> = Arc::new(DummyStorage);
-
-        Ok(Self {
-            table_path,
-            file_io,
-            storage,
-        })
-    }
-
-    /// Create a new Iceberg metadata service with async initialization
     pub async fn new_async(table_path: String) -> Result<Self> {
         let file_io = Self::create_file_io(&table_path)?;
         let storage = StorageBackendFactory::create_backend(&table_path).await?;
@@ -112,16 +99,13 @@ impl IcebergMetadataService {
     }
 
     /// Get the metadata directory path
-    fn metadata_dir(&self) -> String {
-        format!("{}/metadata", self.table_path.trim_end_matches('/'))
-    }
 
     /// Load current table metadata
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
         let metadata_file = find_latest_metadata(&self.table_path, &self.storage).await?;
         let version = extract_version_from_filename(&metadata_file);
 
-        let table_ident = TableIdent::from_strs(&["iceberg", "table"])
+        let table_ident = TableIdent::from_strs(["iceberg", "table"])
             .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;
 
         let static_table =
@@ -137,302 +121,19 @@ impl IcebergMetadataService {
         &self.file_io
     }
 
+    /// Get the table path
+    pub fn table_path(&self) -> &str {
+        &self.table_path
+    }
+
+    /// Get the storage backend
+    pub fn storage(&self) -> &Arc<dyn StorageBackend> {
+        &self.storage
+    }
+
     /// Get current metadata file path
     pub async fn current_metadata_path(&self) -> Result<String> {
         find_latest_metadata(&self.table_path, &self.storage).await
-    }
-}
-
-/// Dummy storage for sync constructor (will be replaced in async init)
-struct DummyStorage;
-
-#[async_trait]
-impl StorageBackend for DummyStorage {
-    fn storage_type(&self) -> &str {
-        "dummy"
-    }
-
-    async fn exists(&self, _path: &str) -> Result<bool> {
-        Ok(false)
-    }
-
-    async fn head(&self, path: &str) -> Result<crate::core::storage::traits::ObjectMetadata> {
-        Err(Error::General(format!(
-            "DummyStorage: cannot head {}",
-            path
-        )))
-    }
-
-    async fn get(
-        &self,
-        path: &str,
-        _options: &crate::core::storage::traits::GetOptions,
-    ) -> Result<bytes::Bytes> {
-        Err(Error::General(format!("DummyStorage: cannot get {}", path)))
-    }
-
-    async fn put(
-        &self,
-        _path: &str,
-        _data: bytes::Bytes,
-        _options: &crate::core::storage::traits::PutOptions,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    async fn list(
-        &self,
-        _options: &crate::core::storage::traits::ListOptions,
-    ) -> Result<crate::core::storage::traits::ListResult> {
-        Ok(crate::core::storage::traits::ListResult {
-            objects: vec![],
-            prefixes: vec![],
-            continuation_token: None,
-        })
-    }
-
-    async fn delete(&self, _path: &str) -> Result<()> {
-        Ok(())
-    }
-
-    async fn copy(&self, _from: &str, _to: &str) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl IcebergMetadataService {
-    /// Write a manifest file containing the given data files
-    async fn write_manifest(
-        &self,
-        data_files: &[DataFile],
-        snapshot_id: i64,
-        sequence_number: i64,
-        metadata: &TableMetadata,
-        timestamp_nanos: u128,
-    ) -> Result<iceberg::spec::ManifestFile> {
-        let iceberg_schema = metadata.current_schema();
-        let partition_spec = metadata.default_partition_spec();
-
-        let manifest_filename = format!("{:016x}-m0.avro", timestamp_nanos);
-        let manifest_path = format!("{}/{}", self.metadata_dir(), manifest_filename);
-
-        let output_file = self
-            .file_io
-            .new_output(&manifest_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest output: {}", e)))?;
-
-        let mut manifest_writer = ManifestWriterBuilder::new(
-            output_file,
-            Some(snapshot_id),
-            None,
-            iceberg_schema.clone(),
-            (**partition_spec).clone(),
-        )
-        .build_v2_data();
-
-        for data_file in data_files {
-            manifest_writer
-                .add_file(data_file.clone(), sequence_number)
-                .map_err(|e| Error::General(format!("Failed to add file to manifest: {}", e)))?;
-        }
-
-        manifest_writer
-            .write_manifest_file()
-            .await
-            .map_err(|e| Error::General(format!("Failed to write manifest: {}", e)))
-    }
-
-    /// Write a manifest list containing the given manifest files
-    async fn write_manifest_list(
-        &self,
-        manifest_file: iceberg::spec::ManifestFile,
-        snapshot_id: i64,
-        parent_snapshot_id: Option<i64>,
-        sequence_number: i64,
-        timestamp_nanos: u128,
-    ) -> Result<String> {
-        let manifest_list_filename =
-            format!("snap-{}-0-{:016x}.avro", snapshot_id, timestamp_nanos);
-        let manifest_list_path = format!("{}/{}", self.metadata_dir(), manifest_list_filename);
-
-        let manifest_list_output = self
-            .file_io
-            .new_output(&manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest list output: {}", e)))?;
-
-        let mut manifest_list_writer = ManifestListWriter::v2(
-            manifest_list_output,
-            snapshot_id,
-            parent_snapshot_id,
-            sequence_number,
-        );
-
-        manifest_list_writer
-            .add_manifests(vec![manifest_file].into_iter())
-            .map_err(|e| Error::General(format!("Failed to add manifest to list: {}", e)))?;
-
-        manifest_list_writer
-            .close()
-            .await
-            .map_err(|e| Error::General(format!("Failed to close manifest list: {}", e)))?;
-
-        Ok(manifest_list_path)
-    }
-
-    /// Build a snapshot object
-    fn build_snapshot(
-        &self,
-        snapshot_id: i64,
-        parent_snapshot_id: Option<i64>,
-        sequence_number: i64,
-        manifest_list_path: String,
-        summary: Summary,
-        schema_id: i32,
-    ) -> Snapshot {
-        let timestamp_ms = chrono::Utc::now().timestamp_millis();
-
-        Snapshot::builder()
-            .with_snapshot_id(snapshot_id)
-            .with_parent_snapshot_id(parent_snapshot_id)
-            .with_sequence_number(sequence_number)
-            .with_timestamp_ms(timestamp_ms)
-            .with_manifest_list(manifest_list_path)
-            .with_summary(summary)
-            .with_schema_id(schema_id)
-            .build()
-    }
-
-    /// Update table metadata with new snapshot
-    fn update_metadata(
-        &self,
-        old_metadata: TableMetadata,
-        snapshot: Snapshot,
-        current_version: i32,
-    ) -> Result<TableMetadata> {
-        let metadata_log_path = format!("v{}.metadata.json", current_version);
-
-        let build_result =
-            TableMetadataBuilder::new_from_metadata(old_metadata, Some(metadata_log_path))
-                .set_branch_snapshot(snapshot, MAIN_BRANCH)
-                .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
-                .build()
-                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
-
-        Ok(build_result.metadata)
-    }
-
-    /// Write metadata to file
-    async fn write_metadata_file(&self, metadata: &TableMetadata, version: i32) -> Result<()> {
-        use crate::core::storage::traits::PutOptions;
-
-        let metadata_path = format!("{}/v{}.metadata.json", self.metadata_dir(), version);
-
-        let metadata_json = serde_json::to_string_pretty(metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        let put_opts = PutOptions {
-            content_type: Some("application/json".to_string()),
-            metadata: std::collections::HashMap::new(),
-            if_none_match: None,
-        };
-
-        self.storage
-            .put(&metadata_path, bytes::Bytes::from(metadata_json), &put_opts)
-            .await
-            .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
-
-        Ok(())
-    }
-
-    /// Update version-hint.text
-    async fn update_version_hint(&self, version: i32) -> Result<()> {
-        use crate::core::storage::traits::PutOptions;
-
-        let version_hint_path = format!("{}/version-hint.text", self.metadata_dir());
-        let put_opts = PutOptions {
-            content_type: Some("text/plain".to_string()),
-            metadata: std::collections::HashMap::new(),
-            if_none_match: None,
-        };
-
-        self.storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(version.to_string()),
-                &put_opts,
-            )
-            .await
-            .map_err(|e| Error::General(format!("Failed to update version hint: {}", e)))?;
-
-        Ok(())
-    }
-
-    /// Convert DataFileInfo to Iceberg DataFile
-    fn to_iceberg_data_file(
-        &self,
-        info: &DataFileInfo,
-        partition_spec_id: i32,
-    ) -> Result<DataFile> {
-        DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path(info.path.clone())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::empty())
-            .partition_spec_id(partition_spec_id)
-            .record_count(info.record_count)
-            .file_size_in_bytes(info.size)
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))
-    }
-
-    /// Convert Iceberg DataFile to DataFileInfo
-    #[allow(dead_code)]
-    fn from_iceberg_data_file(data_file: &DataFile) -> DataFileInfo {
-        // Extract partition values from the data file
-        let partition = Self::extract_partition_values(data_file);
-
-        DataFileInfo {
-            path: data_file.file_path().to_string(),
-            size: data_file.file_size_in_bytes() as u64,
-            record_count: data_file.record_count(),
-            partition,
-        }
-    }
-
-    /// Extract partition values from an Iceberg DataFile
-    #[allow(dead_code)]
-    fn extract_partition_values(data_file: &DataFile) -> HashMap<String, String> {
-        // The partition struct contains the partition field values
-        // For now, we extract what we can from the file path as a fallback
-        Self::extract_partition_from_path_static(data_file.file_path())
-    }
-
-    /// Extract partition information from a file path string
-    fn extract_partition_from_path_static(path: &str) -> HashMap<String, String> {
-        let mut partition = HashMap::new();
-
-        // Parse partition values from the file path (e.g., "year=2024/month=01/file.parquet")
-        for component in path.split('/') {
-            if let Some(eq_pos) = component.find('=') {
-                let key = component[..eq_pos].to_string();
-                let value = component[eq_pos + 1..].to_string();
-                partition.insert(key, value);
-            }
-        }
-
-        partition
-    }
-
-    /// Convert OperationType to Iceberg Operation
-    fn to_iceberg_operation(op: OperationType) -> iceberg::spec::Operation {
-        match op {
-            OperationType::Append => iceberg::spec::Operation::Append,
-            OperationType::Replace => iceberg::spec::Operation::Replace,
-            OperationType::Delete => iceberg::spec::Operation::Delete,
-            OperationType::Overwrite => iceberg::spec::Operation::Overwrite,
-            OperationType::Restore => iceberg::spec::Operation::Replace,
-            OperationType::Repair => iceberg::spec::Operation::Replace,
-        }
     }
 }
 
@@ -542,9 +243,11 @@ impl MetadataService for IcebergMetadataService {
 
                 data_files.push(DataFileInfo {
                     path,
-                    size: data_file.file_size_in_bytes() as u64,
+                    size: data_file.file_size_in_bytes(),
                     record_count: data_file.record_count(),
-                    partition: Self::extract_partition_from_path_static(data_file.file_path()),
+                    partition: iceberg_partition::extract_partition_from_path_static(
+                        data_file.file_path(),
+                    ),
                 });
             }
         }
@@ -586,13 +289,19 @@ impl MetadataService for IcebergMetadataService {
         let (metadata, current_version) = self.load_metadata().await?;
         let partition_spec = metadata.default_partition_spec();
         let schema_id = metadata.current_schema().schema_id();
+        // Create snapshot writer
+        let writer = IcebergSnapshotWriter::new(
+            self.table_path.clone(),
+            self.file_io.clone(),
+            self.storage.clone(),
+        );
 
         // Get current state
         let current_snapshot = metadata.current_snapshot();
         let parent_snapshot_id = current_snapshot.map(|s| s.snapshot_id());
-        let sequence_number = current_snapshot
-            .map(|s| s.sequence_number() + 1)
-            .unwrap_or(1);
+        // Use last_sequence_number from metadata (tracks max ever assigned, not just current snapshot)
+        // This handles cases where snapshots were expired
+        let sequence_number = metadata.last_sequence_number() + 1;
 
         // Generate IDs
         let snapshot_id = chrono::Utc::now().timestamp_millis();
@@ -609,18 +318,18 @@ impl MetadataService for IcebergMetadataService {
 
             for file in existing_files {
                 if !removed_paths.contains(&file.path) {
-                    all_files.push(self.to_iceberg_data_file(&file, partition_spec.spec_id())?);
+                    all_files.push(writer.to_iceberg_data_file(&file, partition_spec)?);
                 }
             }
         }
 
         // Add new files
         for file_info in &changes.added {
-            all_files.push(self.to_iceberg_data_file(file_info, partition_spec.spec_id())?);
+            all_files.push(writer.to_iceberg_data_file(file_info, partition_spec)?);
         }
 
         // Write manifest
-        let manifest_file = self
+        let manifest_file = writer
             .write_manifest(
                 &all_files,
                 snapshot_id,
@@ -631,7 +340,7 @@ impl MetadataService for IcebergMetadataService {
             .await?;
 
         // Write manifest list
-        let manifest_list_path = self
+        let manifest_list_path = writer
             .write_manifest_list(
                 manifest_file,
                 snapshot_id,
@@ -648,12 +357,12 @@ impl MetadataService for IcebergMetadataService {
         full_summary.insert("total-data-files".to_string(), all_files.len().to_string());
 
         let iceberg_summary = Summary {
-            operation: Self::to_iceberg_operation(operation),
+            operation: iceberg_operations::to_iceberg_operation(operation),
             additional_properties: full_summary.clone(),
         };
 
         // Build snapshot
-        let snapshot = self.build_snapshot(
+        let snapshot = writer.build_snapshot(
             snapshot_id,
             parent_snapshot_id,
             sequence_number,
@@ -663,14 +372,17 @@ impl MetadataService for IcebergMetadataService {
         );
 
         // Update metadata
-        let new_metadata = self.update_metadata((*metadata).clone(), snapshot, current_version)?;
+        let new_metadata =
+            writer.update_metadata((*metadata).clone(), snapshot, current_version)?;
 
         // Write new metadata file
         let new_version = current_version + 1;
-        self.write_metadata_file(&new_metadata, new_version).await?;
+        writer
+            .write_metadata_file(&new_metadata, new_version)
+            .await?;
 
         // Update version hint
-        self.update_version_hint(new_version).await?;
+        writer.update_version_hint(new_version).await?;
 
         Ok(SnapshotInfo {
             id: snapshot_id,
@@ -716,7 +428,7 @@ impl MetadataService for IcebergMetadataService {
             .iter()
             .filter(|obj| obj.path.ends_with(".parquet"))
             .map(|obj| {
-                let partition = Self::extract_partition_from_path_static(&obj.path);
+                let partition = iceberg_partition::extract_partition_from_path_static(&obj.path);
                 DataFileInfo {
                     path: obj.path.clone(),
                     size: obj.size,
@@ -762,11 +474,11 @@ impl MetadataService for IcebergMetadataService {
             };
 
             for entry in manifest_list.entries() {
-                if entry.content == iceberg::spec::ManifestContentType::Data {
-                    if !seen_manifest_paths.contains(&entry.manifest_path) {
-                        seen_manifest_paths.insert(entry.manifest_path.clone());
-                        manifest_entries.push(entry.clone());
-                    }
+                if entry.content == iceberg::spec::ManifestContentType::Data
+                    && !seen_manifest_paths.contains(&entry.manifest_path)
+                {
+                    seen_manifest_paths.insert(entry.manifest_path.clone());
+                    manifest_entries.push(entry.clone());
                 }
             }
         }
@@ -827,31 +539,23 @@ impl MetadataService for IcebergMetadataService {
 
         Ok(Arc::new(arrow::datatypes::Schema::new(fields)))
     }
-}
 
-/// Convert Iceberg type to Arrow type (simplified)
-fn iceberg_to_arrow_type(iceberg_type: &iceberg::spec::Type) -> arrow::datatypes::DataType {
-    use arrow::datatypes::DataType;
-    use iceberg::spec::{PrimitiveType, Type};
-
-    match iceberg_type {
-        Type::Primitive(p) => match p {
-            PrimitiveType::Boolean => DataType::Boolean,
-            PrimitiveType::Int => DataType::Int32,
-            PrimitiveType::Long => DataType::Int64,
-            PrimitiveType::Float => DataType::Float32,
-            PrimitiveType::Double => DataType::Float64,
-            PrimitiveType::String => DataType::Utf8,
-            PrimitiveType::Binary => DataType::Binary,
-            PrimitiveType::Date => DataType::Date32,
-            PrimitiveType::Timestamp => {
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
-            }
-            PrimitiveType::Timestamptz => {
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into()))
-            }
-            _ => DataType::Utf8, // Fallback for other types
-        },
-        _ => arrow::datatypes::DataType::Utf8, // Fallback for complex types
+    fn object_store(&self) -> Arc<dyn ObjectStore> {
+        // For S3/GCS/Azure, use native object_store to get multipart upload support
+        if self.table_path.starts_with("s3://") {
+            s3::create_s3_object_store(&self.table_path).unwrap_or_else(|_| {
+                // Fallback to adapter if native creation fails
+                Arc::new(ObjectStoreAdapter::new(
+                    self.storage.clone(),
+                    self.table_path.clone(),
+                ))
+            })
+        } else {
+            // For local filesystem, use our adapter
+            Arc::new(ObjectStoreAdapter::new(
+                self.storage.clone(),
+                self.table_path.clone(),
+            ))
+        }
     }
 }

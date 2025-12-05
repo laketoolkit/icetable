@@ -73,10 +73,10 @@ pub async fn detect_table_format_with_storage(
         max_results: Some(1),
         continuation_token: None,
     };
-    if let Ok(result) = storage.list(&list_opts).await {
-        if !result.objects.is_empty() {
-            return TableFormat::Delta;
-        }
+    if let Ok(result) = storage.list(&list_opts).await
+        && !result.objects.is_empty()
+    {
+        return TableFormat::Delta;
     }
 
     // Check for Iceberg (metadata directory)
@@ -87,10 +87,10 @@ pub async fn detect_table_format_with_storage(
         max_results: Some(1),
         continuation_token: None,
     };
-    if let Ok(result) = storage.list(&list_opts).await {
-        if !result.objects.is_empty() {
-            return TableFormat::Iceberg;
-        }
+    if let Ok(result) = storage.list(&list_opts).await
+        && !result.objects.is_empty()
+    {
+        return TableFormat::Iceberg;
     }
 
     TableFormat::Unknown

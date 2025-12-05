@@ -355,24 +355,24 @@ impl ValidationEngine {
             .compressed_size
             .ok_or_else(|| Error::General("File size not available".to_string()))?;
 
-        if let Some(min) = min_bytes {
-            if size < min {
-                return Ok(RuleResult::fail(
-                    rule.name.clone(),
-                    rule.severity,
-                    format!("File size {} bytes (< {} minimum)", size, min),
-                ));
-            }
+        if let Some(min) = min_bytes
+            && size < min
+        {
+            return Ok(RuleResult::fail(
+                rule.name.clone(),
+                rule.severity,
+                format!("File size {} bytes (< {} minimum)", size, min),
+            ));
         }
 
-        if let Some(max) = max_bytes {
-            if size > max {
-                return Ok(RuleResult::fail(
-                    rule.name.clone(),
-                    rule.severity,
-                    format!("File size {} bytes (> {} maximum)", size, max),
-                ));
-            }
+        if let Some(max) = max_bytes
+            && size > max
+        {
+            return Ok(RuleResult::fail(
+                rule.name.clone(),
+                rule.severity,
+                format!("File size {} bytes (> {} maximum)", size, max),
+            ));
         }
 
         Ok(RuleResult::pass(
@@ -397,24 +397,24 @@ impl ValidationEngine {
 
         match row_groups {
             Some(rg) => {
-                if let Some(min) = min_size {
-                    if rg < min {
-                        return Ok(RuleResult::fail(
-                            rule.name.clone(),
-                            rule.severity,
-                            format!("Has {} row groups (< {} minimum)", rg, min),
-                        ));
-                    }
+                if let Some(min) = min_size
+                    && rg < min
+                {
+                    return Ok(RuleResult::fail(
+                        rule.name.clone(),
+                        rule.severity,
+                        format!("Has {} row groups (< {} minimum)", rg, min),
+                    ));
                 }
 
-                if let Some(max) = max_size {
-                    if rg > max {
-                        return Ok(RuleResult::fail(
-                            rule.name.clone(),
-                            rule.severity,
-                            format!("Has {} row groups (> {} maximum)", rg, max),
-                        ));
-                    }
+                if let Some(max) = max_size
+                    && rg > max
+                {
+                    return Ok(RuleResult::fail(
+                        rule.name.clone(),
+                        rule.severity,
+                        format!("Has {} row groups (> {} maximum)", rg, max),
+                    ));
                 }
 
                 Ok(RuleResult::pass(

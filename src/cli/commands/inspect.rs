@@ -4,7 +4,7 @@ pub mod common;
 
 use std::path::Path;
 
-use crate::cli::output::OutputFormatter;
+use crate::cli::output::InspectionFormatter;
 use crate::cli::parser::InspectArgs;
 use crate::config::ResolvePath;
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
@@ -20,9 +20,8 @@ pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
-    pub async fn execute(mut args: InspectArgs) -> Result<()> {
+    pub async fn execute(args: InspectArgs) -> Result<()> {
         let path = args.path.resolve()?;
-        args.path = Some(path);
 
         // Check if any physical layout flags are set
         let physical_mode =
@@ -30,17 +29,16 @@ impl InspectCommand {
 
         // If physical mode, use new physical layout inspection
         if physical_mode {
-            return Self::execute_physical_inspect(args).await;
+            return Self::execute_physical_inspect(&path, args).await;
         }
 
         // Otherwise, use legacy inspect (for backwards compatibility)
-        Self::execute_legacy_inspect(args).await
+        Self::execute_legacy_inspect(&path, args).await
     }
 
     /// Execute physical layout inspection (new mode)
-    async fn execute_physical_inspect(args: InspectArgs) -> Result<()> {
+    async fn execute_physical_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
-        let path_str = args.path.as_ref().unwrap();
         let storage = StorageBackendFactory::create_backend(path_str).await?;
 
         // 2. Build physical inspect options
@@ -68,9 +66,8 @@ impl InspectCommand {
     }
 
     /// Execute legacy inspect (old mode, for backwards compatibility)
-    async fn execute_legacy_inspect(args: InspectArgs) -> Result<()> {
+    async fn execute_legacy_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
-        let path_str = args.path.as_ref().unwrap();
         let storage = StorageBackendFactory::create_backend(path_str).await?;
 
         // 2. Build time-travel options from CLI args
@@ -159,7 +156,7 @@ impl InspectCommand {
             }
             _ => {
                 // Default table format
-                let output = OutputFormatter::format_inspect_result(&result, &options);
+                let output = InspectionFormatter::format_inspect_result(&result, &options);
                 println!("{}", output);
             }
         }

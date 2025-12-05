@@ -178,11 +178,7 @@ impl VacuumCommand {
         );
         println!(
             "Files {}:   {} ({})",
-            if args.dry_run {
-                "to delete"
-            } else {
-                "to delete"
-            },
+            "to delete",
             orphan_files.len().to_string().cyan(),
             format_bytes(orphan_bytes)
         );

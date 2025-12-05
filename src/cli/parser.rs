@@ -28,6 +28,9 @@ pub struct Cli {
 /// Available commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Analyze table health and get optimization recommendations
+    Analyze(AnalyzeArgs),
+
     /// Create a new empty table
     Init(InitArgs),
 
@@ -39,9 +42,6 @@ pub enum Commands {
 
     /// Compare two tables
     Diff(DiffArgs),
-
-    /// Convert between formats
-    Convert(ConvertArgs),
 
     /// Compute statistics
     Stats(StatsArgs),
@@ -56,10 +56,7 @@ pub enum Commands {
     #[command(subcommand)]
     Optimize(OptimizeCommands),
 
-    /// Restore table to a previous version
-    Restore(RestoreArgs),
-
-    /// Create a checkpoint/snapshot of the current state
+    /// Manage table snapshots (list, create, expire, set)
     Snapshot(SnapshotArgs),
 
     /// Repair table metadata and fix inconsistencies
@@ -74,9 +71,6 @@ pub enum Commands {
 
     /// Manage table tags (Iceberg only)
     Tag(TagArgs),
-
-    /// Generate table metadata (manifest, statistics)
-    Generate(GenerateArgs),
 
     /// Manage configuration (default table context)
     Config(ConfigArgs),
@@ -243,61 +237,6 @@ pub struct DiffArgs {
     pub output: String,
 }
 
-/// Arguments for convert command
-#[derive(Parser, Debug)]
-pub struct ConvertArgs {
-    /// Input file path
-    pub input: String,
-
-    /// Output file path
-    #[arg(short = 'F', long)]
-    pub file: String,
-
-    /// Target table format for table-to-table conversion (delta, iceberg)
-    #[arg(long, value_parser = ["delta", "iceberg"])]
-    pub target_format: Option<String>,
-
-    /// Output format (parquet, arrow, csv, json) - for file formats only
-    #[arg(short, long)]
-    pub format: Option<String>,
-
-    /// Select specific columns (comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    pub columns: Option<Vec<String>>,
-
-    /// Filter rows with SQL-like WHERE clause (e.g., "age > 18 AND city = 'NYC'")
-    #[arg(long = "where")]
-    pub where_clause: Option<String>,
-
-    /// Rename columns (format: old_name:new_name, comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    pub rename: Option<Vec<String>>,
-
-    /// Cast column types (format: column:type, comma-separated, e.g., "age:Int64,price:Float64")
-    #[arg(long, value_delimiter = ',')]
-    pub cast: Option<Vec<String>>,
-
-    /// Compression algorithm (none, snappy, gzip, zstd, lz4)
-    #[arg(long)]
-    pub compression: Option<String>,
-
-    /// Row group size for Parquet
-    #[arg(long)]
-    pub row_group_size: Option<usize>,
-
-    /// Partition by columns (comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    pub partition_by: Option<Vec<String>>,
-
-    /// Overwrite existing file
-    #[arg(long)]
-    pub overwrite: bool,
-
-    /// Validate output after conversion
-    #[arg(long)]
-    pub validate: bool,
-}
-
 /// Arguments for stats command
 #[derive(Parser, Debug)]
 pub struct StatsArgs {
@@ -309,24 +248,32 @@ pub struct StatsArgs {
     #[arg(short, long, value_parser = ["delta", "iceberg"])]
     pub format: Option<String>,
 
-    /// Only compute stats for specific columns
-    #[arg(long, value_delimiter = ',')]
-    pub columns: Option<Vec<String>>,
-
-    /// Generate histograms
-    #[arg(long)]
-    pub histogram: bool,
-
-    /// Compute percentiles (comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    pub percentiles: Option<Vec<f64>>,
-
-    /// Full profiling (slower)
-    #[arg(long)]
-    pub profile: bool,
-
-    /// Output format (text, json, html)
+    /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for analyze command
+#[derive(Parser, Debug)]
+pub struct AnalyzeArgs {
+    /// Path to table (uses default from config if not provided)
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
+
+    /// Minimum file size to consider "small" (default: 16MB)
+    #[arg(long, default_value = "16777216")]
+    pub min_file_size: u64,
+
+    /// Skip orphan and missing files check (faster, skips storage scan)
+    #[arg(long)]
+    pub skip_orphans: bool,
+
+    /// Show detailed partition-level information
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Output format (text, json)
+    #[arg(short = 'o', long, default_value = "text")]
     pub output: String,
 }
 
@@ -423,9 +370,13 @@ pub struct OptimizeDataArgs {
     #[arg(long)]
     pub min_file_size: Option<u64>,
 
-    /// Filter to specific partitions (key=value, comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    pub partitions: Option<Vec<String>>,
+    /// Optimize specific partition (e.g., "day=2024-01-01/currency=USD")
+    #[arg(long)]
+    pub partition: Option<String>,
+
+    /// Optimize all partitions (required if --partition not specified)
+    #[arg(long)]
+    pub all_partitions: bool,
 
     /// Enable Z-ordering on specified columns
     #[arg(long, value_delimiter = ',')]
@@ -456,30 +407,6 @@ pub struct OptimizeManifestsArgs {
     pub min_manifests: usize,
 
     /// Dry run mode - show what would be done without making changes
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
-    pub output: String,
-}
-
-/// Arguments for restore command
-#[derive(Parser, Debug)]
-pub struct RestoreArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
-    /// Version to restore to
-    #[arg(long, conflicts_with = "as_of")]
-    pub version: Option<i64>,
-
-    /// Restore to state as of time (e.g., "7d", "24h", or "2024-01-15")
-    #[arg(long, conflicts_with = "version")]
-    pub as_of: Option<String>,
-
-    /// Dry run - show what would change without actually restoring
     #[arg(long)]
     pub dry_run: bool,
 
@@ -593,6 +520,10 @@ pub struct SnapshotSetArgs {
     /// Set to snapshot as of time (e.g., "7d", "24h", or "2024-01-15")
     #[arg(long, conflicts_with = "id")]
     pub as_of: Option<String>,
+
+    /// Dry run - show what would change without actually setting
+    #[arg(long)]
+    pub dry_run: bool,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
@@ -724,9 +655,9 @@ pub struct BranchDeleteArgs {
     /// Name of branch to delete
     pub name: String,
 
-    /// Delete without confirmation
+    /// Dry run - show what would be deleted without actually deleting
     #[arg(long)]
-    pub force: bool,
+    pub dry_run: bool,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
@@ -818,67 +749,9 @@ pub struct TagDeleteArgs {
     /// Name of tag to delete
     pub name: String,
 
-    /// Delete without confirmation
+    /// Dry run - show what would be deleted without actually deleting
     #[arg(long)]
-    pub force: bool,
-
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
-    pub output: String,
-}
-
-/// Arguments for generate command
-#[derive(Parser, Debug)]
-pub struct GenerateArgs {
-    /// Generate subcommand
-    #[command(subcommand)]
-    pub command: GenerateCommands,
-}
-
-/// Generate subcommands
-#[derive(Subcommand, Debug)]
-pub enum GenerateCommands {
-    /// Generate/regenerate manifest files (Delta Lake)
-    Manifest(GenerateManifestArgs),
-
-    /// Generate column statistics
-    Stats(GenerateStatsArgs),
-}
-
-/// Arguments for generate manifest
-#[derive(Parser, Debug)]
-pub struct GenerateManifestArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
-    /// Force regeneration even if manifest exists
-    #[arg(long)]
-    pub force: bool,
-
-    /// Include schema in symlink manifest (Delta Lake)
-    #[arg(long)]
-    pub include_schema: bool,
-
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
-    pub output: String,
-}
-
-/// Arguments for generate stats
-#[derive(Parser, Debug)]
-pub struct GenerateStatsArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
-    /// Columns to compute statistics for (comma-separated, defaults to all)
-    #[arg(long, value_delimiter = ',')]
-    pub columns: Option<Vec<String>>,
-
-    /// Force regeneration even if stats exist
-    #[arg(long)]
-    pub force: bool,
+    pub dry_run: bool,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]

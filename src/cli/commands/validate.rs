@@ -25,12 +25,12 @@ impl ValidateCommand {
         let storage = StorageBackendFactory::create_backend(&table_path).await?;
 
         // 2. Only Iceberg is supported
-        if let Some(format) = &args.format {
-            if format.to_lowercase() != "iceberg" {
-                return Err(Error::UnsupportedFeature {
-                    feature: "Only Iceberg tables are supported.".to_string(),
-                });
-            }
+        if let Some(format) = &args.format
+            && format.to_lowercase() != "iceberg"
+        {
+            return Err(Error::UnsupportedFeature {
+                feature: "Only Iceberg tables are supported.".to_string(),
+            });
         }
 
         // 3. Create Iceberg handler

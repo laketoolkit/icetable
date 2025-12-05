@@ -19,12 +19,12 @@ arrow-cast = "55.2.0"
 arrow-csv = "55.2.0"
 arrow-json = "55.2.0"
 arrow-ipc = "55.2.0"
-parquet = { version = "55.2.0", features = ["arrow", "async"] }
+parquet = { version = "55.2.0", features = ["arrow", "async", "object_store"] }
 
 # Table formats
 deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"], optional = true }
-iceberg = { version = "0.7", optional = true }
-apache-avro = { version = "0.18", optional = true }
+iceberg = { version = "0.7" }
+apache-avro = { version = "0.18" }
 
 # Cloud storage abstraction
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
@@ -55,6 +55,9 @@ futures = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
 
+# Parallelism
+rayon = "1.10"
+
 # Utilities
 chrono = "0.4"
 bytes = "1.7"
@@ -80,12 +83,11 @@ tempfile = "3.13"
 tokio-test = "0.4"
 
 [features]
-default = ["iceberg"]
-iceberg = ["dep:iceberg", "dep:apache-avro"]
+default = []
 # Delta support is for import only - reading Delta tables to create Iceberg tables
 delta = ["dep:deltalake", "deltalake/s3", "deltalake/gcs", "deltalake/azure"]
 tui = ["dep:ratatui", "dep:crossterm"]
-all = ["iceberg", "delta", "tui"]
+all = ["delta", "tui"]
 
 [[bin]]
 name = "icectl"

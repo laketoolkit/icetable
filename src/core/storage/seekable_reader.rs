@@ -89,7 +89,7 @@ impl Read for SeekableReader {
 
         let bytes = self
             .read_range(buf.len())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))?;
+            .map_err(|e| std::io::Error::other(format!("{}", e)))?;
 
         let len = bytes.len();
         buf[..len].copy_from_slice(&bytes);

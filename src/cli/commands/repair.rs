@@ -10,7 +10,7 @@ use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService}
 use crate::core::metadata::MaintenanceResult;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::utils::detect_table_format_with_storage;
-use crate::core::{format_bytes, TableFormat};
+use crate::core::{TableFormat, format_bytes};
 use crate::error::{Error, Result};
 
 /// Repair options specifying what actions to take
@@ -68,7 +68,9 @@ impl RepairCommand {
 
         match format {
             TableFormat::Delta => Self::repair_delta(&args, &service, options).await,
-            TableFormat::Iceberg => Self::repair_iceberg(&args, &service, options).await,
+            TableFormat::Iceberg => {
+                Self::repair_iceberg(&args, &service, options, &table_path).await
+            }
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 table_path
@@ -88,15 +90,13 @@ impl RepairCommand {
     }
 
     /// Repair Iceberg table
-    #[cfg(feature = "iceberg")]
     async fn repair_iceberg(
         args: &RepairArgs,
         service: &RepairService,
         options: RepairOptions,
+        table_path: &str,
     ) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
-
-        let table_path = args.path.as_ref().unwrap();
         println!(
             "{} Iceberg table at {}",
             if args.dry_run {
@@ -108,7 +108,7 @@ impl RepairCommand {
             table_path
         );
 
-        let metadata_service = IcebergMetadataService::new_async(table_path.clone()).await?;
+        let metadata_service = IcebergMetadataService::new_async(table_path.to_string()).await?;
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;
@@ -140,17 +140,6 @@ impl RepairCommand {
         Self::print_result(&result)?;
 
         Ok(())
-    }
-
-    #[cfg(not(feature = "iceberg"))]
-    async fn repair_iceberg(
-        _args: &RepairArgs,
-        _service: &RepairService,
-        _options: RepairOptions,
-    ) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Iceberg support not enabled".to_string(),
-        })
     }
 
     /// Print analysis results

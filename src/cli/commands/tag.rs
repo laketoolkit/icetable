@@ -29,7 +29,7 @@ impl TagCommand {
             TagCommands::Delete(a) => {
                 let ctx = TableContext::from_path(a.path).await?;
                 ctx.require_iceberg()?;
-                Self::delete(&ctx, &a.name, a.force, &a.output).await
+                Self::delete(&ctx, &a.name, a.dry_run, &a.output).await
             }
         }
     }
@@ -115,15 +115,20 @@ impl TagCommand {
         Ok(())
     }
 
-    async fn delete(ctx: &TableContext, name: &str, force: bool, _output: &str) -> Result<()> {
-        println!("{} tag '{}' at {}", "Deleting".green(), name, ctx.path);
+    async fn delete(ctx: &TableContext, name: &str, dry_run: bool, _output: &str) -> Result<()> {
+        println!(
+            "{} tag '{}' at {}",
+            if dry_run { "Analyzing" } else { "Deleting" }.green(),
+            name,
+            ctx.path
+        );
 
         println!();
         println!("Tag to delete: {}", name.red());
 
-        if !force {
+        if dry_run {
             println!();
-            println!("{}", "Use --force to confirm deletion".yellow());
+            println!("{}", "DRY RUN - No changes made".yellow().bold());
             return Ok(());
         }
 

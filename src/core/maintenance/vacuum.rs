@@ -50,17 +50,24 @@ impl VacuumService {
     }
 
     /// Analyze files that would be deleted
+    ///
+    /// IMPORTANT: Uses `get_all_referenced_files()` to check ALL snapshots,
+    /// not just the current one. This prevents deleting files needed for
+    /// time-travel to older snapshots.
     pub async fn analyze<M: MetadataService>(
         &self,
         metadata_service: &M,
     ) -> Result<VacuumAnalysis> {
         let data_dir = metadata_service.data_directory();
-        let current_files = metadata_service.list_data_files().await?;
 
-        // Get set of currently referenced file paths
-        let referenced_paths: HashSet<String> = current_files
-            .iter()
-            .map(|f| normalize_path(&f.path))
+        // Get ALL files referenced by ANY snapshot (not just current)
+        // This is critical for time-travel support - we must not delete
+        // files that older snapshots still reference
+        let referenced_paths: HashSet<String> = metadata_service
+            .get_all_referenced_files()
+            .await?
+            .into_iter()
+            .map(|p| normalize_path(&p))
             .collect();
 
         // Calculate cutoff time

@@ -132,9 +132,9 @@ fn apply_comparison(column: &Arc<dyn Array>, op: &str, value_str: &str) -> Resul
                 "=" => cmp::eq(array, &StringArray::new_scalar(value_str))?,
                 "!=" => cmp::neq(array, &StringArray::new_scalar(value_str))?,
                 _ => {
-                    return Err(Error::General(format!(
-                        "String type only supports = and != operators"
-                    )));
+                    return Err(Error::General(
+                        "String type only supports = and != operators".to_string(),
+                    ));
                 }
             })
         }

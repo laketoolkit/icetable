@@ -148,10 +148,7 @@ impl ObjectStoreAdapter {
             },
             other => object_store::Error::Generic {
                 store: "storage_backend",
-                source: Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Storage error: {}", other),
-                )),
+                source: Box::new(std::io::Error::other(format!("Storage error: {}", other))),
             },
         }
     }
@@ -260,7 +257,7 @@ impl ObjectStore for ObjectStoreAdapter {
             use object_store::GetRange;
             match range {
                 GetRange::Bounded(r) => GetOptions {
-                    range: Some((r.start as u64, r.end as u64)),
+                    range: Some((r.start, r.end)),
                     ..Default::default()
                 },
                 GetRange::Offset(start) => {
@@ -271,7 +268,7 @@ impl ObjectStore for ObjectStoreAdapter {
                         .await
                         .map_err(Self::to_object_store_error)?;
                     GetOptions {
-                        range: Some((start as u64, meta.size)),
+                        range: Some((start, meta.size)),
                         ..Default::default()
                     }
                 }
@@ -282,7 +279,7 @@ impl ObjectStore for ObjectStoreAdapter {
                         .head(&path)
                         .await
                         .map_err(Self::to_object_store_error)?;
-                    let start = meta.size.saturating_sub(n as u64);
+                    let start = meta.size.saturating_sub(n);
                     GetOptions {
                         range: Some((start, meta.size)),
                         ..Default::default()
@@ -329,7 +326,7 @@ impl ObjectStore for ObjectStoreAdapter {
         let path = self.to_storage_path(location);
 
         self.backend
-            .get_range(&path, range.start as u64, range.end as u64)
+            .get_range(&path, range.start, range.end)
             .await
             .map_err(Self::to_object_store_error)
     }

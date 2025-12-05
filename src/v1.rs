@@ -38,7 +38,6 @@
 //! }
 //! ```
 
-/// Format handling (stable)
 pub mod formats {
     //! Stable format handling API
     //!
@@ -57,7 +56,6 @@ pub mod formats {
     };
 }
 
-/// Storage backend handling (stable)
 pub mod storage {
     //! Stable storage backend API
     //!
@@ -73,7 +71,6 @@ pub mod storage {
     pub use crate::core::storage::{GetOptions, ListOptions, PutOptions};
 }
 
-/// Data transformation pipeline (stable)
 pub mod transform {
     //! Stable transformation pipeline API
     //!
@@ -100,7 +97,6 @@ pub mod transform {
 /// Error types (stable)
 pub use crate::error::{Error, Result};
 
-/// Utilities (stable)
 pub mod utils {
     //! Stable utility functions
     //!

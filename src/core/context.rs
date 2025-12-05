@@ -9,12 +9,11 @@
 use std::sync::Arc;
 
 use crate::config::ResolvePath;
+use crate::core::TableFormat;
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
 use crate::core::utils::detect_table_format_with_storage;
-use crate::core::TableFormat;
 use crate::error::{Error, Result};
 
-#[cfg(feature = "iceberg")]
 use crate::core::metadata::IcebergMetadataService;
 
 /// Table context - unified access to a table
@@ -86,17 +85,13 @@ impl TableContext {
     }
 
     /// Get Iceberg metadata service for this table
-    #[cfg(feature = "iceberg")]
     pub async fn iceberg_service(&self) -> Result<IcebergMetadataService> {
         self.require_iceberg()?;
         IcebergMetadataService::new_async(self.path.clone()).await
     }
 
     /// Load Iceberg metadata (convenience method)
-    #[cfg(feature = "iceberg")]
-    pub async fn iceberg_metadata(
-        &self,
-    ) -> Result<(Arc<iceberg::spec::TableMetadata>, i32)> {
+    pub async fn iceberg_metadata(&self) -> Result<(Arc<iceberg::spec::TableMetadata>, i32)> {
         let service = self.iceberg_service().await?;
         service.load_metadata().await
     }

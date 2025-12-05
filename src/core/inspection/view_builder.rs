@@ -408,7 +408,7 @@ impl InspectionViewBuilder {
             items.push(ViewItem::text("Files:"));
 
             for file in &orphans.files {
-                let filename = file.path.split('/').last().unwrap_or(&file.path);
+                let filename = file.path.split('/').next_back().unwrap_or(&file.path);
                 items.push(ViewItem::text(format!(
                     "  {} ({})",
                     filename,

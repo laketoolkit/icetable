@@ -18,8 +18,8 @@ pub mod view_builder;
 #[cfg(feature = "delta")]
 pub mod delta;
 
-#[cfg(feature = "iceberg")]
 pub mod iceberg;
+pub mod iceberg_metadata_extractor;
 
 // Re-export commonly used types
 pub use formatters::*;

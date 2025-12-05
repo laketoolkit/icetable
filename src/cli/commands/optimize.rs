@@ -92,7 +92,6 @@ impl OptimizeCommand {
     }
 
     /// Optimize Iceberg data files
-    #[cfg(feature = "iceberg")]
     async fn optimize_iceberg_data(
         args: &OptimizeDataArgs,
         service: &OptimizeService,
@@ -102,22 +101,11 @@ impl OptimizeCommand {
         let table_path = args.path.as_ref().unwrap();
         println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
 
-        let metadata_service = IcebergMetadataService::new(table_path.clone())?;
+        let metadata_service = IcebergMetadataService::new_async(table_path.clone()).await?;
         service.execute(&metadata_service).await
     }
 
-    #[cfg(not(feature = "iceberg"))]
-    async fn optimize_iceberg_data(
-        _args: &OptimizeDataArgs,
-        _service: &OptimizeService,
-    ) -> Result<MaintenanceResult> {
-        Err(Error::UnsupportedFeature {
-            feature: "Iceberg support not enabled".to_string(),
-        })
-    }
-
     /// Rewrite Iceberg manifest files
-    #[cfg(feature = "iceberg")]
     async fn rewrite_iceberg_manifests(args: &OptimizeManifestsArgs) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
         use iceberg::spec::{
@@ -553,13 +541,6 @@ impl OptimizeCommand {
         }
 
         Ok(())
-    }
-
-    #[cfg(not(feature = "iceberg"))]
-    async fn rewrite_iceberg_manifests(_args: &OptimizeManifestsArgs) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Iceberg support not enabled".to_string(),
-        })
     }
 
     /// Output result in the requested format

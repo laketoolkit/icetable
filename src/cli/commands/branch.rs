@@ -38,7 +38,7 @@ impl BranchCommand {
             BranchCommands::Delete(a) => {
                 let ctx = TableContext::from_path(a.path).await?;
                 ctx.require_iceberg()?;
-                Self::delete(&ctx, &a.name, a.force, &a.output).await
+                Self::delete(&ctx, &a.name, a.dry_run, &a.output).await
             }
             BranchCommands::FastForward(a) => {
                 let ctx = TableContext::from_path(a.path).await?;
@@ -143,21 +143,24 @@ impl BranchCommand {
         Ok(())
     }
 
-    async fn delete(ctx: &TableContext, name: &str, force: bool, _output: &str) -> Result<()> {
-        println!("{} branch '{}' at {}", "Deleting".green(), name, ctx.path);
+    async fn delete(ctx: &TableContext, name: &str, dry_run: bool, _output: &str) -> Result<()> {
+        println!(
+            "{} branch '{}' at {}",
+            if dry_run { "Analyzing" } else { "Deleting" }.green(),
+            name,
+            ctx.path
+        );
 
-        if name == "main" && !force {
-            return Err(Error::General(
-                "Cannot delete 'main' branch. Use --force if you really want to.".to_string(),
-            ));
+        if name == "main" {
+            return Err(Error::General("Cannot delete 'main' branch".to_string()));
         }
 
         println!();
         println!("Branch to delete: {}", name.red());
 
-        if !force {
+        if dry_run {
             println!();
-            println!("{}", "Use --force to confirm deletion".yellow());
+            println!("{}", "DRY RUN - No changes made".yellow().bold());
             return Ok(());
         }
 
@@ -192,12 +195,10 @@ impl BranchCommand {
                 return Err(Error::General(format!("Snapshot {} not found", id)));
             }
             id
+        } else if let Some(snap) = metadata.snapshot_for_ref(to) {
+            snap.snapshot_id()
         } else {
-            if let Some(snap) = metadata.snapshot_for_ref(to) {
-                snap.snapshot_id()
-            } else {
-                return Err(Error::General(format!("Reference '{}' not found", to)));
-            }
+            return Err(Error::General(format!("Reference '{}' not found", to)));
         };
 
         println!();

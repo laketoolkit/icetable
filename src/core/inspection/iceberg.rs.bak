@@ -1,6 +1,7 @@
 //! Iceberg inspector implementation
 
 use super::PhysicalInspectorFactory;
+#[cfg(feature = "iceberg")]
 use super::iceberg_metadata_extractor::extract_file_info;
 use super::traits::{
     FileBasedLayout, FileInfo, LayoutInfo, OrphanFileEntry, OrphanFilesInfo,
@@ -17,8 +18,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(feature = "iceberg")]
 use apache_avro::Reader;
 
+#[cfg(feature = "iceberg")]
 #[derive(Debug, Default)]
 struct ManifestStats {
     total_files: i64,
@@ -28,6 +31,7 @@ struct ManifestStats {
     partition_stats: HashMap<String, PartitionInfo>,
 }
 
+#[cfg(feature = "iceberg")]
 #[derive(Debug, Default)]
 struct PartitionInfo {
     files: i64,
@@ -52,6 +56,7 @@ impl IcebergInspector {
         self.path.to_str().unwrap_or("")
     }
 
+    #[cfg(feature = "iceberg")]
     async fn read_metadata(&self, metadata_path: &str) -> Result<serde_json::Value> {
         let get_opts = GetOptions {
             range: None,
@@ -67,6 +72,7 @@ impl IcebergInspector {
             .map_err(|e| Error::General(format!("Failed to parse metadata JSON: {}", e)))
     }
 
+    #[cfg(feature = "iceberg")]
     fn extract_file_info(
         &self,
         metadata: &serde_json::Value,
@@ -83,14 +89,17 @@ impl IcebergInspector {
         )
     }
 
+    #[cfg(feature = "iceberg")]
     fn extract_schema(&self, metadata: &serde_json::Value) -> Result<SchemaInfo> {
         crate::core::inspection::iceberg_metadata_extractor::extract_schema(metadata)
     }
 
+    #[cfg(feature = "iceberg")]
     fn extract_sort_order(&self, metadata: &serde_json::Value) -> String {
         crate::core::inspection::iceberg_metadata_extractor::extract_sort_order(metadata)
     }
 
+    #[cfg(feature = "iceberg")]
     fn extract_layout_info(
         &self,
         metadata: &serde_json::Value,
@@ -287,6 +296,7 @@ impl IcebergInspector {
         }))
     }
 
+    #[cfg(feature = "iceberg")]
     async fn extract_statistics(
         &self,
         metadata: &serde_json::Value,
@@ -374,6 +384,7 @@ impl IcebergInspector {
         })
     }
 
+    #[cfg(feature = "iceberg")]
     async fn read_manifest_stats(
         &self,
         table_location: &str,
@@ -440,6 +451,7 @@ impl IcebergInspector {
         Ok(stats)
     }
 
+    #[cfg(feature = "iceberg")]
     fn process_manifest_entries(
         &self,
         manifest_reader: Reader<&[u8]>,
@@ -534,6 +546,7 @@ impl IcebergInspector {
     ///
     /// - `deep_scan=true`: Check ALL snapshots (slow but accurate)
     /// - `deep_scan=false`: Check only current snapshot (fast but may have false positives)
+    #[cfg(feature = "iceberg")]
     async fn detect_orphan_files(
         &self,
         metadata: &serde_json::Value,
@@ -603,6 +616,7 @@ impl IcebergInspector {
     /// Note: For accurate orphan detection across ALL snapshots, use
     /// IcebergMetadataService::get_all_referenced_files() instead.
     /// This method is used for quick scans (current snapshot only).
+    #[cfg(feature = "iceberg")]
     async fn get_tracked_files(
         &self,
         metadata: &serde_json::Value,
@@ -750,6 +764,7 @@ impl IcebergInspector {
     }
 
     /// Extract file paths from manifest (static version for parallel execution)
+    #[cfg(feature = "iceberg")]
     #[allow(dead_code)]
     fn extract_file_paths_static(manifest_reader: Reader<&[u8]>) -> HashSet<String> {
         let mut files = HashSet::new();
@@ -785,6 +800,7 @@ impl IcebergInspector {
 
 #[async_trait]
 impl PhysicalInspector for IcebergInspector {
+    #[cfg(feature = "iceberg")]
     async fn extract_metadata(&self, options: &PhysicalInspectOptions) -> Result<PhysicalMetadata> {
         let metadata_path = find_latest_metadata(self.table_path(), &self.storage).await?;
         let metadata = self.read_metadata(&metadata_path).await?;
@@ -843,7 +859,15 @@ impl PhysicalInspector for IcebergInspector {
         })
     }
 
-
+    #[cfg(not(feature = "iceberg"))]
+    async fn extract_metadata(
+        &self,
+        _options: &PhysicalInspectOptions,
+    ) -> Result<PhysicalMetadata> {
+        Err(Error::General(
+            "Iceberg support not enabled. Rebuild with --features iceberg".to_string(),
+        ))
+    }
 
     fn format_name(&self) -> &str {
         "Apache Iceberg"
@@ -915,6 +939,7 @@ impl PhysicalInspectorFactory for IcebergInspectorFactory {
 }
 
 #[cfg(test)]
+#[cfg(feature = "iceberg")]
 mod tests {
     use super::*;
 

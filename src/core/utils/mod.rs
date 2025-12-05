@@ -6,13 +6,18 @@ pub mod format_detection;
 pub mod fs;
 pub mod iceberg;
 pub mod parquet;
+pub mod snapshot;
 
 pub use format_detection::{
     TableFormat, detect_table_format, detect_table_format_async, detect_table_format_with_storage,
 };
-pub use fs::{ScannedFile, normalize_path, scan_parquet_files};
+pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
+pub use iceberg::iceberg_to_arrow_type;
 pub use iceberg::{extract_version_from_filename, find_latest_metadata};
 pub use parquet::read_parquet_record_count;
+pub use snapshot::{
+    ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
+};
 
 /// Default file sizes for maintenance operations (in bytes)
 pub mod sizes {

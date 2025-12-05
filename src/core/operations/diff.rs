@@ -322,16 +322,10 @@ fn format_data_type(dtype: &DataType) -> String {
 }
 
 /// Options for diff operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DiffOptions {
     /// Show detailed column statistics
     pub verbose: bool,
-}
-
-impl Default for DiffOptions {
-    fn default() -> Self {
-        Self { verbose: false }
-    }
 }
 
 /// Metadata differences between two tables

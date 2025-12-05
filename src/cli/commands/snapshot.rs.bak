@@ -6,14 +6,15 @@
 use colored::Colorize;
 use std::sync::Arc;
 
-use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::config::ResolvePath;
-use crate::core::TableFormat;
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
 use crate::core::utils::detect_table_format_with_storage;
+use crate::core::TableFormat;
 use crate::error::{Error, Result};
 use crate::utils::parse_timestamp;
+use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
+use crate::core::utils::snapshot::{ExpirationConfig, determine_snapshots_to_expire};
 
 /// Handler for snapshot command
 pub struct SnapshotCommand;
@@ -76,6 +77,7 @@ impl SnapshotCommand {
     // Iceberg implementation
     // =========================================================================
 
+    #[cfg(feature = "iceberg")]
     async fn execute_iceberg(
         args: SnapshotArgs,
         table_path: &str,
@@ -108,6 +110,7 @@ impl SnapshotCommand {
         }
     }
 
+    #[cfg(feature = "iceberg")]
     async fn iceberg_list(path: &str, limit: usize, all: bool, output: &str) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
 
@@ -148,14 +151,14 @@ impl SnapshotCommand {
                 .map_err(|e| Error::General(e.to_string()))?;
             println!("{}", json_str);
         } else {
-            let table_str =
-                SnapshotFormatter::format_list_table(&snapshot_infos, "Iceberg Snapshots");
+            let table_str = SnapshotFormatter::format_list_table(&snapshot_infos, "Iceberg Snapshots");
             println!("{}", table_str);
         }
 
         Ok(())
     }
 
+    #[cfg(feature = "iceberg")]
     async fn iceberg_create(path: &str, _force: bool, output: &str) -> Result<()> {
         // Iceberg creates snapshots automatically on data modifications
         // This command creates a metadata backup for safety
@@ -220,6 +223,8 @@ impl SnapshotCommand {
         Ok(())
     }
 
+    #[cfg(feature = "iceberg")]
+    #[cfg(feature = "iceberg")]
     async fn iceberg_expire(
         path: &str,
         older_than: Option<String>,
@@ -231,11 +236,16 @@ impl SnapshotCommand {
         use crate::core::metadata::IcebergMetadataService;
         use crate::core::storage::StorageBackendFactory;
         use crate::core::storage::traits::PutOptions;
-        use crate::core::utils::snapshot::{
-            ExpirationConfig, determine_cutoff_timestamp, determine_snapshots_to_expire,
-        };
+        use crate::core::utils::snapshot::{determine_cutoff_timestamp, determine_snapshots_to_expire, ExpirationConfig};
         use std::collections::HashSet;
 
+        if output != "json" {
+            if output != "json" {
+            println!("{} Iceberg snapshots at {}", "Expiring".green(), path);
+        }
+        }
+
+        // Load metadata using iceberg-rs
         let service = IcebergMetadataService::new_async(path.to_string()).await?;
         let (metadata, current_version) = service.load_metadata().await?;
 
@@ -261,6 +271,8 @@ impl SnapshotCommand {
                     eprintln!("{}", format!("Snapshot {} not found", id).yellow());
                 }
             }
+
+            
             if !valid_ids.is_empty() {
                 let config = ExpirationConfig {
                     ids: Some(valid_ids),
@@ -280,8 +292,7 @@ impl SnapshotCommand {
             to_expire = determine_snapshots_to_expire(&snapshots, &config, current_id)?;
         }
 
-        let cutoff_timestamp =
-            determine_cutoff_timestamp(&snapshots, older_than.as_deref(), retain_last)?;
+        let cutoff_timestamp = determine_cutoff_timestamp(&snapshots, older_than.as_deref(), retain_last)?;
 
         if to_expire.is_empty() {
             if output == "json" {
@@ -317,8 +328,7 @@ impl SnapshotCommand {
         }
 
         // Calculate cutoff timestamp for display
-        let cutoff_timestamp =
-            determine_cutoff_timestamp(&snapshots, older_than.as_deref(), retain_last)?;
+        let cutoff_timestamp = determine_cutoff_timestamp(&snapshots, older_than.as_deref(), retain_last)?;
 
         if dry_run {
             println!();
@@ -334,8 +344,11 @@ impl SnapshotCommand {
                 .map_err(|e| Error::General(e.to_string()))?;
                 println!("{}", json_str);
             } else {
-                let table_str =
-                    SnapshotFormatter::format_expire_table(to_expire.len(), cutoff_timestamp, true);
+                let table_str = SnapshotFormatter::format_expire_table(
+                    to_expire.len(),
+                    cutoff_timestamp,
+                    true,
+                );
                 println!("{}", table_str);
             }
             return Ok(());
@@ -356,7 +369,7 @@ impl SnapshotCommand {
         // Write new metadata file with incremented version
         let storage = StorageBackendFactory::create_backend(path).await?;
         let metadata_dir = format!("{}/metadata", path.trim_end_matches('/'));
-        let new_version = (current_version + 1) as i64;
+        let new_version = current_version + 1;
         let new_metadata_filename = format!("v{}.metadata.json", new_version);
         let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
 
@@ -391,8 +404,11 @@ impl SnapshotCommand {
             .map_err(|e| Error::General(e.to_string()))?;
             println!("{}", json_str);
         } else {
-            let table_str =
-                SnapshotFormatter::format_expire_table(to_expire.len(), cutoff_timestamp, false);
+            let table_str = SnapshotFormatter::format_expire_table(
+                to_expire.len(),
+                cutoff_timestamp,
+                false,
+            );
             println!("{}", table_str);
             println!();
             println!(
@@ -403,6 +419,7 @@ impl SnapshotCommand {
 
         Ok(())
     }
+    #[cfg(feature = "iceberg")]
     async fn iceberg_set(
         path: &str,
         id: Option<i64>,
@@ -448,16 +465,35 @@ impl SnapshotCommand {
 
         let current_id = metadata.current_snapshot_id();
 
+        println!(
+            "{} Iceberg table to snapshot {}",
+            if dry_run { "Analyzing" } else { "Setting" }.green(),
+            target_id
+        );
+        println!(
+            "Current snapshot: {}",
+            current_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string())
+                .cyan()
+        );
+        println!("Target snapshot:  {}", target_id.to_string().green());
+
         if dry_run {
+            println!();
+            println!("{}", "DRY RUN - No changes made".yellow().bold());
+
             if output == "json" {
-                let json_str =
-                    SnapshotFormatter::format_set_json(current_id, target_id, None, true)
-                        .map_err(|e| Error::General(e.to_string()))?;
-                println!("{}", json_str);
-            } else {
-                let table_str =
-                    SnapshotFormatter::format_set_table(current_id, target_id, None, true);
-                println!("{}", table_str);
+                let json = serde_json::json!({
+                    "dry_run": true,
+                    "current_snapshot": current_id,
+                    "target_snapshot": target_id,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json)
+                        .map_err(|e| Error::General(e.to_string()))?
+                );
             }
             return Ok(());
         }
@@ -491,7 +527,7 @@ impl SnapshotCommand {
         // Write new metadata file
         let storage = StorageBackendFactory::create_backend(path).await?;
         let metadata_dir = format!("{}/metadata", path.trim_end_matches('/'));
-        let new_version = ((current_version + 1) as i64) as i64;
+        let new_version = current_version + 1;
         let new_metadata_filename = format!("v{}.metadata.json", new_version);
         let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
 
@@ -517,27 +553,26 @@ impl SnapshotCommand {
             .await?;
 
         if output == "json" {
-            let json_str = SnapshotFormatter::format_set_json(
-                current_id,
-                target_id,
-                Some(new_version as i64),
-                false,
-            )
-            .map_err(|e| Error::General(e.to_string()))?;
-            println!("{}", json_str);
-        } else {
-            let table_str = SnapshotFormatter::format_set_table(
-                current_id,
-                target_id,
-                Some(new_version as i64),
-                false,
+            let json = serde_json::json!({
+                "previous_snapshot": current_id,
+                "current_snapshot": target_id,
+                "new_metadata_version": new_version,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
             );
-            println!("{}", table_str);
+        } else {
+            println!();
+            println!("{}", "Snapshot set!".green().bold());
+            println!("Table now points to snapshot {}", target_id);
+            println!("New metadata version: {}", new_version);
         }
 
         Ok(())
     }
 
+    #[cfg(feature = "iceberg")]
     async fn iceberg_cherrypick(_path: &str, snapshot_id: i64, _output: &str) -> Result<()> {
         // TODO: Implement cherry-pick using iceberg-rs Transaction API
         // Cherry-pick in Iceberg creates a new snapshot that applies the changes
@@ -560,4 +595,16 @@ impl SnapshotCommand {
             snapshot_id, snapshot_id
         )))
     }
+
+    #[cfg(not(feature = "iceberg"))]
+    async fn execute_iceberg(
+        _args: SnapshotArgs,
+        _table_path: &str,
+        _storage: Arc<dyn StorageBackend>,
+    ) -> Result<()> {
+        Err(Error::UnsupportedFeature {
+            feature: "Iceberg support not enabled".to_string(),
+        })
+    }
 }
+

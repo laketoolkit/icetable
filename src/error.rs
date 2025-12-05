@@ -203,49 +203,61 @@ impl Error {
         }
     }
 
+    fn file_not_found_suggestion(path: &PathBuf) -> String {
+        format!(
+            "File not found: {}\n\nPossible solutions:\n  1. Check the file path is correct\n  2. Verify you have read permissions\n  3. If on cloud storage, ensure credentials are configured",
+            path.display()
+        )
+    }
+
+    fn permission_denied_suggestion(path: &PathBuf) -> String {
+        format!(
+            "Permission denied: {}\n\nTry:\n  1. Check file permissions: ls -l {}\n  2. Verify you have the necessary access rights",
+            path.display(),
+            path.display()
+        )
+    }
+
+    fn corrupted_file_suggestion(path: &PathBuf, reason: &str) -> String {
+        format!(
+            "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: icectl validate {}\n  3. Check file type: file {}",
+            path.display(),
+            reason,
+            path.display(),
+            path.display()
+        )
+    }
+
+    fn authentication_failed_suggestion(provider: &str, message: &str) -> String {
+        let suggestion = match provider {
+            "aws" | "s3" => "Try: aws configure",
+            "gcp" | "gcs" => "Try: gcloud auth application-default login",
+            "azure" => "Try: az login",
+            _ => "Check your cloud credentials",
+        };
+        format!(
+            "Authentication failed for {}: {}\n\n{}",
+            provider, message, suggestion
+        )
+    }
+
+    fn timeout_suggestion(operation: &str, seconds: u64) -> String {
+        format!(
+            "Operation timed out after {}s: {}\n\nThis may be due to:\n  1. Slow network connection\n  2. Large file size\n  3. Cloud storage throttling\n\nTry:\n  1. Check your internet connection\n  2. Increase timeout with --timeout flag\n  3. Use --quick for faster validation",
+            seconds, operation
+        )
+    }
+
     /// Get a user-friendly error message with suggestions
     pub fn user_message(&self) -> String {
         match self {
-            Error::FileNotFound { path } => {
-                format!(
-                    "File not found: {}\n\nPossible solutions:\n  1. Check the file path is correct\n  2. Verify you have read permissions\n  3. If on cloud storage, ensure credentials are configured",
-                    path.display()
-                )
-            }
-            Error::PermissionDenied { path } => {
-                format!(
-                    "Permission denied: {}\n\nTry:\n  1. Check file permissions: ls -l {}\n  2. Verify you have the necessary access rights",
-                    path.display(),
-                    path.display()
-                )
-            }
-            Error::CorruptedFile { path, reason } => {
-                format!(
-                    "Corrupted file: {}\n\nReason: {}\n\nThis usually means:\n  1. File transfer was interrupted\n  2. File is not actually in the expected format\n  3. Disk corruption\n\nTry:\n  1. Re-download or regenerate the file\n  2. Run: icectl validate {}\n  3. Check file type: file {}",
-                    path.display(),
-                    reason,
-                    path.display(),
-                    path.display()
-                )
-            }
+            Error::FileNotFound { path } => Self::file_not_found_suggestion(path),
+            Error::PermissionDenied { path } => Self::permission_denied_suggestion(path),
+            Error::CorruptedFile { path, reason } => Self::corrupted_file_suggestion(path, reason),
             Error::AuthenticationFailed { provider, message } => {
-                let suggestion = match provider.as_str() {
-                    "aws" | "s3" => "Try: aws configure",
-                    "gcp" | "gcs" => "Try: gcloud auth application-default login",
-                    "azure" => "Try: az login",
-                    _ => "Check your cloud credentials",
-                };
-                format!(
-                    "Authentication failed for {}: {}\n\n{}",
-                    provider, message, suggestion
-                )
+                Self::authentication_failed_suggestion(provider, message)
             }
-            Error::Timeout { operation, seconds } => {
-                format!(
-                    "Operation timed out after {}s: {}\n\nThis may be due to:\n  1. Slow network connection\n  2. Large file size\n  3. Cloud storage throttling\n\nTry:\n  1. Check your internet connection\n  2. Increase timeout with --timeout flag\n  3. Use --quick for faster validation",
-                    seconds, operation
-                )
-            }
+            Error::Timeout { operation, seconds } => Self::timeout_suggestion(operation, *seconds),
             _ => self.to_string(),
         }
     }

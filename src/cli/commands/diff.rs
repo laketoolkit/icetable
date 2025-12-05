@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::cli::output::OutputFormatter;
+use crate::cli::output::DiffFormatter;
 use crate::cli::parser::DiffArgs;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::operations::diff::{DiffOperation, DiffOptions};
@@ -139,7 +139,7 @@ impl DiffCommand {
                 serde_json::to_string_pretty(&serializable)
                     .map_err(|e| Error::General(e.to_string()))?
             }
-            "text" | _ => OutputFormatter::format_diff_result(&result),
+            _ => DiffFormatter::format_diff_result(&result),
         };
 
         println!("{}", output);

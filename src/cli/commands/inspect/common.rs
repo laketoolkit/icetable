@@ -1,7 +1,6 @@
 //! Common types and utilities for inspect command
 
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
-use std::path::Path;
 
 // Re-export format_bytes from core for convenience
 pub use crate::core::format_bytes;
@@ -99,7 +98,6 @@ impl PhysicalInspectResult {
 }
 
 /// Helper functions for creating BoxItems
-
 /// Create a key-value item with aligned keys
 pub fn kv_item(key: &str, value: impl std::fmt::Display, key_width: usize) -> BoxItem {
     BoxItem::KeyValue {
@@ -112,48 +110,4 @@ pub fn kv_item(key: &str, value: impl std::fmt::Display, key_width: usize) -> Bo
 /// Create a simple text item
 pub fn text_item(text: impl Into<String>) -> BoxItem {
     BoxItem::Text(text.into())
-}
-
-/// Alias for format_bytes (backwards compatibility)
-pub fn format_size(bytes: u64) -> String {
-    format_bytes(bytes)
-}
-
-/// Format number with thousands separators
-pub fn format_number(n: i64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-
-    for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i) % 3 == 0 && *c != '-' {
-            result.push(',');
-        }
-        result.push(*c);
-    }
-
-    result
-}
-
-/// Format percentage
-#[allow(dead_code)]
-pub fn format_percentage(value: f64) -> String {
-    format!("{:.2}%", value * 100.0)
-}
-
-/// Get file name from path
-pub fn get_file_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-/// Format compression ratio
-pub fn format_compression_ratio(compressed: u64, uncompressed: u64) -> String {
-    if uncompressed == 0 {
-        return "N/A".to_string();
-    }
-    let ratio = compressed as f64 / uncompressed as f64;
-    format!("{:.2}x", 1.0 / ratio)
 }

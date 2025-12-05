@@ -2,7 +2,9 @@
 
 use async_trait::async_trait;
 use object_store::aws::AmazonS3Builder;
+use object_store::prefix::PrefixStore;
 use std::sync::Arc;
+use url::Url;
 
 use super::base::BaseStorageBackend;
 use super::path_parser::{CloudPathParser, S3PathParser};
@@ -37,17 +39,17 @@ impl S3Backend {
         // For MinIO compatibility, configure endpoint and path style
         if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
             // Parse endpoint to extract host and port
-            if let Ok(endpoint_url) = url::Url::parse(&endpoint) {
-                if let Some(_host) = endpoint_url.host_str() {
-                    builder = builder.with_endpoint(endpoint);
+            if let Ok(endpoint_url) = url::Url::parse(&endpoint)
+                && let Some(_host) = endpoint_url.host_str()
+            {
+                builder = builder.with_endpoint(endpoint);
 
-                    // MinIO requires path-style URLs (bucket in path, not subdomain)
-                    builder = builder.with_virtual_hosted_style_request(false);
+                // MinIO requires path-style URLs (bucket in path, not subdomain)
+                builder = builder.with_virtual_hosted_style_request(false);
 
-                    // Allow HTTP if endpoint is not HTTPS
-                    if endpoint_url.scheme() == "http" {
-                        builder = builder.with_allow_http(true);
-                    }
+                // Allow HTTP if endpoint is not HTTPS
+                if endpoint_url.scheme() == "http" {
+                    builder = builder.with_allow_http(true);
                 }
             }
         }
@@ -127,5 +129,41 @@ impl StorageBackend for S3Backend {
 
     fn supports_multipart(&self) -> bool {
         self.inner.supports_multipart()
+    }
+}
+
+/// Create a native S3 object store with proper configuration and prefixing
+///
+/// The store is prefixed with the table path (excluding bucket) so that
+/// paths relative to the table work correctly.
+pub fn create_s3_object_store(path: &str) -> Result<Arc<dyn object_store::ObjectStore>> {
+    let url = Url::parse(path).map_err(|e| Error::General(format!("Invalid S3 URL: {}", e)))?;
+
+    let bucket = url
+        .host_str()
+        .ok_or_else(|| Error::General("Missing bucket in S3 URL".to_string()))?;
+
+    // Get the path within the bucket (e.g., "warehouse/analytics.db/transactions")
+    let prefix = url.path().trim_start_matches('/');
+
+    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
+
+    // Check for custom endpoint (MinIO, LocalStack, etc.)
+    if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+        builder = builder
+            .with_endpoint(&endpoint)
+            .with_allow_http(endpoint.starts_with("http://"));
+    }
+
+    let store = builder
+        .build()
+        .map_err(|e| Error::General(format!("Failed to create S3 store: {}", e)))?;
+
+    // Wrap with PrefixStore so paths are relative to the table, not the bucket
+    // e.g., "data/file.parquet" -> "warehouse/analytics.db/transactions/data/file.parquet"
+    if prefix.is_empty() {
+        Ok(Arc::new(store))
+    } else {
+        Ok(Arc::new(PrefixStore::new(store, prefix)))
     }
 }
