@@ -5,11 +5,13 @@
 //! Delta Lake and Iceberg tables through a unified interface.
 
 mod optimize;
+mod refs;
 mod repair;
 mod snapshot;
 mod vacuum;
 
 pub use optimize::OptimizeService;
+pub use refs::{RefConfig, RefResult, RefService};
 pub use repair::{RepairAnalysis, RepairService};
 pub use snapshot::{
     CreateBackupResult, ExpireSnapshotsResult, ListSnapshotsResult, SetSnapshotResult,

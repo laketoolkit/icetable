@@ -1,11 +1,11 @@
 //! Tag command implementation
 //!
 //! Manages tags for Iceberg tables.
-//! This is a thin wrapper that delegates to core services.
 
 use colored::Colorize;
 
 use crate::cli::parser::{TagArgs, TagCommands};
+use crate::core::maintenance::{RefConfig, RefService};
 use crate::core::TableContext;
 use crate::error::{Error, Result};
 
@@ -31,30 +31,53 @@ impl TagCommand {
                 ctx.require_iceberg()?;
                 Self::delete(&ctx, &a.name, a.dry_run, &a.output).await
             }
+            TagCommands::Rename(a) => {
+                let ctx = TableContext::from_path(a.path).await?;
+                ctx.require_iceberg()?;
+                Self::rename(&ctx, &a.old_name, &a.new_name, &a.output).await
+            }
         }
     }
 
     async fn list(ctx: &TableContext, output: &str) -> Result<()> {
-        println!("{} Iceberg tags at {}", "Listing".green(), ctx.path);
-        println!();
+        let service = ctx.iceberg_service().await?;
+        let refs = service.list_refs().await?;
 
-        // iceberg-rs doesn't expose refs() directly to list tags
-        // Tags require catalog access to enumerate
+        // Filter to tags only
+        let tags: Vec<_> = refs.iter().filter(|r| r.ref_type == "tag").collect();
+
         if output == "json" {
-            let tag_json = serde_json::json!([]);
+            let tag_json: Vec<serde_json::Value> = tags
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "name": t.name,
+                        "snapshot_id": t.snapshot_id,
+                    })
+                })
+                .collect();
             println!(
                 "{}",
-                serde_json::to_string_pretty(&tag_json)
-                    .map_err(|e| Error::General(e.to_string()))?
+                serde_json::to_string_pretty(&tag_json).map_err(|e| Error::General(e.to_string()))?
             );
         } else {
-            println!("{:<30} {:<20}", "TAG".cyan(), "SNAPSHOT ID".cyan());
-            println!("{}", "-".repeat(50));
-            println!("{}", "No tags found".yellow());
-        }
+            println!("{} Iceberg tags at {}", "Listing".green(), ctx.path);
+            println!();
+            println!(
+                "{:<20} {:<20}",
+                "TAG".cyan(),
+                "SNAPSHOT ID".cyan()
+            );
+            println!("{}", "-".repeat(40));
 
-        println!();
-        println!("{}", "Note: Tag listing requires catalog access".dimmed());
+            if tags.is_empty() {
+                println!("{}", "No tags found".dimmed());
+            } else {
+                for tag in &tags {
+                    println!("{:<20} {:<20}", tag.name, tag.snapshot_id);
+                }
+            }
+        }
 
         Ok(())
     }
@@ -64,83 +87,109 @@ impl TagCommand {
         name: &str,
         snapshot_id: Option<i64>,
         max_ref_age_ms: Option<i64>,
-        _output: &str,
+        output: &str,
     ) -> Result<()> {
-        println!("{} tag '{}' at {}", "Creating".green(), name, ctx.path);
+        let service = ctx.iceberg_service().await?;
+        let ref_service = RefService::new();
 
-        let (metadata, _) = ctx.iceberg_metadata().await?;
+        let result = ref_service
+            .create_tag(&service, &ctx.path, name, snapshot_id, max_ref_age_ms)
+            .await?;
 
-        // Get snapshot ID to tag
-        let snap_id = if let Some(id) = snapshot_id {
-            let snapshots: Vec<_> = metadata.snapshots().collect();
-            if !snapshots.iter().any(|s| s.snapshot_id() == id) {
-                return Err(Error::General(format!("Snapshot {} not found", id)));
-            }
-            id
+        if output == "json" {
+            let json = serde_json::json!({
+                "name": result.name,
+                "snapshot_id": result.snapshot_id,
+                "new_version": result.new_version,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+            );
         } else {
-            metadata
-                .current_snapshot_id()
-                .ok_or_else(|| Error::General("No current snapshot".to_string()))?
-        };
-
-        // Get snapshot timestamp for display
-        let snapshots: Vec<_> = metadata.snapshots().collect();
-        let snap = snapshots
-            .iter()
-            .find(|s| s.snapshot_id() == snap_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", snap_id)))?;
-
-        let timestamp = chrono::DateTime::from_timestamp_millis(snap.timestamp_ms())
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| snap.timestamp_ms().to_string());
-
-        println!();
-        println!("Tag: {}", name.cyan());
-        println!("Snapshot: {}", snap_id);
-        println!("Snapshot timestamp: {}", timestamp);
-        if let Some(max_age) = max_ref_age_ms {
-            println!("Max ref age: {} ms", max_age);
+            println!(
+                "{} Created tag '{}' at snapshot {}",
+                "Success:".green(),
+                result.name.cyan(),
+                result.snapshot_id
+            );
+            if let Some(v) = result.new_version {
+                println!("New metadata version: v{}", v);
+            }
         }
-
-        println!();
-        println!(
-            "{}",
-            "Tag creation requires iceberg-rs Transaction API".yellow()
-        );
-        println!(
-            "{}",
-            "This is a planned feature - use catalog tools for now".dimmed()
-        );
 
         Ok(())
     }
 
-    async fn delete(ctx: &TableContext, name: &str, dry_run: bool, _output: &str) -> Result<()> {
-        println!(
-            "{} tag '{}' at {}",
-            if dry_run { "Analyzing" } else { "Deleting" }.green(),
-            name,
-            ctx.path
-        );
+    async fn delete(ctx: &TableContext, name: &str, dry_run: bool, output: &str) -> Result<()> {
+        let service = ctx.iceberg_service().await?;
+        let config = RefConfig { dry_run };
+        let ref_service = RefService::with_config(config);
 
-        println!();
-        println!("Tag to delete: {}", name.red());
+        let result = ref_service.delete_ref(&service, &ctx.path, name).await?;
 
-        if dry_run {
-            println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-            return Ok(());
+        if output == "json" {
+            let json = serde_json::json!({
+                "name": result.name,
+                "snapshot_id": result.snapshot_id,
+                "new_version": result.new_version,
+                "dry_run": result.dry_run,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+            );
+        } else if result.dry_run {
+            println!(
+                "{} Would delete tag '{}' (snapshot {})",
+                "Dry run:".yellow(),
+                result.name,
+                result.snapshot_id
+            );
+        } else {
+            println!(
+                "{} Deleted tag '{}'",
+                "Success:".green(),
+                result.name.red()
+            );
+            if let Some(v) = result.new_version {
+                println!("New metadata version: v{}", v);
+            }
         }
 
-        println!();
-        println!(
-            "{}",
-            "Tag deletion requires iceberg-rs Transaction API".yellow()
-        );
-        println!(
-            "{}",
-            "This is a planned feature - use catalog tools for now".dimmed()
-        );
+        Ok(())
+    }
+
+    async fn rename(ctx: &TableContext, old_name: &str, new_name: &str, output: &str) -> Result<()> {
+        let service = ctx.iceberg_service().await?;
+        let ref_service = RefService::new();
+
+        let result = ref_service
+            .rename_tag(&service, &ctx.path, old_name, new_name)
+            .await?;
+
+        if output == "json" {
+            let json = serde_json::json!({
+                "old_name": old_name,
+                "new_name": result.name,
+                "snapshot_id": result.snapshot_id,
+                "new_version": result.new_version,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+            );
+        } else {
+            println!(
+                "{} Renamed tag '{}' to '{}'",
+                "Success:".green(),
+                old_name.yellow(),
+                result.name.cyan()
+            );
+            if let Some(v) = result.new_version {
+                println!("New metadata version: v{}", v);
+            }
+        }
 
         Ok(())
     }

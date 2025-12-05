@@ -13,5 +13,5 @@ mod iceberg_writer;
 
 pub use traits::*;
 
-pub use iceberg::IcebergMetadataService;
+pub use iceberg::{IcebergMetadataService, RefInfo};
 pub use iceberg_writer::IcebergSnapshotWriter;

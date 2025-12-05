@@ -40,7 +40,7 @@ pub enum Commands {
     /// Validate file integrity and quality
     Validate(ValidateArgs),
 
-    /// Compare two tables
+    /// Compare snapshots, branches, or tags
     Diff(DiffArgs),
 
     /// Compute statistics
@@ -222,15 +222,16 @@ pub struct ValidateArgs {
 /// Arguments for diff command
 #[derive(Parser, Debug)]
 pub struct DiffArgs {
-    /// First table path
-    pub left: String,
+    /// Path to table (uses default from config if not provided)
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
 
-    /// Second table path
-    pub right: String,
+    /// Reference to compare (snapshot ID, branch name, or tag name). Defaults to current.
+    pub reference: Option<String>,
 
-    /// Show detailed column statistics
-    #[arg(short = 'v', long)]
-    pub verbose: bool,
+    /// Base reference to compare against (snapshot ID, branch name, or tag name)
+    #[arg(long)]
+    pub base: Option<String>,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
@@ -440,6 +441,9 @@ pub enum SnapshotCommands {
 
     /// Cherry-pick changes from another snapshot
     Cherrypick(SnapshotCherrypickArgs),
+
+    /// Show snapshot lineage (parent chain)
+    Lineage(SnapshotLineageArgs),
 }
 
 /// Arguments for snapshot list
@@ -514,12 +518,20 @@ pub struct SnapshotSetArgs {
     pub path: Option<String>,
 
     /// Snapshot ID to set as current
-    #[arg(long, conflicts_with = "as_of")]
+    #[arg(long, conflicts_with_all = ["as_of", "branch", "tag"])]
     pub id: Option<i64>,
 
     /// Set to snapshot as of time (e.g., "7d", "24h", or "2024-01-15")
-    #[arg(long, conflicts_with = "id")]
+    #[arg(long, conflicts_with_all = ["id", "branch", "tag"])]
     pub as_of: Option<String>,
+
+    /// Set to snapshot referenced by branch name
+    #[arg(long, conflicts_with_all = ["id", "as_of", "tag"])]
+    pub branch: Option<String>,
+
+    /// Set to snapshot referenced by tag name
+    #[arg(long, conflicts_with_all = ["id", "as_of", "branch"])]
+    pub tag: Option<String>,
 
     /// Dry run - show what would change without actually setting
     #[arg(long)]
@@ -540,6 +552,45 @@ pub struct SnapshotCherrypickArgs {
     /// Source snapshot ID to cherry-pick from
     #[arg(long)]
     pub snapshot_id: i64,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for snapshot lineage
+#[derive(Parser, Debug)]
+pub struct SnapshotLineageArgs {
+    /// Path to table (uses default from config if not provided)
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
+
+    /// Snapshot ID to show lineage for (defaults to current)
+    pub snapshot_id: Option<i64>,
+
+    /// Maximum depth to traverse (defaults to all)
+    #[arg(short = 'n', long)]
+    pub depth: Option<usize>,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for snapshot diff
+#[derive(Parser, Debug)]
+pub struct SnapshotDiffArgs {
+    /// Path to table (uses default from config if not provided)
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
+
+    /// First snapshot ID (older)
+    #[arg(long)]
+    pub from: i64,
+
+    /// Second snapshot ID (newer, defaults to current)
+    #[arg(long)]
+    pub to: Option<i64>,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
@@ -600,6 +651,9 @@ pub enum BranchCommands {
 
     /// Fast-forward a branch to another ref
     FastForward(BranchFastForwardArgs),
+
+    /// Rename a branch
+    Rename(BranchRenameArgs),
 }
 
 /// Arguments for branch list
@@ -683,6 +737,24 @@ pub struct BranchFastForwardArgs {
     pub output: String,
 }
 
+/// Arguments for branch rename
+#[derive(Parser, Debug)]
+pub struct BranchRenameArgs {
+    /// Path to table (uses default from config if not provided)
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
+
+    /// Current branch name
+    pub old_name: String,
+
+    /// New branch name
+    pub new_name: String,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
 /// Arguments for tag command
 #[derive(Parser, Debug)]
 pub struct TagArgs {
@@ -702,6 +774,9 @@ pub enum TagCommands {
 
     /// Delete a tag
     Delete(TagDeleteArgs),
+
+    /// Rename a tag
+    Rename(TagRenameArgs),
 }
 
 /// Arguments for tag list
@@ -752,6 +827,24 @@ pub struct TagDeleteArgs {
     /// Dry run - show what would be deleted without actually deleting
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for tag rename
+#[derive(Parser, Debug)]
+pub struct TagRenameArgs {
+    /// Path to table (uses default from config if not provided)
+    #[arg(short = 't', long = "table")]
+    pub path: Option<String>,
+
+    /// Current tag name
+    pub old_name: String,
+
+    /// New tag name
+    pub new_name: String,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]

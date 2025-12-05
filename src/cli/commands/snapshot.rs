@@ -29,6 +29,7 @@ impl SnapshotCommand {
             SnapshotCommands::Expire(a) => a.path.resolve()?,
             SnapshotCommands::Set(a) => a.path.resolve()?,
             SnapshotCommands::Cherrypick(a) => a.path.resolve()?,
+            SnapshotCommands::Lineage(a) => a.path.resolve()?,
         };
 
         // Create storage backend
@@ -97,10 +98,22 @@ impl SnapshotCommand {
                 .await
             }
             SnapshotCommands::Set(a) => {
-                Self::iceberg_set(table_path, a.id, a.as_of, a.dry_run, &a.output).await
+                Self::iceberg_set(
+                    table_path,
+                    a.id,
+                    a.as_of,
+                    a.branch,
+                    a.tag,
+                    a.dry_run,
+                    &a.output,
+                )
+                .await
             }
             SnapshotCommands::Cherrypick(a) => {
                 Self::iceberg_cherrypick(table_path, a.snapshot_id, &a.output).await
+            }
+            SnapshotCommands::Lineage(a) => {
+                Self::iceberg_lineage(table_path, a.snapshot_id, a.depth, &a.output).await
             }
         }
     }
@@ -285,6 +298,8 @@ impl SnapshotCommand {
         path: &str,
         id: Option<i64>,
         as_of: Option<String>,
+        branch: Option<String>,
+        tag: Option<String>,
         dry_run: bool,
         output: &str,
     ) -> Result<()> {
@@ -293,7 +308,7 @@ impl SnapshotCommand {
         let snapshot_service = SnapshotService::with_config(config);
 
         let result = snapshot_service
-            .set_current_snapshot(&metadata_service, path, id, as_of)
+            .set_current_snapshot(&metadata_service, path, id, as_of, branch, tag)
             .await?;
 
         if output == "json" {
@@ -323,5 +338,131 @@ impl SnapshotCommand {
         snapshot_service
             .cherry_pick_snapshot(_path, snapshot_id)
             .await
+    }
+
+    async fn iceberg_lineage(
+        path: &str,
+        snapshot_id: Option<i64>,
+        depth: Option<usize>,
+        output: &str,
+    ) -> Result<()> {
+        use std::collections::HashMap;
+
+        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        let (metadata, _) = metadata_service.load_metadata().await?;
+
+        // Get starting snapshot
+        let start_id = snapshot_id.or_else(|| metadata.current_snapshot_id()).ok_or_else(|| {
+            Error::General("No snapshot specified and table has no current snapshot".to_string())
+        })?;
+
+        // Build parent map for quick lookup
+        let parent_map: HashMap<i64, Option<i64>> = metadata
+            .snapshots()
+            .map(|s| (s.snapshot_id(), s.parent_snapshot_id()))
+            .collect();
+
+        // Build snapshot info map
+        let snapshot_map: HashMap<i64, _> = metadata
+            .snapshots()
+            .map(|s| (s.snapshot_id(), s))
+            .collect();
+
+        // Walk the lineage
+        let mut lineage: Vec<(i64, Option<i64>, i64, String)> = Vec::new();
+        let mut current = Some(start_id);
+        let max_depth = depth.unwrap_or(usize::MAX);
+
+        while let Some(id) = current {
+            if lineage.len() >= max_depth {
+                break;
+            }
+
+            let parent = parent_map.get(&id).copied().flatten();
+            let (timestamp, operation) = snapshot_map
+                .get(&id)
+                .map(|s| {
+                    let ts = s.timestamp_ms();
+                    let op = format!("{:?}", s.summary().operation).to_lowercase();
+                    (ts, op)
+                })
+                .unwrap_or((0, "unknown".to_string()));
+
+            lineage.push((id, parent, timestamp, operation));
+            current = parent;
+        }
+
+        let current_id = metadata.current_snapshot_id();
+
+        if output == "json" {
+            let json_lineage: Vec<serde_json::Value> = lineage
+                .iter()
+                .map(|(id, parent, ts, op)| {
+                    serde_json::json!({
+                        "snapshot_id": id,
+                        "parent_id": parent,
+                        "timestamp": chrono::DateTime::from_timestamp_millis(*ts)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        "operation": op,
+                        "is_current": Some(*id) == current_id,
+                    })
+                })
+                .collect();
+
+            let json = serde_json::json!({
+                "table": path,
+                "lineage": json_lineage,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+            );
+        } else {
+            println!("{} snapshot lineage at {}", "Showing".green(), path);
+            println!();
+
+            for (i, (id, parent, ts, op)) in lineage.iter().enumerate() {
+                let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|| ts.to_string());
+
+                let is_current = Some(*id) == current_id;
+                let current_marker = if is_current { " (current)" } else { "" };
+
+                let id_display = if is_current {
+                    id.to_string().green().bold().to_string()
+                } else {
+                    id.to_string()
+                };
+
+                // Tree-like display
+                let prefix = if i == 0 { "●" } else { "│" };
+                let connector = if parent.is_some() { "↓" } else { "" };
+
+                println!(
+                    "{} {} {} [{}]{}",
+                    prefix.cyan(),
+                    id_display,
+                    format!("({})", op).dimmed(),
+                    ts_str.dimmed(),
+                    current_marker.green()
+                );
+
+                if parent.is_some() && i < lineage.len() - 1 {
+                    println!("{}", connector.dimmed());
+                }
+            }
+
+            if lineage.len() == max_depth && parent_map.get(&lineage.last().unwrap().0).is_some() {
+                println!("{}", "│".dimmed());
+                println!("{}", "... (truncated, use --depth to see more)".dimmed());
+            }
+
+            println!();
+            println!("Total: {} snapshots in lineage", lineage.len());
+        }
+
+        Ok(())
     }
 }

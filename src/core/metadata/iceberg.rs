@@ -131,6 +131,64 @@ impl IcebergMetadataService {
     pub async fn current_metadata_path(&self) -> Result<String> {
         find_latest_metadata(&self.table_path, &self.storage).await
     }
+
+    /// List all references (branches and tags) from raw metadata JSON
+    /// Returns a list of (name, snapshot_id, ref_type) tuples
+    pub async fn list_refs(&self) -> Result<Vec<RefInfo>> {
+        use crate::core::storage::GetOptions;
+        let metadata_path = self.current_metadata_path().await?;
+        let content = self.storage.get(&metadata_path, &GetOptions::default()).await?;
+        let json: serde_json::Value = serde_json::from_slice(&content)
+            .map_err(|e| Error::General(format!("Failed to parse metadata JSON: {}", e)))?;
+
+        let mut refs = Vec::new();
+
+        // Parse refs from JSON
+        if let Some(refs_obj) = json.get("refs").and_then(|v| v.as_object()) {
+            for (name, ref_value) in refs_obj {
+                let snapshot_id = ref_value
+                    .get("snapshot-id")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+
+                let ref_type = ref_value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                refs.push(RefInfo {
+                    name: name.clone(),
+                    snapshot_id,
+                    ref_type,
+                });
+            }
+        }
+
+        // Always include "main" pointing to current snapshot if not already present
+        if !refs.iter().any(|r| r.name == "main") {
+            if let Some(current_id) = json.get("current-snapshot-id").and_then(|v| v.as_i64()) {
+                refs.push(RefInfo {
+                    name: "main".to_string(),
+                    snapshot_id: current_id,
+                    ref_type: "branch".to_string(),
+                });
+            }
+        }
+
+        Ok(refs)
+    }
+}
+
+/// Information about a reference (branch or tag)
+#[derive(Debug, Clone)]
+pub struct RefInfo {
+    /// Name of the reference
+    pub name: String,
+    /// Snapshot ID the reference points to
+    pub snapshot_id: i64,
+    /// Type of reference: "branch" or "tag"
+    pub ref_type: String,
 }
 
 #[async_trait]

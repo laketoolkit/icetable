@@ -243,17 +243,19 @@ impl SnapshotService {
     /// Set the current snapshot (time-travel)
     ///
     /// Changes the table's current snapshot to an existing snapshot,
-    /// either by ID or by timestamp (as-of).
+    /// either by ID, timestamp (as-of), branch name, or tag name.
     pub async fn set_current_snapshot(
         &self,
         service: &IcebergMetadataService,
         table_path: &str,
         id: Option<i64>,
         as_of: Option<String>,
+        branch: Option<String>,
+        tag: Option<String>,
     ) -> Result<SetSnapshotResult> {
         let (metadata, current_version) = service.load_metadata().await?;
 
-        let target_id = self.resolve_target_snapshot(&metadata, id, as_of)?;
+        let target_id = self.resolve_target_snapshot(&metadata, id, as_of, branch, tag)?;
 
         // Verify snapshot exists
         let _ = metadata
@@ -450,17 +452,33 @@ impl SnapshotService {
         }
     }
 
-    /// Resolve target snapshot ID from either direct ID or as-of timestamp
+    /// Resolve target snapshot ID from direct ID, as-of timestamp, branch, or tag
     fn resolve_target_snapshot(
         &self,
         metadata: &Arc<TableMetadata>,
         id: Option<i64>,
         as_of: Option<String>,
+        branch: Option<String>,
+        tag: Option<String>,
     ) -> Result<i64> {
-        match (id, as_of) {
-            (Some(id), _) => Ok(id),
-            (None, Some(timestamp)) => self.find_snapshot_at_timestamp(metadata, &timestamp),
-            (None, None) => Err(Error::General("Must specify --id or --as-of".to_string())),
+        match (id, as_of, branch, tag) {
+            (Some(id), _, _, _) => Ok(id),
+            (None, Some(timestamp), _, _) => self.find_snapshot_at_timestamp(metadata, &timestamp),
+            (None, None, Some(branch_name), _) => {
+                metadata
+                    .snapshot_for_ref(&branch_name)
+                    .map(|s| s.snapshot_id())
+                    .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name)))
+            }
+            (None, None, None, Some(tag_name)) => {
+                metadata
+                    .snapshot_for_ref(&tag_name)
+                    .map(|s| s.snapshot_id())
+                    .ok_or_else(|| Error::General(format!("Tag '{}' not found", tag_name)))
+            }
+            (None, None, None, None) => Err(Error::General(
+                "Must specify --id, --as-of, --branch, or --tag".to_string(),
+            )),
         }
     }
 

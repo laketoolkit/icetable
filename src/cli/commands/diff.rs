@@ -1,13 +1,12 @@
 //! Diff command implementation
+//!
+//! Compares snapshots, branches, or tags within a table.
 
-use std::path::Path;
-use std::sync::Arc;
+use colored::Colorize;
 
-use crate::cli::output::DiffFormatter;
 use crate::cli::parser::DiffArgs;
-use crate::core::formats::FormatHandlerFactory;
-use crate::core::operations::diff::{DiffOperation, DiffOptions};
-use crate::core::storage::StorageBackendFactory;
+use crate::core::metadata::IcebergMetadataService;
+use crate::core::TableContext;
 use crate::error::{Error, Result};
 
 /// Handler for diff command
@@ -16,134 +15,218 @@ pub struct DiffCommand;
 impl DiffCommand {
     /// Execute diff command
     pub async fn execute(args: DiffArgs) -> Result<()> {
-        let left_path = Path::new(&args.left);
-        let right_path = Path::new(&args.right);
+        let ctx = TableContext::from_path(args.path).await?;
+        ctx.require_iceberg()?;
 
-        // Create storage backends for each file (supports local and cloud)
-        let left_storage = StorageBackendFactory::create_backend(&args.left).await?;
-        let right_storage = StorageBackendFactory::create_backend(&args.right).await?;
+        let service = ctx.iceberg_service().await?;
+        let (metadata, _) = service.load_metadata().await?;
 
-        // Get format handlers
-        let left_handler = FormatHandlerFactory::create_handler(left_path, left_storage).await?;
-        let right_handler = FormatHandlerFactory::create_handler(right_path, right_storage).await?;
+        let current_id = metadata
+            .current_snapshot_id()
+            .ok_or_else(|| Error::General("Table has no current snapshot".to_string()))?;
 
-        // Convert to Arc for DiffOperation
-        let left_arc = Arc::from(left_handler);
-        let right_arc = Arc::from(right_handler);
-
-        // Create operation
-        let operation = DiffOperation::new(left_arc, right_arc);
-
-        // Build options from args
-        let options = DiffOptions {
-            verbose: args.verbose,
+        // Resolve reference (default to current)
+        let ref_id = if let Some(ref reference) = args.reference {
+            Self::resolve_ref(&metadata, reference)?
+        } else {
+            current_id
         };
 
-        // Execute operation with paths
-        let result = operation
-            .execute(&options, args.left.clone(), args.right.clone())
-            .await?;
+        // Resolve base (default to parent of reference, or error if no base specified and no parent)
+        let base_id = if let Some(ref base_ref) = args.base {
+            Self::resolve_ref(&metadata, base_ref)?
+        } else {
+            // Try to get parent snapshot
+            let ref_snapshot = metadata
+                .snapshot_by_id(ref_id)
+                .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
+            ref_snapshot
+                .parent_snapshot_id()
+                .ok_or_else(|| Error::General("No parent snapshot. Use --base to specify a base reference.".to_string()))?
+        };
 
-        // Format output
-        let output = match args.output.as_str() {
-            "json" => {
-                // Calculate row deltas
-                let (rows_added, rows_removed, rows_delta, rows_delta_pct) =
-                    if let Some((left, right)) = result.metadata_diff.num_rows {
-                        let delta = right - left;
-                        let delta_pct = if left > 0 {
-                            ((delta as f64) / (left as f64)) * 100.0
-                        } else {
-                            0.0
-                        };
-                        if delta > 0 {
-                            (delta, 0, delta, delta_pct)
-                        } else {
-                            (0, delta.abs(), delta, delta_pct)
-                        }
-                    } else {
-                        (0, 0, 0, 0.0)
-                    };
-
-                // Create JSON matching visual structure
-                let serializable = serde_json::json!({
-                    "files": {
-                        "left": result.left_path,
-                        "right": result.right_path,
-                    },
-                    "rows": {
-                        "total": {
-                            "left": result.metadata_diff.num_rows.map(|(l, _)| l),
-                            "right": result.metadata_diff.num_rows.map(|(_, r)| r),
-                            "delta": rows_delta,
-                            "delta_percent": rows_delta_pct,
-                        },
-                        "added": rows_added,
-                        "removed": rows_removed,
-                    },
-                    "schema": {
-                        "is_identical": result.schema_diff.is_identical(),
-                        "added_columns": result.schema_diff.columns_added.iter().map(|c| {
-                            serde_json::json!({
-                                "name": c.name,
-                                "data_type": c.data_type,
-                                "nullable": c.nullable,
-                            })
-                        }).collect::<Vec<_>>(),
-                        "removed_columns": result.schema_diff.columns_removed.iter().map(|c| {
-                            serde_json::json!({
-                                "name": c.name,
-                                "data_type": c.data_type,
-                                "nullable": c.nullable,
-                            })
-                        }).collect::<Vec<_>>(),
-                        "modified_columns": result.schema_diff.columns_modified.iter().map(|c| {
-                            serde_json::json!({
-                                "name": c.name,
-                                "type_change": c.type_change,
-                                "nullability_change": c.nullability_change,
-                            })
-                        }).collect::<Vec<_>>(),
-                    },
-                    "metadata": {
-                        "file_properties": {
-                            "rows": result.metadata_diff.num_rows,
-                            "size": {
-                                "compressed": result.metadata_diff.compressed_size,
-                                "uncompressed": result.metadata_diff.uncompressed_size,
-                            },
-                            "compression": result.metadata_diff.compression,
-                            "version": result.metadata_diff.format_version,
-                        },
-                        "custom_metadata": {
-                            "added": result.metadata_diff.custom_metadata.added,
-                            "removed": result.metadata_diff.custom_metadata.removed,
-                            "modified": result.metadata_diff.custom_metadata.modified,
-                        }
-                    },
-                    "column_statistics": if args.verbose {
-                        result.column_stats_diff.iter().map(|s| {
-                            serde_json::json!({
-                                "name": s.name,
-                                "null_count": s.null_count,
-                                "distinct_count_approx": s.distinct_count_approx,
-                                "min_value": s.min_value,
-                                "max_value": s.max_value,
-                                "mean": s.mean,
-                            })
-                        }).collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    },
+        if ref_id == base_id {
+            if args.output == "json" {
+                let json = serde_json::json!({
+                    "reference": ref_id,
+                    "base": base_id,
+                    "identical": true,
                 });
-                serde_json::to_string_pretty(&serializable)
-                    .map_err(|e| Error::General(e.to_string()))?
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+                );
+            } else {
+                println!("{}", "References point to the same snapshot".yellow());
             }
-            _ => DiffFormatter::format_diff_result(&result),
-        };
+            return Ok(());
+        }
 
-        println!("{}", output);
+        // Get snapshots
+        let base_snapshot = metadata
+            .snapshot_by_id(base_id)
+            .ok_or_else(|| Error::General(format!("Snapshot {} not found", base_id)))?;
+        let ref_snapshot = metadata
+            .snapshot_by_id(ref_id)
+            .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
+
+        // Get manifest files for both
+        let base_manifests = Self::get_manifest_files(&service, base_snapshot).await?;
+        let ref_manifests = Self::get_manifest_files(&service, ref_snapshot).await?;
+
+        // Calculate diff (what changed from base to ref)
+        let added: Vec<_> = ref_manifests
+            .iter()
+            .filter(|m| !base_manifests.contains(m))
+            .collect();
+        let removed: Vec<_> = base_manifests
+            .iter()
+            .filter(|m| !ref_manifests.contains(m))
+            .collect();
+
+        // Format timestamps
+        let base_ts = chrono::DateTime::from_timestamp_millis(base_snapshot.timestamp_ms())
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| base_snapshot.timestamp_ms().to_string());
+        let ref_ts = chrono::DateTime::from_timestamp_millis(ref_snapshot.timestamp_ms())
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| ref_snapshot.timestamp_ms().to_string());
+
+        // Labels for display
+        let ref_label = args.reference.as_deref().unwrap_or("current");
+        let base_label = args.base.as_deref().unwrap_or("parent");
+
+        if args.output == "json" {
+            let json = serde_json::json!({
+                "base": {
+                    "ref": base_label,
+                    "snapshot_id": base_id,
+                    "timestamp": base_ts,
+                    "manifest_count": base_manifests.len(),
+                },
+                "reference": {
+                    "ref": ref_label,
+                    "snapshot_id": ref_id,
+                    "timestamp": ref_ts,
+                    "manifest_count": ref_manifests.len(),
+                },
+                "diff": {
+                    "manifests_added": added.len(),
+                    "manifests_removed": removed.len(),
+                    "added_paths": added,
+                    "removed_paths": removed,
+                }
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+            );
+        } else {
+            println!(
+                "{} {} (base: {})",
+                "Comparing".green(),
+                ref_label,
+                base_label
+            );
+            println!();
+            println!(
+                "{:<20} {:<20} {:<20} {}",
+                "REF".cyan(),
+                "SNAPSHOT".cyan(),
+                "TIMESTAMP".cyan(),
+                "MANIFESTS".cyan()
+            );
+            println!("{}", "-".repeat(75));
+            println!(
+                "{:<20} {:<20} {:<20} {}",
+                base_label,
+                base_id,
+                base_ts,
+                base_manifests.len()
+            );
+            println!(
+                "{:<20} {:<20} {:<20} {}",
+                ref_label,
+                ref_id,
+                ref_ts,
+                ref_manifests.len()
+            );
+            println!();
+
+            if added.is_empty() && removed.is_empty() {
+                println!("{}", "No manifest changes".yellow());
+            } else {
+                println!("Changes:");
+                for path in &added {
+                    let filename = path.rsplit('/').next().unwrap_or(path);
+                    println!("  {} {}", "+".green(), filename);
+                }
+                for path in &removed {
+                    let filename = path.rsplit('/').next().unwrap_or(path);
+                    println!("  {} {}", "-".red(), filename);
+                }
+                println!();
+                println!(
+                    "Summary: {} added, {} removed",
+                    added.len().to_string().green(),
+                    removed.len().to_string().red()
+                );
+            }
+        }
 
         Ok(())
+    }
+
+    /// Resolve a reference (snapshot ID, branch name, or tag name) to a snapshot ID
+    fn resolve_ref(
+        metadata: &std::sync::Arc<iceberg::spec::TableMetadata>,
+        reference: &str,
+    ) -> Result<i64> {
+        // Try parsing as snapshot ID first
+        if let Ok(id) = reference.parse::<i64>() {
+            if metadata.snapshot_by_id(id).is_some() {
+                return Ok(id);
+            }
+            // ID format but doesn't exist - still report as snapshot not found
+            return Err(Error::General(format!("Snapshot {} not found", id)));
+        }
+
+        // Try as branch/tag name
+        if let Some(snapshot) = metadata.snapshot_for_ref(reference) {
+            return Ok(snapshot.snapshot_id());
+        }
+
+        Err(Error::General(format!(
+            "Reference '{}' not found (not a valid snapshot ID, branch, or tag)",
+            reference
+        )))
+    }
+
+    /// Get manifest file paths from a snapshot
+    async fn get_manifest_files(
+        service: &IcebergMetadataService,
+        snapshot: &iceberg::spec::Snapshot,
+    ) -> Result<Vec<String>> {
+        let file_io = service.file_io();
+        let manifest_list_path = snapshot.manifest_list();
+
+        let manifest_list_content = file_io
+            .new_input(manifest_list_path)
+            .map_err(|e| Error::General(format!("Failed to create input: {}", e)))?
+            .read()
+            .await
+            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
+
+        let manifest_list = iceberg::spec::ManifestList::parse_with_version(
+            &manifest_list_content,
+            iceberg::spec::FormatVersion::V2,
+        )
+        .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+
+        Ok(manifest_list
+            .entries()
+            .iter()
+            .map(|e| e.manifest_path.clone())
+            .collect())
     }
 }
