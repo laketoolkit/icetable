@@ -568,9 +568,13 @@ pub struct SnapshotLineageArgs {
     /// Snapshot ID to show lineage for (defaults to current)
     pub snapshot_id: Option<i64>,
 
-    /// Maximum depth to traverse (defaults to all)
-    #[arg(short = 'n', long)]
-    pub depth: Option<usize>,
+    /// Number of snapshots to show (default: 10)
+    #[arg(short = 'n', long, default_value = "10")]
+    pub limit: usize,
+
+    /// Show all snapshots in lineage
+    #[arg(short, long)]
+    pub all: bool,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]

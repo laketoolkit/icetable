@@ -113,7 +113,8 @@ impl SnapshotCommand {
                 Self::iceberg_cherrypick(table_path, a.snapshot_id, &a.output).await
             }
             SnapshotCommands::Lineage(a) => {
-                Self::iceberg_lineage(table_path, a.snapshot_id, a.depth, &a.output).await
+                let limit = if a.all { None } else { Some(a.limit) };
+                Self::iceberg_lineage(table_path, a.snapshot_id, limit, &a.output).await
             }
         }
     }
@@ -343,7 +344,7 @@ impl SnapshotCommand {
     async fn iceberg_lineage(
         path: &str,
         snapshot_id: Option<i64>,
-        depth: Option<usize>,
+        limit: Option<usize>,
         output: &str,
     ) -> Result<()> {
         use std::collections::HashMap;
@@ -371,10 +372,10 @@ impl SnapshotCommand {
         // Walk the lineage
         let mut lineage: Vec<(i64, Option<i64>, i64, String)> = Vec::new();
         let mut current = Some(start_id);
-        let max_depth = depth.unwrap_or(usize::MAX);
+        let max_items = limit.unwrap_or(usize::MAX);
 
         while let Some(id) = current {
-            if lineage.len() >= max_depth {
+            if lineage.len() >= max_items {
                 break;
             }
 
@@ -454,9 +455,12 @@ impl SnapshotCommand {
                 }
             }
 
-            if lineage.len() == max_depth && parent_map.get(&lineage.last().unwrap().0).is_some() {
-                println!("{}", "│".dimmed());
-                println!("{}", "... (truncated, use --depth to see more)".dimmed());
+            // Check if there are more snapshots beyond the limit
+            if let Some(last) = lineage.last() {
+                if last.1.is_some() && lineage.len() == max_items {
+                    println!("{}", "│".dimmed());
+                    println!("{}", "... (truncated, use -a/--all to see all)".dimmed());
+                }
             }
 
             println!();
