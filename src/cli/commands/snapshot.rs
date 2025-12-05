@@ -122,9 +122,13 @@ impl SnapshotCommand {
             .snapshots
             .iter()
             .map(|snap| {
-                SnapshotInfo::new(snap.id, snap.timestamp)
+                let mut info = SnapshotInfo::new(snap.id, snap.timestamp)
                     .with_parent(snap.parent_id)
-                    .with_current(snap.is_current)
+                    .with_current(snap.is_current);
+                if let Some(ref op) = snap.operation {
+                    info = info.with_operation(op.clone());
+                }
+                info
             })
             .collect();
 

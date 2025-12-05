@@ -2,9 +2,15 @@
 
 use bytes::Bytes;
 use icectl::core::storage::{GetOptions, ListOptions, LocalBackend, PutOptions, StorageBackend};
+use tempfile::TempDir;
 
 fn create_backend() -> LocalBackend {
     LocalBackend::new().unwrap()
+}
+
+/// Create a temporary directory for write tests to avoid interfering with listing tests
+fn create_temp_dir() -> TempDir {
+    tempfile::tempdir().expect("Failed to create temp directory")
 }
 
 #[tokio::test]
@@ -152,51 +158,55 @@ async fn test_list_with_max_results() {
 #[tokio::test]
 async fn test_put_and_get_roundtrip() {
     let backend = create_backend();
-    let test_path = "tests/fixtures/test_put.txt";
+    let temp_dir = create_temp_dir();
+    let test_path = temp_dir.path().join("test_put.txt");
+    let test_path_str = test_path.to_str().unwrap();
     let test_data = Bytes::from("Hello, World!");
     let put_options = PutOptions::default();
 
     // Write data
     let put_result = backend
-        .put(test_path, test_data.clone(), &put_options)
+        .put(test_path_str, test_data.clone(), &put_options)
         .await;
     assert!(put_result.is_ok(), "Should write file");
 
     // Read it back
     let get_options = GetOptions::default();
-    let get_result = backend.get(test_path, &get_options).await;
+    let get_result = backend.get(test_path_str, &get_options).await;
     assert!(get_result.is_ok(), "Should read written file");
 
     let retrieved_data = get_result.unwrap();
     assert_eq!(retrieved_data, test_data, "Data should match");
 
-    // Clean up
-    let delete_result = backend.delete(test_path).await;
+    // Clean up (temp_dir drops automatically, but explicit delete tests the method)
+    let delete_result = backend.delete(test_path_str).await;
     assert!(delete_result.is_ok(), "Should delete file");
 }
 
 #[tokio::test]
 async fn test_delete_existing_file() {
     let backend = create_backend();
-    let test_path = "tests/fixtures/test_delete.txt";
+    let temp_dir = create_temp_dir();
+    let test_path = temp_dir.path().join("test_delete.txt");
+    let test_path_str = test_path.to_str().unwrap();
     let test_data = Bytes::from("Delete me");
     let put_options = PutOptions::default();
 
     // Create file
     backend
-        .put(test_path, test_data, &put_options)
+        .put(test_path_str, test_data, &put_options)
         .await
         .unwrap();
 
     // Verify it exists
-    assert!(backend.exists(test_path).await.unwrap());
+    assert!(backend.exists(test_path_str).await.unwrap());
 
     // Delete it
-    let delete_result = backend.delete(test_path).await;
+    let delete_result = backend.delete(test_path_str).await;
     assert!(delete_result.is_ok(), "Should delete file");
 
     // Verify it's gone
-    assert!(!backend.exists(test_path).await.unwrap());
+    assert!(!backend.exists(test_path_str).await.unwrap());
 }
 
 #[tokio::test]
@@ -211,29 +221,30 @@ async fn test_delete_nonexistent_file() {
 #[tokio::test]
 async fn test_copy_file() {
     let backend = create_backend();
-    let source = "tests/fixtures/test_copy_source.txt";
-    let dest = "tests/fixtures/test_copy_dest.txt";
+    let temp_dir = create_temp_dir();
+    let source = temp_dir.path().join("test_copy_source.txt");
+    let dest = temp_dir.path().join("test_copy_dest.txt");
+    let source_str = source.to_str().unwrap();
+    let dest_str = dest.to_str().unwrap();
     let test_data = Bytes::from("Copy this data");
     let put_options = PutOptions::default();
 
     // Create source file
     backend
-        .put(source, test_data.clone(), &put_options)
+        .put(source_str, test_data.clone(), &put_options)
         .await
         .unwrap();
 
     // Copy it
-    let copy_result = backend.copy(source, dest).await;
+    let copy_result = backend.copy(source_str, dest_str).await;
     assert!(copy_result.is_ok(), "Should copy file");
 
     // Verify destination exists and has same content
     let get_options = GetOptions::default();
-    let dest_data = backend.get(dest, &get_options).await.unwrap();
+    let dest_data = backend.get(dest_str, &get_options).await.unwrap();
     assert_eq!(dest_data, test_data, "Copied data should match");
 
-    // Clean up
-    backend.delete(source).await.unwrap();
-    backend.delete(dest).await.unwrap();
+    // Clean up (temp_dir drops automatically)
 }
 
 #[tokio::test]

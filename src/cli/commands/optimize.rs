@@ -2,7 +2,7 @@
 //!
 //! Subcommands:
 //! - `data`: Compact small data files into larger ones
-//! - `manifests`: Rewrite and compact manifest files (Iceberg only)
+//! - `manifests`: Rewrite and compact manifest files
 
 use colored::Colorize;
 
@@ -45,7 +45,7 @@ impl OptimizeCommand {
 
         let result = match format {
             TableFormat::Delta => Self::optimize_delta_data(&args, &service).await?,
-            TableFormat::Iceberg => Self::optimize_iceberg_data(&args, &service).await?,
+            TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service).await?,
             TableFormat::Unknown => {
                 return Err(Error::General(format!(
                     "Path '{}' is not a Delta Lake or Iceberg table",
@@ -73,7 +73,7 @@ impl OptimizeCommand {
                 );
                 Ok(())
             }
-            TableFormat::Iceberg => Self::rewrite_iceberg_manifests(&args).await,
+            TableFormat::Iceberg => Self::rewrite_iceberg_manifests(&table_path, &args).await,
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 table_path
@@ -93,20 +93,19 @@ impl OptimizeCommand {
 
     /// Optimize Iceberg data files
     async fn optimize_iceberg_data(
-        args: &OptimizeDataArgs,
+        table_path: &str,
         service: &OptimizeService,
     ) -> Result<MaintenanceResult> {
         use crate::core::metadata::IcebergMetadataService;
 
-        let table_path = args.path.as_ref().unwrap();
         println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
 
-        let metadata_service = IcebergMetadataService::new_async(table_path.clone()).await?;
+        let metadata_service = IcebergMetadataService::new_async(table_path.to_string()).await?;
         service.execute(&metadata_service).await
     }
 
     /// Rewrite Iceberg manifest files
-    async fn rewrite_iceberg_manifests(args: &OptimizeManifestsArgs) -> Result<()> {
+    async fn rewrite_iceberg_manifests(table_path: &str, args: &OptimizeManifestsArgs) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
         use iceberg::spec::{
             ManifestContentType, ManifestEntry, ManifestListWriter, ManifestStatus,
@@ -115,7 +114,6 @@ impl OptimizeCommand {
         use indicatif::{ProgressBar, ProgressStyle};
         use std::sync::Arc;
 
-        let table_path = args.path.as_ref().unwrap();
         println!(
             "{} Iceberg manifests at {}",
             "Rewriting".green(),
@@ -123,7 +121,7 @@ impl OptimizeCommand {
         );
 
         // Load metadata
-        let service = IcebergMetadataService::new_async(table_path.clone()).await?;
+        let service = IcebergMetadataService::new_async(table_path.to_string()).await?;
         let (metadata, current_version) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
 

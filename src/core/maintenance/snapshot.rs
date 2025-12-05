@@ -32,6 +32,8 @@ pub struct SnapshotDetails {
     pub parent_id: Option<i64>,
     /// Whether this is the current snapshot
     pub is_current: bool,
+    /// Operation that created this snapshot (append, overwrite, replace, delete, etc.)
+    pub operation: Option<String>,
 }
 
 impl SnapshotDetails {
@@ -40,11 +42,21 @@ impl SnapshotDetails {
         snapshot: &iceberg::spec::Snapshot,
         current_snapshot_id: Option<i64>,
     ) -> Self {
+        use iceberg::spec::Operation;
+
+        let operation = match snapshot.summary().operation {
+            Operation::Append => "append",
+            Operation::Replace => "replace",
+            Operation::Overwrite => "overwrite",
+            Operation::Delete => "delete",
+        };
+
         Self {
             id: snapshot.snapshot_id(),
             timestamp: DateTime::from_timestamp_millis(snapshot.timestamp_ms()),
             parent_id: snapshot.parent_snapshot_id(),
             is_current: Some(snapshot.snapshot_id()) == current_snapshot_id,
+            operation: Some(operation.to_string()),
         }
     }
 }
@@ -344,7 +356,7 @@ impl SnapshotService {
     /// Cherry-pick in Iceberg creates a new snapshot that applies changes
     /// from a specific snapshot onto the current table state.
     pub async fn cherry_pick_snapshot(&self, _table_path: &str, snapshot_id: i64) -> Result<()> {
-        // TODO: Implement cherry-pick using iceberg-rs Transaction API
+        // FUTURE: Implement cherry-pick using iceberg-rs Transaction API
         // Cherry-pick in Iceberg creates a new snapshot that applies the changes
         // from a specific snapshot onto the current table state. This requires:
         // 1. Reading the manifest files from the source snapshot

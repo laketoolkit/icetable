@@ -53,7 +53,7 @@ impl FormatHandlerRegistry {
             + Sync
             + 'static,
     {
-        let mut handlers = self.handlers.write().unwrap();
+        let mut handlers = self.handlers.write().expect("handler registry lock poisoned");
         handlers.push((name.to_string(), priority, Arc::new(factory)));
         // Sort by priority (descending)
         handlers.sort_by(|a, b| b.1.cmp(&a.1));
@@ -86,7 +86,7 @@ impl FormatHandlerRegistry {
         // Otherwise, use the standard factory-based approach
         // Collect handlers first to avoid holding MutexGuard across await
         let candidate_handlers: Vec<_> = {
-            let handlers = self.handlers.read().unwrap();
+            let handlers = self.handlers.read().expect("handler registry lock poisoned");
             handlers
                 .iter()
                 .filter_map(|(_name, _priority, factory)| factory(path, storage.clone()).ok())
@@ -151,7 +151,7 @@ impl FormatHandlerRegistry {
 
     /// Get list of registered format names (for debugging)
     pub fn registered_formats(&self) -> Vec<String> {
-        let handlers = self.handlers.read().unwrap();
+        let handlers = self.handlers.read().expect("handler registry lock poisoned");
         handlers.iter().map(|(name, _, _)| name.clone()).collect()
     }
 }

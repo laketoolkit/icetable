@@ -59,24 +59,6 @@ pub fn to_datafusion_batches(
     deserialize_batches_from_ipc_df(&ipc_bytes)
 }
 
-/// Convert datafusion::arrow RecordBatch to arrow v54 RecordBatch
-///
-/// This is the reverse operation of `to_datafusion_batch`.
-///
-/// # Errors
-///
-/// Returns error if conversion fails
-#[allow(dead_code)]
-pub fn from_datafusion_batch(
-    batch: &arrow::record_batch::RecordBatch,
-) -> Result<arrow::record_batch::RecordBatch> {
-    // Serialize to IPC bytes using datafusion::arrow
-    let ipc_bytes = serialize_batch_to_ipc_df(batch)?;
-
-    // Deserialize using arrow v54
-    deserialize_batch_from_ipc(&ipc_bytes)
-}
-
 // ============================================================================
 // Internal implementation using Arrow IPC
 // ============================================================================
@@ -133,7 +115,8 @@ fn serialize_batches_to_ipc(batches: &[arrow::record_batch::RecordBatch]) -> Res
     Ok(Bytes::from(buffer))
 }
 
-/// Deserialize arrow v54 RecordBatch from IPC format
+/// Deserialize arrow v54 RecordBatch from IPC format (test-only)
+#[cfg(test)]
 fn deserialize_batch_from_ipc(bytes: &[u8]) -> Result<arrow::record_batch::RecordBatch> {
     use arrow::ipc::reader::StreamReader;
     use std::io::Cursor;
@@ -151,7 +134,8 @@ fn deserialize_batch_from_ipc(bytes: &[u8]) -> Result<arrow::record_batch::Recor
     Ok(batch)
 }
 
-/// Serialize a single datafusion::arrow RecordBatch to IPC format
+/// Serialize a single datafusion::arrow RecordBatch to IPC format (test-only)
+#[cfg(test)]
 fn serialize_batch_to_ipc_df(batch: &arrow::record_batch::RecordBatch) -> Result<Bytes> {
     use arrow::ipc::writer::StreamWriter;
 
@@ -209,6 +193,14 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
+
+    /// Convert datafusion::arrow RecordBatch to arrow v54 RecordBatch (test-only)
+    fn from_datafusion_batch(
+        batch: &arrow::record_batch::RecordBatch,
+    ) -> Result<arrow::record_batch::RecordBatch> {
+        let ipc_bytes = serialize_batch_to_ipc_df(batch)?;
+        deserialize_batch_from_ipc(&ipc_bytes)
+    }
 
     #[test]
     fn test_single_batch_conversion() {

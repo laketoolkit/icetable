@@ -238,7 +238,7 @@ impl PhysicalInspector for DeltaInspector {
             schema,
             layout,
             statistics,
-            orphan_files: None, // TODO: Implement orphan detection for Delta
+            orphan_files: None, // FUTURE: Implement orphan detection for Delta when needed
         })
     }
 
@@ -323,17 +323,6 @@ impl PhysicalInspectorFactory for DeltaInspectorFactory {
 // ============================================================================
 
 #[cfg(feature = "delta")]
-#[allow(dead_code)]
-#[derive(Debug)]
-struct CommitInfo {
-    timestamp: Option<i64>,
-    operation: Option<String>,
-    operation_parameters: Option<serde_json::Map<String, JsonValue>>,
-    operation_metrics: Option<serde_json::Map<String, JsonValue>>,
-    is_blind_append: Option<bool>,
-}
-
-#[cfg(feature = "delta")]
 #[derive(Debug)]
 struct FileStats {
     total_files: usize,
@@ -341,81 +330,6 @@ struct FileStats {
     total_records: Option<i64>,
     min_size: Option<i64>,
     max_size: Option<i64>,
-    added_files: i64,
-    removed_files: i64,
-    added_records: i64,
-    removed_records: i64,
-    added_bytes: i64,
-    removed_bytes: i64,
-}
-
-#[cfg(feature = "delta")]
-#[allow(dead_code)]
-/// Read commit information from Delta transaction log
-async fn read_commit_info(
-    storage: Arc<dyn StorageBackend>,
-    table_path: &str,
-    version: i64,
-) -> Result<Option<CommitInfo>> {
-    let log_file = format!("{}/_delta_log/{:020}.json", table_path, version);
-
-    let get_opts = GetOptions {
-        range: None,
-        if_modified_since: None,
-        if_none_match: None,
-    };
-
-    let content = match storage.get(&log_file, &get_opts).await {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
-    };
-
-    let content_str = String::from_utf8(content.to_vec())
-        .map_err(|e| Error::General(format!("Invalid UTF-8 in log file: {}", e)))?;
-
-    // Find the commitInfo action
-    for line in content_str.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let action: JsonValue = serde_json::from_str(line)
-            .map_err(|e| Error::General(format!("Failed to parse log action: {}", e)))?;
-
-        if let Some(commit_info) = action.get("commitInfo").and_then(|ci| ci.as_object()) {
-            let timestamp = commit_info.get("timestamp").and_then(|t| t.as_i64());
-
-            let operation = commit_info
-                .get("operation")
-                .and_then(|o| o.as_str())
-                .map(|s| s.to_string());
-
-            let operation_parameters = commit_info
-                .get("operationParameters")
-                .and_then(|op| op.as_object())
-                .cloned();
-
-            let operation_metrics = commit_info
-                .get("operationMetrics")
-                .and_then(|om| om.as_object())
-                .cloned();
-
-            let is_blind_append = operation_parameters
-                .as_ref()
-                .and_then(|params| params.get("isBlindAppend"))
-                .and_then(|v| v.as_bool());
-
-            return Ok(Some(CommitInfo {
-                timestamp,
-                operation,
-                operation_parameters,
-                operation_metrics,
-                is_blind_append,
-            }));
-        }
-    }
-
-    Ok(None)
 }
 
 #[cfg(feature = "delta")]
@@ -446,12 +360,6 @@ async fn read_file_stats(
     let mut total_records: Option<i64> = Some(0);
     let mut min_size: Option<i64> = None;
     let mut max_size: Option<i64> = None;
-    let mut added_files: i64 = 0;
-    let mut removed_files: i64 = 0;
-    let mut added_records: i64 = 0;
-    let mut removed_records: i64 = 0;
-    let mut added_bytes: i64 = 0;
-    let mut removed_bytes: i64 = 0;
 
     // Parse all Add and Remove actions
     for line in content_str.lines() {
@@ -465,12 +373,10 @@ async fn read_file_stats(
         // Look for "add" actions
         if let Some(add) = action.get("add").and_then(|a| a.as_object()) {
             total_files += 1;
-            added_files += 1;
 
             // Get file size
             if let Some(size) = add.get("size").and_then(|s| s.as_i64()) {
                 total_size += size;
-                added_bytes += size;
                 min_size = Some(min_size.map_or(size, |min| min.min(size)));
                 max_size = Some(max_size.map_or(size, |max| max.max(size)));
             }
@@ -482,28 +388,10 @@ async fn read_file_stats(
                         if let Some(ref mut total) = total_records {
                             *total += num_records;
                         }
-                        added_records += num_records;
                     }
                 }
             } else {
                 total_records = None;
-            }
-        }
-
-        // Look for "remove" actions
-        if let Some(remove) = action.get("remove").and_then(|r| r.as_object()) {
-            removed_files += 1;
-
-            if let Some(size) = remove.get("size").and_then(|s| s.as_i64()) {
-                removed_bytes += size;
-            }
-
-            if let Some(stats_str) = remove.get("stats").and_then(|s| s.as_str()) {
-                if let Ok(stats) = serde_json::from_str::<JsonValue>(stats_str) {
-                    if let Some(num_records) = stats.get("numRecords").and_then(|n| n.as_i64()) {
-                        removed_records += num_records;
-                    }
-                }
             }
         }
     }
@@ -514,12 +402,6 @@ async fn read_file_stats(
         total_records,
         min_size,
         max_size,
-        added_files,
-        removed_files,
-        added_records,
-        removed_records,
-        added_bytes,
-        removed_bytes,
     })
 }
 

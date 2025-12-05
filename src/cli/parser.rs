@@ -66,10 +66,10 @@ pub enum Commands {
     #[command(subcommand)]
     Import(ImportCommands),
 
-    /// Manage table branches (Iceberg only)
+    /// Manage table branches
     Branch(BranchArgs),
 
-    /// Manage table tags (Iceberg only)
+    /// Manage table tags
     Tag(TagArgs),
 
     /// Manage configuration (default table context)
@@ -438,7 +438,7 @@ pub enum SnapshotCommands {
     /// Set current snapshot (time travel)
     Set(SnapshotSetArgs),
 
-    /// Cherry-pick changes from another snapshot (Iceberg only)
+    /// Cherry-pick changes from another snapshot
     Cherrypick(SnapshotCherrypickArgs),
 }
 
@@ -530,7 +530,7 @@ pub struct SnapshotSetArgs {
     pub output: String,
 }
 
-/// Arguments for snapshot cherrypick (Iceberg only)
+/// Arguments for snapshot cherrypick
 #[derive(Parser, Debug)]
 pub struct SnapshotCherrypickArgs {
     /// Path to table (uses default from config if not provided)
@@ -578,7 +578,7 @@ pub struct RepairArgs {
     pub output: String,
 }
 
-/// Arguments for branch command (Iceberg only)
+/// Arguments for branch command
 #[derive(Parser, Debug)]
 pub struct BranchArgs {
     /// Branch subcommand
@@ -683,7 +683,7 @@ pub struct BranchFastForwardArgs {
     pub output: String,
 }
 
-/// Arguments for tag command (Iceberg only)
+/// Arguments for tag command
 #[derive(Parser, Debug)]
 pub struct TagArgs {
     /// Tag subcommand

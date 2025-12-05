@@ -1,7 +1,7 @@
 //! Snapshot command formatting utilities
 
 use colored::Colorize;
-use comfy_table::{Cell, Color};
+use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, Color, ContentArrangement};
 use serde_json::Value;
 
 use crate::core::format_bytes;
@@ -14,7 +14,7 @@ impl SnapshotFormatter {
     pub fn format_list_table(snapshots: &[SnapshotInfo], title: &str) -> String {
         let mut output = Vec::new();
 
-        output.push(format!("{}", title.green()));
+        output.push(format!("{}", title.green().bold()));
         output.push(String::new());
 
         if snapshots.is_empty() {
@@ -23,11 +23,15 @@ impl SnapshotFormatter {
         }
 
         let mut table = comfy_table::Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+
         table.set_header(vec![
             Cell::new("ID").fg(Color::Cyan),
-            Cell::new("TIMESTAMP").fg(Color::Cyan),
-            Cell::new("PARENT").fg(Color::Cyan),
-            Cell::new("").fg(Color::Cyan),
+            Cell::new("Timestamp").fg(Color::Cyan),
+            Cell::new("Operation").fg(Color::Cyan),
+            Cell::new("Parent").fg(Color::Cyan),
+            Cell::new("Status").fg(Color::Cyan),
         ]);
 
         for snap in snapshots {
@@ -41,21 +45,30 @@ impl SnapshotFormatter {
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "-".to_string());
 
-            let marker = if snap.is_current {
-                " (current)".green().to_string()
+            let operation_str = snap
+                .operation
+                .as_deref()
+                .unwrap_or("-")
+                .to_string();
+
+            let status = if snap.is_current {
+                Cell::new("● current".green().to_string())
             } else {
-                String::new()
+                Cell::new("")
             };
 
             table.add_row(vec![
-                Cell::new(snap.id.to_string()),
+                Cell::new(snap.id.to_string()).set_alignment(CellAlignment::Right),
                 Cell::new(timestamp_str),
-                Cell::new(parent_str),
-                Cell::new(marker),
+                Cell::new(operation_str),
+                Cell::new(parent_str).set_alignment(CellAlignment::Right),
+                status,
             ]);
         }
 
         output.push(table.to_string());
+        output.push(String::new());
+        output.push(format!("Total: {} snapshots", snapshots.len()).dimmed().to_string());
         output.join("\n")
     }
 
@@ -217,15 +230,15 @@ impl SnapshotFormatter {
 /// Common snapshot information for formatting
 #[derive(Debug, Clone)]
 pub struct SnapshotInfo {
-    /// Snapshot ID
+    /// Snapshot ID (unique identifier)
     pub id: i64,
-    /// Timestamp when snapshot was created
+    /// Timestamp when snapshot was created in UTC
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    /// Parent snapshot ID (if any)
+    /// Parent snapshot ID (if any, for lineage tracking)
     pub parent_id: Option<i64>,
-    /// Whether this is the current snapshot
+    /// Whether this is the current snapshot (active version of the table)
     pub is_current: bool,
-    /// Operation that created this snapshot
+    /// Operation that created this snapshot (e.g., "append", "overwrite", "delete")
     pub operation: Option<String>,
 }
 

@@ -98,23 +98,9 @@ impl IcebergHandler {
 
     /// Parse timestamp string into milliseconds since epoch
     fn parse_timestamp(ts: &str) -> Result<i64> {
-        use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
-
-        // Try parsing as full datetime first (e.g., "2024-01-15T10:30:00")
-        if let Ok(dt) = NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S") {
-            return Ok(Utc.from_utc_datetime(&dt).timestamp_millis());
-        }
-
-        // Try parsing as date only (e.g., "2024-01-15")
-        if let Ok(date) = NaiveDate::parse_from_str(ts, "%Y-%m-%d") {
-            let dt = date.and_hms_opt(23, 59, 59).unwrap();
-            return Ok(Utc.from_utc_datetime(&dt).timestamp_millis());
-        }
-
-        Err(Error::General(format!(
-            "Invalid timestamp format '{}'. Use 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS'",
-            ts
-        )))
+        // Use the shared parse_timestamp utility
+        let datetime = crate::utils::parse_timestamp(ts)?;
+        Ok(datetime.timestamp_millis())
     }
 
     /// Open the Iceberg table using StaticTable

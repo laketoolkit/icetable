@@ -11,9 +11,7 @@ use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
 use crate::error::Result;
-use common::VerbosityLevel;
-
-use common::PhysicalInspectOptions;
+use common::{PhysicalInspectOptions, VerbosityLevel};
 
 /// Handler for inspect command
 pub struct InspectCommand;

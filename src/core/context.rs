@@ -72,18 +72,6 @@ impl TableContext {
         Ok(())
     }
 
-    /// Require Delta format, return error if not
-    #[allow(dead_code)]
-    pub fn require_delta(&self) -> Result<()> {
-        if !self.is_delta() {
-            return Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake table",
-                self.path
-            )));
-        }
-        Ok(())
-    }
-
     /// Get Iceberg metadata service for this table
     pub async fn iceberg_service(&self) -> Result<IcebergMetadataService> {
         self.require_iceberg()?;

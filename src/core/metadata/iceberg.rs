@@ -346,11 +346,32 @@ impl MetadataService for IcebergMetadataService {
             )
             .await?;
 
-        // Build summary
+        // Build summary with all standard Iceberg fields
         let total_records: u64 = all_files.iter().map(|f| f.record_count()).sum();
+        let total_files_size: u64 = all_files.iter().map(|f| f.file_size_in_bytes()).sum();
         let mut full_summary = summary.clone();
         full_summary.insert("total-records".to_string(), total_records.to_string());
         full_summary.insert("total-data-files".to_string(), all_files.len().to_string());
+        full_summary.insert("total-files-size".to_string(), total_files_size.to_string());
+
+        // Add change metrics
+        let added_files = changes.added.len();
+        let removed_files = changes.removed.len();
+        let added_size: u64 = changes.added.iter().map(|f| f.size).sum();
+        let removed_size: u64 = changes.removed.iter().map(|f| f.size).sum();
+        let added_records: u64 = changes.added.iter().map(|f| f.record_count).sum();
+        let removed_records: u64 = changes.removed.iter().map(|f| f.record_count).sum();
+
+        if added_files > 0 {
+            full_summary.insert("added-data-files".to_string(), added_files.to_string());
+            full_summary.insert("added-files-size".to_string(), added_size.to_string());
+            full_summary.insert("added-records".to_string(), added_records.to_string());
+        }
+        if removed_files > 0 {
+            full_summary.insert("deleted-data-files".to_string(), removed_files.to_string());
+            full_summary.insert("removed-files-size".to_string(), removed_size.to_string());
+            full_summary.insert("deleted-records".to_string(), removed_records.to_string());
+        }
 
         let iceberg_summary = Summary {
             operation: iceberg_operations::to_iceberg_operation(operation),

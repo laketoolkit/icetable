@@ -48,7 +48,8 @@ pub fn merge_batches(batches: Vec<RecordBatch>, schema: Arc<Schema>) -> Result<R
     if batches.is_empty() {
         Ok(RecordBatch::new_empty(schema))
     } else if batches.len() == 1 {
-        Ok(batches.into_iter().next().unwrap())
+        // SAFETY: We just checked that batches.len() == 1
+        Ok(batches.into_iter().next().expect("batch exists"))
     } else {
         let batch_schema = batches[0].schema();
         compute::concat_batches(&batch_schema, &batches).map_err(Error::Arrow)

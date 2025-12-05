@@ -19,9 +19,47 @@ use std::sync::Arc;
 
 use apache_avro::Reader;
 
+/// Parse a JSON value that may be stored as string, integer, or float
+///
+/// Iceberg writers may serialize numeric values in different formats:
+/// - As strings: "1234567890" (most common)
+/// - As integers: 1234567890 (serde_json i64/u64)
+/// - As floats: 1234567890.0 (some writers, e.g., certain Spark/PyIceberg configs)
+///
+/// This function handles all three cases to ensure robust parsing.
+fn parse_summary_value<T>(value: Option<&serde_json::Value>) -> Option<T>
+where
+    T: std::str::FromStr + TryFrom<i64> + TryFrom<u64>,
+{
+    value.and_then(|v| {
+        // Try string first (most common in Iceberg)
+        v.as_str()
+            .and_then(|s| s.parse::<T>().ok())
+            // Try integer types
+            .or_else(|| v.as_i64().and_then(|n| T::try_from(n).ok()))
+            .or_else(|| v.as_u64().and_then(|n| T::try_from(n).ok()))
+            // Try float (some writers serialize numbers as floats)
+            .or_else(|| {
+                v.as_f64().and_then(|f| {
+                    // Only convert if it's a whole number (no fractional part)
+                    if f.fract() == 0.0 && f >= 0.0 && f <= u64::MAX as f64 {
+                        // Try to convert through u64 first for unsigned types
+                        T::try_from(f as u64).ok()
+                    } else if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 {
+                        // Fall back to i64 for signed types
+                        T::try_from(f as i64).ok()
+                    } else {
+                        None
+                    }
+                })
+            })
+    })
+}
+
 #[derive(Debug, Default)]
 struct ManifestStats {
     total_files: i64,
+    total_size: i64,
     min_file_size: Option<i64>,
     max_file_size: Option<i64>,
     file_format_counts: HashMap<String, i64>,
@@ -151,29 +189,12 @@ impl IcebergInspector {
             })
             && let Some(summary) = snapshot.get("summary").and_then(|s| s.as_object())
         {
-            num_files = summary
-                .get("total-data-files")
-                .and_then(|f| f.as_str())
-                .and_then(|f| f.parse::<usize>().ok())
-                .unwrap_or(0);
-
-            total_size = summary
-                .get("total-files-size")
-                .and_then(|s| s.as_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0);
+            num_files = parse_summary_value::<usize>(summary.get("total-data-files")).unwrap_or(0);
+            total_size = parse_summary_value::<u64>(summary.get("total-files-size")).unwrap_or(0);
 
             // Extract delta info (files added/deleted in last snapshot)
-            let added_files = summary
-                .get("added-data-files")
-                .and_then(|f| f.as_str())
-                .and_then(|f| f.parse::<i64>().ok())
-                .unwrap_or(0);
-            let deleted_files = summary
-                .get("deleted-data-files")
-                .and_then(|f| f.as_str())
-                .and_then(|f| f.parse::<i64>().ok())
-                .unwrap_or(0);
+            let added_files = parse_summary_value::<i64>(summary.get("added-data-files")).unwrap_or(0);
+            let deleted_files = parse_summary_value::<i64>(summary.get("deleted-data-files")).unwrap_or(0);
 
             if added_files > 0 || deleted_files > 0 {
                 details.insert(
@@ -190,21 +211,9 @@ impl IcebergInspector {
             // === Verbose mode fields ===
             if options.verbosity >= VerbosityLevel::Verbose {
                 // Delete Files: X (position: Y, equality: Z)
-                let total_delete_files = summary
-                    .get("total-delete-files")
-                    .and_then(|f| f.as_str())
-                    .and_then(|f| f.parse::<i64>().ok())
-                    .unwrap_or(0);
-                let equality_deletes = summary
-                    .get("total-equality-deletes")
-                    .and_then(|f| f.as_str())
-                    .and_then(|f| f.parse::<i64>().ok())
-                    .unwrap_or(0);
-                let position_deletes = summary
-                    .get("total-position-deletes")
-                    .and_then(|f| f.as_str())
-                    .and_then(|f| f.parse::<i64>().ok())
-                    .unwrap_or(0);
+                let total_delete_files = parse_summary_value::<i64>(summary.get("total-delete-files")).unwrap_or(0);
+                let equality_deletes = parse_summary_value::<i64>(summary.get("total-equality-deletes")).unwrap_or(0);
+                let position_deletes = parse_summary_value::<i64>(summary.get("total-position-deletes")).unwrap_or(0);
 
                 details.insert(
                     "Delete Files".to_string(),
@@ -314,17 +323,8 @@ impl IcebergInspector {
         if let Some(snapshot) = snapshot
             && let Some(summary) = snapshot.get("summary").and_then(|s| s.as_object())
         {
-            let total_rows = summary
-                .get("total-records")
-                .and_then(|r| r.as_str())
-                .and_then(|r| r.parse::<i64>().ok())
-                .unwrap_or(0);
-
-            let compressed_size = summary
-                .get("total-files-size")
-                .and_then(|s| s.as_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0);
+            let total_rows = parse_summary_value::<i64>(summary.get("total-records")).unwrap_or(0);
+            let compressed_size = parse_summary_value::<u64>(summary.get("total-files-size")).unwrap_or(0);
 
             // If verbose mode, try to read manifest stats
             if options.verbosity >= VerbosityLevel::Verbose
@@ -466,6 +466,7 @@ impl IcebergInspector {
                     .find(|(name, _)| name == "file-size-in-bytes" || name == "file_size_in_bytes")
                 {
                     let size = *size;
+                    stats.total_size += size;
                     stats.min_file_size =
                         Some(stats.min_file_size.map_or(size, |min| min.min(size)));
                     stats.max_file_size =
@@ -748,7 +749,6 @@ impl IcebergInspector {
     }
 
     /// Extract file paths from manifest (static version for parallel execution)
-    #[allow(dead_code)]
     fn extract_file_paths_static(manifest_reader: Reader<&[u8]>) -> HashSet<String> {
         let mut files = HashSet::new();
         for data_file_result in manifest_reader {
@@ -934,5 +934,140 @@ mod tests {
 
         assert!(inspector.can_inspect(Path::new("/path/to/table/metadata")));
         assert!(!inspector.can_inspect(Path::new("/path/to/file.parquet")));
+    }
+}
+
+#[cfg(test)]
+mod parse_summary_value_tests {
+    use super::*;
+    use serde_json::json;
+
+    // === String value tests (most common in Iceberg) ===
+    #[test]
+    fn test_parse_from_string() {
+        let val = json!("1234567890");
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        assert_eq!(result, Some(1234567890));
+    }
+
+    #[test]
+    fn test_parse_large_string() {
+        let val = json!("1234567890123"); // ~1.2TB
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        assert_eq!(result, Some(1234567890123));
+    }
+
+    // === Integer value tests ===
+    #[test]
+    fn test_parse_from_i64() {
+        let val = json!(1234567890123_i64);
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        assert_eq!(result, Some(1234567890123));
+    }
+
+    #[test]
+    fn test_parse_from_large_u64() {
+        // Number greater than i64::MAX
+        let val = json!(9223372036854775808_u64);
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        assert_eq!(result, Some(9223372036854775808));
+    }
+
+    // === Float value tests (the bug case!) ===
+    #[test]
+    fn test_parse_from_f64() {
+        // Some Iceberg writers serialize numbers as floats
+        let val = json!(1234567890123.0_f64);
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        // This was the bug: before the fix, this returned None
+        assert_eq!(result, Some(1234567890123));
+    }
+
+    #[test]
+    fn test_parse_from_f64_rejects_fractional() {
+        // Floats with fractional parts should NOT be converted
+        let val = json!(1234567890123.5_f64);
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        assert_eq!(result, None);
+    }
+
+    // === Edge cases ===
+    #[test]
+    fn test_parse_null_returns_none() {
+        let val = json!(null);
+        let result: Option<u64> = parse_summary_value(Some(&val));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_missing_returns_none() {
+        let result: Option<u64> = parse_summary_value(None);
+        assert_eq!(result, None);
+    }
+
+    // === Integration test: simulate real Iceberg snapshot ===
+    #[test]
+    fn test_real_world_iceberg_snapshot() {
+        // Simulate a real Iceberg metadata file structure
+        let metadata = json!({
+            "current-snapshot-id": 12345,
+            "snapshots": [{
+                "snapshot-id": 12345,
+                "summary": {
+                    "total-data-files": "5350",
+                    "total-records": "29950000",
+                    "total-files-size": "1234567890123"
+                }
+            }]
+        });
+
+        let current_id = metadata.get("current-snapshot-id").and_then(|id| id.as_i64()).unwrap();
+        let snapshots = metadata.get("snapshots").and_then(|s| s.as_array()).unwrap();
+        let snapshot = snapshots
+            .iter()
+            .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id))
+            .unwrap();
+        let summary = snapshot.get("summary").and_then(|s| s.as_object()).unwrap();
+
+        let num_files: usize = parse_summary_value(summary.get("total-data-files")).unwrap_or(0);
+        let total_size: u64 = parse_summary_value(summary.get("total-files-size")).unwrap_or(0);
+        let total_rows: i64 = parse_summary_value(summary.get("total-records")).unwrap_or(0);
+
+        assert_eq!(num_files, 5350);
+        assert_eq!(total_size, 1234567890123);
+        assert_eq!(total_rows, 29950000);
+    }
+
+    #[test]
+    fn test_real_world_iceberg_snapshot_with_floats() {
+        // Some writers (e.g., certain Spark/PyIceberg configs) serialize as floats
+        let metadata = json!({
+            "current-snapshot-id": 12345,
+            "snapshots": [{
+                "snapshot-id": 12345,
+                "summary": {
+                    "total-data-files": 5350.0,
+                    "total-records": 29950000.0,
+                    "total-files-size": 1234567890123.0
+                }
+            }]
+        });
+
+        let current_id = metadata.get("current-snapshot-id").and_then(|id| id.as_i64()).unwrap();
+        let snapshots = metadata.get("snapshots").and_then(|s| s.as_array()).unwrap();
+        let snapshot = snapshots
+            .iter()
+            .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id))
+            .unwrap();
+        let summary = snapshot.get("summary").and_then(|s| s.as_object()).unwrap();
+
+        let num_files: usize = parse_summary_value(summary.get("total-data-files")).unwrap_or(0);
+        let total_size: u64 = parse_summary_value(summary.get("total-files-size")).unwrap_or(0);
+        let total_rows: i64 = parse_summary_value(summary.get("total-records")).unwrap_or(0);
+
+        // Before the fix, these would all be 0!
+        assert_eq!(num_files, 5350);
+        assert_eq!(total_size, 1234567890123);
+        assert_eq!(total_rows, 29950000);
     }
 }

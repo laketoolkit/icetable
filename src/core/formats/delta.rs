@@ -313,12 +313,25 @@ impl FormatHandler for DeltaHandler {
         metadata_map.insert("num_files".to_string(), num_files.to_string());
 
         // Get table properties from metadata
-        let _table_metadata = snapshot.metadata();
+        let table_metadata = snapshot.metadata();
 
-        // Note: In deltalake 0.29, metadata fields are private
-        // We would need to use accessor methods if they exist
-        // For now, we skip adding these fields
-        // TODO: Check if deltalake provides accessor methods for name, description, configuration
+        // Add metadata fields if available
+        metadata_map.insert(
+            "table_name".to_string(),
+            table_metadata.name().unwrap_or("").to_string(),
+        );
+        metadata_map.insert(
+            "description".to_string(),
+            table_metadata
+                .description()
+                .unwrap_or("")
+                .to_string(),
+        );
+
+        // Add configuration entries
+        for (key, value) in table_metadata.configuration() {
+            metadata_map.insert(format!("config.{}", key), value.clone());
+        }
 
         Ok(FileMetadata {
             num_rows: None, // Delta doesn't track total rows in metadata
@@ -425,8 +438,8 @@ impl FormatHandler for DeltaHandler {
             .collect();
 
         // Delta Lake stores statistics in the transaction log
+        // FUTURE: Extract statistics from Delta transaction log when needed
         // For now, we return basic stats structure
-        // TODO: Extract statistics from Delta transaction log if available
 
         Ok(stats)
     }

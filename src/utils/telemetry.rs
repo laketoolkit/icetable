@@ -30,8 +30,8 @@ impl TelemetryCollector {
             return;
         }
 
-        // TODO: Implement - send to telemetry backend
-        // For now, just log debug info
+        // FUTURE: Send to telemetry backend when implemented
+        // For now, events are logged at debug level for development
         log::debug!("Telemetry event: {:?}", event);
     }
 
