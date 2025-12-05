@@ -369,16 +369,11 @@ impl SnapshotCommand {
             .map(|s| (s.snapshot_id(), s))
             .collect();
 
-        // Walk the lineage
-        let mut lineage: Vec<(i64, Option<i64>, i64, String)> = Vec::new();
+        // Walk the full lineage first to get total count and root
+        let mut full_lineage: Vec<(i64, Option<i64>, i64, String)> = Vec::new();
         let mut current = Some(start_id);
-        let max_items = limit.unwrap_or(usize::MAX);
 
         while let Some(id) = current {
-            if lineage.len() >= max_items {
-                break;
-            }
-
             let parent = parent_map.get(&id).copied().flatten();
             let (timestamp, operation) = snapshot_map
                 .get(&id)
@@ -389,14 +384,18 @@ impl SnapshotCommand {
                 })
                 .unwrap_or((0, "unknown".to_string()));
 
-            lineage.push((id, parent, timestamp, operation));
+            full_lineage.push((id, parent, timestamp, operation));
             current = parent;
         }
+
+        let total_count = full_lineage.len();
+        let max_items = limit.unwrap_or(usize::MAX);
+        let is_truncated = total_count > max_items && limit.is_some();
 
         let current_id = metadata.current_snapshot_id();
 
         if output == "json" {
-            let json_lineage: Vec<serde_json::Value> = lineage
+            let json_lineage: Vec<serde_json::Value> = full_lineage
                 .iter()
                 .map(|(id, parent, ts, op)| {
                     serde_json::json!({
@@ -414,6 +413,7 @@ impl SnapshotCommand {
             let json = serde_json::json!({
                 "table": path,
                 "lineage": json_lineage,
+                "total": total_count,
             });
             println!(
                 "{}",
@@ -422,49 +422,65 @@ impl SnapshotCommand {
         } else {
             println!("{} snapshot lineage at {}", "Showing".green(), path);
             println!();
+            println!(
+                "{:<14} {:<12} {}",
+                "SNAPSHOT".cyan(),
+                "OPERATION".cyan(),
+                "TIMESTAMP".cyan()
+            );
+            println!("{}", "─".repeat(50));
 
-            for (i, (id, parent, ts, op)) in lineage.iter().enumerate() {
+            // Show items up to limit
+            let display_count = if is_truncated { max_items - 1 } else { total_count };
+
+            for (i, (id, parent, ts, op)) in full_lineage.iter().take(display_count).enumerate() {
                 let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
                     .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                     .unwrap_or_else(|| ts.to_string());
 
                 let is_current = Some(*id) == current_id;
-                let current_marker = if is_current { " (current)" } else { "" };
+                let is_root = parent.is_none();
 
-                let id_display = if is_current {
-                    id.to_string().green().bold().to_string()
+                let marker = if is_current {
+                    " (current)".green().to_string()
+                } else if is_root {
+                    " (root)".dimmed().to_string()
                 } else {
-                    id.to_string()
+                    "".to_string()
                 };
 
-                // Tree-like display
-                let prefix = if i == 0 { "●" } else { "│" };
-                let connector = if parent.is_some() { "↓" } else { "" };
+                // Arrow indicates lineage direction
+                let arrow = if i == 0 { "←" } else { " " };
 
                 println!(
-                    "{} {} {} [{}]{}",
-                    prefix.cyan(),
-                    id_display,
-                    format!("({})", op).dimmed(),
-                    ts_str.dimmed(),
-                    current_marker.green()
+                    "{:<12} {} {:<12} {}{}",
+                    id, arrow, op, ts_str.dimmed(), marker
                 );
-
-                if parent.is_some() && i < lineage.len() - 1 {
-                    println!("{}", connector.dimmed());
-                }
             }
 
-            // Check if there are more snapshots beyond the limit
-            if let Some(last) = lineage.last() {
-                if last.1.is_some() && lineage.len() == max_items {
-                    println!("{}", "│".dimmed());
-                    println!("{}", "... (truncated, use -a/--all to see all)".dimmed());
+            // Show truncation indicator and root
+            if is_truncated {
+                let skipped = total_count - max_items;
+                println!(
+                    "{:<12}   {:<12}",
+                    "...".dimmed(),
+                    format!("({} more)", skipped).dimmed()
+                );
+
+                // Show root
+                if let Some((id, _, ts, op)) = full_lineage.last() {
+                    let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| ts.to_string());
+                    println!(
+                        "{:<12}   {:<12} {}{}",
+                        id, op, ts_str.dimmed(), " (root)".dimmed()
+                    );
                 }
             }
 
             println!();
-            println!("Total: {} snapshots in lineage", lineage.len());
+            println!("{} snapshots total", total_count);
         }
 
         Ok(())
