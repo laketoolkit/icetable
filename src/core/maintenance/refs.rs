@@ -378,6 +378,9 @@ impl RefService {
     }
 
     /// Fast-forward a branch to another snapshot
+    ///
+    /// A fast-forward is only valid if the target snapshot is a descendant of the
+    /// branch's current snapshot (i.e., the current snapshot is an ancestor of the target).
     pub async fn fast_forward_branch(
         &self,
         service: &IcebergMetadataService,
@@ -385,12 +388,15 @@ impl RefService {
         name: &str,
         target: &str, // snapshot ID or ref name
     ) -> Result<RefResult> {
+        use crate::core::utils::snapshot::is_ancestor;
+
         let (metadata, current_version) = service.load_metadata().await?;
 
-        // Verify branch exists
-        metadata
+        // Verify branch exists and get its current snapshot
+        let branch_snapshot = metadata
             .snapshot_for_ref(name)
             .ok_or_else(|| Error::General(format!("Branch '{}' not found", name)))?;
+        let branch_snapshot_id = branch_snapshot.snapshot_id();
 
         // Resolve target to snapshot ID
         let target_id: i64 = if let Ok(id) = target.parse() {
@@ -403,6 +409,16 @@ impl RefService {
         } else {
             return Err(Error::General(format!("Reference '{}' not found", target)));
         };
+
+        // Verify this is a valid fast-forward: target must be a descendant of current
+        // (i.e., current must be an ancestor of target)
+        if !is_ancestor(&metadata, branch_snapshot_id, target_id) {
+            return Err(Error::General(format!(
+                "Cannot fast-forward: snapshot {} is not a descendant of branch '{}' (snapshot {}). \
+                The branches have diverged.",
+                target_id, name, branch_snapshot_id
+            )));
+        }
 
         if self.config.dry_run {
             return Ok(RefResult {

@@ -93,6 +93,7 @@ impl SnapshotCommand {
                     a.retain_last,
                     a.ids,
                     a.dry_run,
+                    a.branch.as_deref(),
                     &a.output,
                 )
                 .await
@@ -198,11 +199,23 @@ impl SnapshotCommand {
         retain_last: Option<usize>,
         ids: Option<Vec<i64>>,
         dry_run: bool,
+        branch: Option<&str>,
         output: &str,
     ) -> Result<()> {
         use std::collections::HashSet;
 
-        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        let metadata_service = IcebergMetadataService::new_with_branch(
+            path.to_string(),
+            branch.map(|s| s.to_string()),
+        ).await?;
+
+        if let Some(b) = branch {
+            println!(
+                "{} snapshots for branch '{}'",
+                "Expiring".yellow(),
+                b.cyan()
+            );
+        }
         let config = SnapshotConfig { dry_run };
         let snapshot_service = SnapshotService::with_config(config);
 
@@ -282,14 +295,6 @@ impl SnapshotCommand {
                 result.dry_run,
             );
             println!("{}", table_str);
-
-            if !result.dry_run {
-                println!();
-                println!(
-                    "{}",
-                    "Note: Data files are NOT deleted. Use 'icetable vacuum' to remove orphaned data files.".dimmed()
-                );
-            }
         }
 
         Ok(())

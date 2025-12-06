@@ -51,6 +51,46 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Parse human-readable size string to bytes
+///
+/// Supports formats like: "10GB", "500MB", "1TB", "100KB", or plain bytes "1234567890"
+pub fn parse_bytes(s: &str) -> Result<u64, String> {
+    let s = s.trim().to_uppercase();
+
+    // Try to parse as plain number first
+    if let Ok(bytes) = s.parse::<u64>() {
+        return Ok(bytes);
+    }
+
+    // Parse with unit suffix
+    let (num_str, multiplier) = if s.ends_with("TB") {
+        (&s[..s.len()-2], 1024u64 * 1024 * 1024 * 1024)
+    } else if s.ends_with("GB") {
+        (&s[..s.len()-2], 1024u64 * 1024 * 1024)
+    } else if s.ends_with("MB") {
+        (&s[..s.len()-2], 1024u64 * 1024)
+    } else if s.ends_with("KB") {
+        (&s[..s.len()-2], 1024u64)
+    } else if s.ends_with('T') {
+        (&s[..s.len()-1], 1024u64 * 1024 * 1024 * 1024)
+    } else if s.ends_with('G') {
+        (&s[..s.len()-1], 1024u64 * 1024 * 1024)
+    } else if s.ends_with('M') {
+        (&s[..s.len()-1], 1024u64 * 1024)
+    } else if s.ends_with('K') {
+        (&s[..s.len()-1], 1024u64)
+    } else if s.ends_with('B') {
+        (&s[..s.len()-1], 1u64)
+    } else {
+        return Err(format!("Invalid size format: '{}'. Use formats like '10GB', '500MB', '1TB'", s));
+    };
+
+    let num: f64 = num_str.trim().parse()
+        .map_err(|_| format!("Invalid number in size: '{}'", num_str))?;
+
+    Ok((num * multiplier as f64) as u64)
+}
+
 /// Generate a timestamp-based unique ID
 pub fn generate_unique_id() -> u128 {
     std::time::SystemTime::now()

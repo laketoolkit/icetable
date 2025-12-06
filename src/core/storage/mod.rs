@@ -8,6 +8,7 @@ pub mod traits;
 // Core infrastructure for cloud storage backends
 pub mod base;
 pub mod path_parser;
+pub mod retry;
 
 // Storage implementations - these will be implemented by Rust-Developer
 pub mod azure;

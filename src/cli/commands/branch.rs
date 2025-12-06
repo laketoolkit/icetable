@@ -176,11 +176,18 @@ impl BranchCommand {
                 serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
             );
         } else if result.dry_run {
+            println!("{}", "DRY RUN - No changes made".yellow().bold());
+            println!();
+            println!("Would delete the following:");
             println!(
-                "{} Would delete branch '{}' (snapshot {})",
-                "Dry run:".yellow(),
-                result.name,
+                "  Branch: {} (snapshot {})",
+                result.name.cyan(),
                 result.snapshot_id
+            );
+            println!();
+            println!(
+                "{}",
+                "Run without --dry-run to apply this change.".dimmed()
             );
         } else {
             println!(

@@ -34,6 +34,8 @@ pub struct IcebergMetadataService {
     table_path: String,
     file_io: FileIO,
     storage: Arc<dyn StorageBackend>,
+    /// Target branch for operations (defaults to "main")
+    target_branch: Option<String>,
 }
 
 impl IcebergMetadataService {
@@ -46,7 +48,26 @@ impl IcebergMetadataService {
             table_path,
             file_io,
             storage,
+            target_branch: None,
         })
+    }
+
+    /// Create a new Iceberg metadata service targeting a specific branch
+    pub async fn new_with_branch(table_path: String, branch: Option<String>) -> Result<Self> {
+        let file_io = Self::create_file_io(&table_path)?;
+        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+
+        Ok(Self {
+            table_path,
+            file_io,
+            storage,
+            target_branch: branch,
+        })
+    }
+
+    /// Get the target branch name (defaults to "main" if not set)
+    pub fn target_branch(&self) -> &str {
+        self.target_branch.as_deref().unwrap_or("main")
     }
 
     /// Create FileIO based on path scheme
@@ -178,6 +199,127 @@ impl IcebergMetadataService {
 
         Ok(refs)
     }
+
+    /// Get snapshot ID for a branch name
+    /// Returns the snapshot ID that the branch points to, or error if branch doesn't exist
+    pub async fn get_branch_snapshot_id(&self, branch_name: &str) -> Result<i64> {
+        let refs = self.list_refs().await?;
+
+        refs.iter()
+            .find(|r| r.name == branch_name && r.ref_type == "branch")
+            .map(|r| r.snapshot_id)
+            .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name)))
+    }
+
+    /// Get the snapshot ID for a branch name, or current snapshot ID if branch is None
+    pub async fn resolve_branch_snapshot_id(&self, branch: Option<&str>) -> Result<i64> {
+        if let Some(branch_name) = branch {
+            self.get_branch_snapshot_id(branch_name).await
+        } else {
+            let (metadata, _) = self.load_metadata().await?;
+            metadata.current_snapshot_id()
+                .ok_or_else(|| Error::General("No current snapshot".to_string()))
+        }
+    }
+
+    /// List data files for a specific snapshot (by ID)
+    ///
+    /// This is the branch-aware version of list_data_files
+    pub async fn list_data_files_for_snapshot(&self, snapshot_id: i64) -> Result<Vec<DataFileInfo>> {
+        use std::collections::HashSet;
+
+        let (metadata, _) = self.load_metadata().await?;
+
+        // Find the specific snapshot
+        let snapshot = metadata.snapshots()
+            .find(|s| s.snapshot_id() == snapshot_id)
+            .ok_or_else(|| Error::General(format!("Snapshot {} not found", snapshot_id)))?;
+
+        // Read manifest list
+        let manifest_list_path = snapshot.manifest_list();
+        let manifest_list_content = self
+            .file_io
+            .new_input(manifest_list_path)
+            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
+            .read()
+            .await
+            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
+
+        let manifest_list =
+            ManifestList::parse_with_version(&manifest_list_content, metadata.format_version())
+                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+
+        // Read all manifests and collect data files
+        let mut seen_paths: HashSet<String> = HashSet::new();
+        let mut deleted_paths: HashSet<String> = HashSet::new();
+        let mut data_files = Vec::new();
+
+        // First pass: collect all deleted paths
+        for manifest_file_entry in manifest_list.entries() {
+            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
+                continue;
+            }
+
+            let manifest = manifest_file_entry
+                .load_manifest(&self.file_io)
+                .await
+                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
+
+            for entry in manifest.entries() {
+                if entry.status() == ManifestStatus::Deleted {
+                    deleted_paths.insert(entry.data_file().file_path().to_string());
+                }
+            }
+        }
+
+        // Second pass: collect alive files
+        for manifest_file_entry in manifest_list.entries() {
+            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
+                continue;
+            }
+
+            let manifest = manifest_file_entry
+                .load_manifest(&self.file_io)
+                .await
+                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
+
+            for entry in manifest.entries() {
+                if entry.status() == ManifestStatus::Deleted {
+                    continue;
+                }
+
+                let data_file = entry.data_file();
+                let path = data_file.file_path().to_string();
+
+                if deleted_paths.contains(&path) || seen_paths.contains(&path) {
+                    continue;
+                }
+                seen_paths.insert(path.clone());
+
+                data_files.push(DataFileInfo {
+                    path,
+                    size: data_file.file_size_in_bytes(),
+                    record_count: data_file.record_count(),
+                    partition: iceberg_partition::extract_partition_from_path_static(
+                        data_file.file_path(),
+                    ),
+                });
+            }
+        }
+
+        Ok(data_files)
+    }
+
+    /// List data files for a branch (or current if None)
+    pub async fn list_data_files_for_branch(&self, branch: Option<&str>) -> Result<Vec<DataFileInfo>> {
+        let snapshot_id = self.resolve_branch_snapshot_id(branch).await?;
+        self.list_data_files_for_snapshot(snapshot_id).await
+    }
+
+    /// Get the branch name to use (defaults to "main" if None)
+    pub fn branch_name_or_default(branch: Option<&str>) -> &str {
+        branch.unwrap_or("main")
+    }
 }
 
 /// Information about a reference (branch or tag)
@@ -210,9 +352,20 @@ impl MetadataService for IcebergMetadataService {
 
         let (metadata, _) = self.load_metadata().await?;
 
-        let current_snapshot = match metadata.current_snapshot() {
-            Some(s) => s,
-            None => return Ok(Vec::new()),
+        // Use the target branch snapshot, or current snapshot if not set/not found
+        let current_snapshot = if let Some(ref branch) = self.target_branch {
+            match metadata.snapshot_for_ref(branch) {
+                Some(s) => s,
+                None => match metadata.current_snapshot() {
+                    Some(s) => s,
+                    None => return Ok(Vec::new()),
+                },
+            }
+        } else {
+            match metadata.current_snapshot() {
+                Some(s) => s,
+                None => return Ok(Vec::new()),
+            }
         };
 
         // Read manifest list
@@ -350,8 +503,13 @@ impl MetadataService for IcebergMetadataService {
             self.storage.clone(),
         );
 
-        // Get current state
-        let current_snapshot = metadata.current_snapshot();
+        // Get current state for the target branch
+        let target_branch = self.target_branch();
+        let current_snapshot = if target_branch == "main" {
+            metadata.current_snapshot()
+        } else {
+            metadata.snapshot_for_ref(target_branch)
+        };
         let parent_snapshot_id = current_snapshot.map(|s| s.snapshot_id());
         // Use last_sequence_number from metadata (tracks max ever assigned, not just current snapshot)
         // This handles cases where snapshots were expired
@@ -446,9 +604,9 @@ impl MetadataService for IcebergMetadataService {
             schema_id,
         );
 
-        // Update metadata
+        // Update metadata for the target branch
         let new_metadata =
-            writer.update_metadata((*metadata).clone(), snapshot, current_version)?;
+            writer.update_metadata_for_branch((*metadata).clone(), snapshot, current_version, target_branch)?;
 
         // Write new metadata file
         let new_version = current_version + 1;

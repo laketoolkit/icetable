@@ -180,3 +180,33 @@ impl<T: SnapshotItem> SnapshotItem for &T {
         (**self).timestamp()
     }
 }
+
+/// Check if `ancestor_id` is an ancestor of `descendant_id` in the snapshot lineage.
+/// Returns true if walking back from descendant_id via parent_snapshot_id eventually reaches ancestor_id.
+/// Also returns true if ancestor_id == descendant_id (a snapshot is its own ancestor).
+pub fn is_ancestor(
+    metadata: &iceberg::spec::TableMetadata,
+    ancestor_id: i64,
+    descendant_id: i64,
+) -> bool {
+    if ancestor_id == descendant_id {
+        return true;
+    }
+
+    // Build parent map for quick lookup
+    let parent_map: std::collections::HashMap<i64, Option<i64>> = metadata
+        .snapshots()
+        .map(|s| (s.snapshot_id(), s.parent_snapshot_id()))
+        .collect();
+
+    // Walk back from descendant
+    let mut current = Some(descendant_id);
+    while let Some(id) = current {
+        if id == ancestor_id {
+            return true;
+        }
+        current = parent_map.get(&id).copied().flatten();
+    }
+
+    false
+}

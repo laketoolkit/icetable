@@ -1,37 +1,51 @@
-//! Configuration management for icetable
+//! Configuration management for icectl
 //!
-//! Stores configuration in ~/.config/icetable/config.toml
+//! Stores configuration in ~/.config/icectl/config.yaml
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
 /// Configuration file name
-const CONFIG_DIR: &str = "icetable";
-const CONFIG_FILE: &str = "config.toml";
+const CONFIG_DIR: &str = "icectl";
+const CONFIG_FILE: &str = "config.yaml";
 
-/// icetable configuration
+/// icectl configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
-    /// Current table context (like kubectl current-context)
+    /// Current context (like kubectl current-context)
+    /// Can be: table alias, path, or catalog.table
     #[serde(default)]
-    pub current_table: Option<String>,
+    pub current_context: Option<String>,
 
-    /// Named table aliases for quick access
+    /// Named table aliases for quick access (standalone tables)
     #[serde(default)]
-    pub tables: std::collections::HashMap<String, TableConfig>,
+    pub tables: HashMap<String, String>,
+
+    /// Catalog configurations
+    #[serde(default)]
+    pub catalogs: HashMap<String, CatalogConfig>,
 }
 
-/// Configuration for a named table
+/// Configuration for a catalog
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TableConfig {
-    /// Table path (local or s3://, gs://, etc.)
-    pub path: String,
+pub struct CatalogConfig {
+    /// Catalog type (rest, hive, glue, etc.)
+    #[serde(rename = "type")]
+    pub catalog_type: String,
 
-    /// Optional description
+    /// Catalog URI
+    pub uri: String,
+
+    /// Credential (optional, format depends on catalog type)
     #[serde(default)]
-    pub description: Option<String>,
+    pub credential: Option<String>,
+
+    /// Additional properties
+    #[serde(default)]
+    pub properties: HashMap<String, String>,
 }
 
 impl Config {
@@ -51,17 +65,17 @@ impl Config {
 
     /// Load configuration from file
     pub fn load() -> Result<Self> {
-        let config_path = Self::config_path()?;
+        let yaml_path = Self::config_path()?;
 
-        if !config_path.exists() {
-            return Ok(Self::default());
+        if yaml_path.exists() {
+            let content = std::fs::read_to_string(&yaml_path)
+                .map_err(|e| Error::General(format!("Failed to read config file: {}", e)))?;
+
+            return serde_yaml::from_str(&content)
+                .map_err(|e| Error::General(format!("Failed to parse config file: {}", e)));
         }
 
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| Error::General(format!("Failed to read config file: {}", e)))?;
-
-        toml::from_str(&content)
-            .map_err(|e| Error::General(format!("Failed to parse config file: {}", e)))
+        Ok(Self::default())
     }
 
     /// Save configuration to file
@@ -73,7 +87,7 @@ impl Config {
         std::fs::create_dir_all(&config_dir)
             .map_err(|e| Error::General(format!("Failed to create config directory: {}", e)))?;
 
-        let content = toml::to_string_pretty(self)
+        let content = serde_yaml::to_string(self)
             .map_err(|e| Error::General(format!("Failed to serialize config: {}", e)))?;
 
         std::fs::write(&config_path, content)
@@ -82,24 +96,24 @@ impl Config {
         Ok(())
     }
 
-    /// Set the current table
-    pub fn set_current_table(&mut self, path: String) {
-        self.current_table = Some(path);
+    /// Set the current context
+    pub fn set_current_context(&mut self, context: String) {
+        self.current_context = Some(context);
     }
 
-    /// Unset the current table
-    pub fn unset_current_table(&mut self) {
-        self.current_table = None;
+    /// Unset the current context
+    pub fn unset_current_context(&mut self) {
+        self.current_context = None;
     }
 
-    /// Get the current table path
-    pub fn get_current_table(&self) -> Option<&str> {
-        self.current_table.as_deref()
+    /// Get the current context
+    pub fn get_current_context(&self) -> Option<&str> {
+        self.current_context.as_deref()
     }
 
     /// Add a named table alias
-    pub fn add_table(&mut self, name: String, path: String, description: Option<String>) {
-        self.tables.insert(name, TableConfig { path, description });
+    pub fn add_table(&mut self, name: String, path: String) {
+        self.tables.insert(name, path);
     }
 
     /// Remove a named table alias
@@ -107,13 +121,89 @@ impl Config {
         self.tables.remove(name).is_some()
     }
 
-    /// Get a table by name or return the path as-is
-    pub fn resolve_table(&self, name_or_path: &str) -> String {
-        if let Some(table) = self.tables.get(name_or_path) {
-            table.path.clone()
-        } else {
-            name_or_path.to_string()
+    /// Add a catalog configuration
+    pub fn add_catalog(&mut self, name: String, config: CatalogConfig) {
+        self.catalogs.insert(name, config);
+    }
+
+    /// Remove a catalog
+    pub fn remove_catalog(&mut self, name: &str) -> bool {
+        self.catalogs.remove(name).is_some()
+    }
+
+    /// Resolve a table reference to a path or catalog info
+    /// Returns: ResolvedTable with either a direct path or catalog + table name
+    pub fn resolve_table(&self, name_or_path: &str) -> Result<ResolvedTable> {
+        // 1. Direct path (starts with s3://, gs://, file://, /, etc.)
+        if is_direct_path(name_or_path) {
+            return Ok(ResolvedTable::Path(name_or_path.to_string()));
         }
+
+        // 2. Check if it's a catalog.table reference
+        if let Some((catalog_name, table_name)) = name_or_path.split_once('.') {
+            if let Some(catalog) = self.catalogs.get(catalog_name) {
+                return Ok(ResolvedTable::Catalog {
+                    catalog_name: catalog_name.to_string(),
+                    catalog_config: catalog.clone(),
+                    table_name: table_name.to_string(),
+                });
+            }
+        }
+
+        // 3. Check if it's a table alias
+        if let Some(path) = self.tables.get(name_or_path) {
+            return Ok(ResolvedTable::Path(path.clone()));
+        }
+
+        // 4. Not found
+        Err(Error::General(format!(
+            "Unknown table or catalog reference: '{}'. \
+            Use a direct path (s3://...), a configured table alias, or catalog.table format.",
+            name_or_path
+        )))
+    }
+}
+
+/// Check if a string looks like a direct path
+fn is_direct_path(s: &str) -> bool {
+    s.starts_with("s3://")
+        || s.starts_with("s3a://")
+        || s.starts_with("gs://")
+        || s.starts_with("gcs://")
+        || s.starts_with("abfs://")
+        || s.starts_with("abfss://")
+        || s.starts_with("file://")
+        || s.starts_with('/')
+}
+
+/// Resolved table reference
+#[derive(Debug, Clone)]
+pub enum ResolvedTable {
+    /// Direct path to table
+    Path(String),
+    /// Reference via catalog
+    Catalog {
+        /// Name of the catalog in config
+        catalog_name: String,
+        /// Configuration for the catalog
+        catalog_config: CatalogConfig,
+        /// Table identifier within the catalog
+        table_name: String,
+    },
+}
+
+impl ResolvedTable {
+    /// Get the path if this is a direct path resolution
+    pub fn as_path(&self) -> Option<&str> {
+        match self {
+            ResolvedTable::Path(p) => Some(p),
+            ResolvedTable::Catalog { .. } => None,
+        }
+    }
+
+    /// Check if this is a catalog reference
+    pub fn is_catalog(&self) -> bool {
+        matches!(self, ResolvedTable::Catalog { .. })
     }
 }
 
@@ -128,16 +218,27 @@ pub trait ResolvePath {
 impl ResolvePath for Option<String> {
     fn resolve(&self) -> Result<String> {
         let config = Config::load()?;
-        match self {
-            Some(path) => Ok(config.resolve_table(path)),
+        let reference = match self {
+            Some(path) => path.clone(),
             None => config
-                .get_current_table()
+                .get_current_context()
                 .map(|s| s.to_string())
                 .ok_or_else(|| {
                     Error::General(
-                        "No table specified. Use -t <path> or set default with 'icetable config use <path>'".to_string()
+                        "No table specified. Use -t <path> or set default with 'icectl config use <path>'".to_string()
                     )
-                }),
+                })?,
+        };
+
+        match config.resolve_table(&reference)? {
+            ResolvedTable::Path(path) => Ok(path),
+            ResolvedTable::Catalog { catalog_name, table_name, .. } => {
+                // TODO: Implement catalog table loading
+                Err(Error::General(format!(
+                    "Catalog tables not yet supported. Referenced: {}.{}",
+                    catalog_name, table_name
+                )))
+            }
         }
     }
 }

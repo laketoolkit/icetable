@@ -29,17 +29,39 @@ impl VacuumCommand {
         use indicatif::{ProgressBar, ProgressStyle};
         use std::collections::HashSet;
 
-        println!(
-            "{} Iceberg table at {}",
-            if args.dry_run {
-                "Analyzing".yellow()
-            } else {
-                "Vacuuming".green()
-            },
-            table_path
-        );
+        // Note: Branch parameter is accepted for API consistency but vacuum always
+        // considers ALL snapshots to ensure safety. A file is only orphaned if
+        // it's not referenced by ANY snapshot in the table.
+        if let Some(ref branch) = args.branch {
+            println!(
+                "{} Iceberg table at {} (branch: {})",
+                if args.dry_run {
+                    "Analyzing".yellow()
+                } else {
+                    "Vacuuming".green()
+                },
+                table_path,
+                branch.cyan()
+            );
+            println!(
+                "{}",
+                "Note: Vacuum always considers all snapshots for safety".dimmed()
+            );
+        } else {
+            println!(
+                "{} Iceberg table at {}",
+                if args.dry_run {
+                    "Analyzing".yellow()
+                } else {
+                    "Vacuuming".green()
+                },
+                table_path
+            );
+        }
 
         // Load metadata
+        // Note: We don't use branch-specific metadata here because vacuum must
+        // consider ALL snapshots to avoid deleting files that any branch needs
         let service = match IcebergMetadataService::new_async(table_path.to_string()).await {
             Ok(s) => s,
             Err(_) => {
@@ -212,11 +234,34 @@ impl VacuumCommand {
                 );
             } else {
                 println!();
-                println!("Files to delete:");
-                for (path, size) in &orphan_files {
+                println!("{}", "Would delete the following files:".cyan());
+
+                // Show first 10 files, then summary if more
+                let show_count = 10;
+                for (path, size) in orphan_files.iter().take(show_count) {
                     let name = path.rsplit('/').next().unwrap_or(path);
-                    println!("  - {} ({})", name.dimmed(), format_bytes(*size));
+                    println!("  - {} ({})", name, format_bytes(*size));
                 }
+
+                if orphan_files.len() > show_count {
+                    println!(
+                        "  {} {} more files...",
+                        "...and".dimmed(),
+                        (orphan_files.len() - show_count).to_string().dimmed()
+                    );
+                }
+
+                println!();
+                println!(
+                    "Total: {} files, {} to free",
+                    orphan_files.len().to_string().yellow(),
+                    format_bytes(orphan_bytes).yellow()
+                );
+                println!();
+                println!(
+                    "{}",
+                    "Run without --dry-run to delete these files.".dimmed()
+                );
             }
             return Ok(());
         }

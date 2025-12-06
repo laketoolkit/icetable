@@ -135,18 +135,28 @@ impl SnapshotFormatter {
 
         if dry_run {
             output.push("DRY RUN - No changes made".yellow().bold().to_string());
+            output.push(String::new());
+            output.push("Would expire the following:".cyan().to_string());
+            output.push(format!(
+                "  Snapshots to remove: {}",
+                deleted_count.to_string().yellow()
+            ));
+            output.push(format!(
+                "  Cutoff time:         {}",
+                cutoff_timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+            ));
+            output.push(String::new());
+            output.push(
+                "Run without --dry-run to apply these changes.".dimmed().to_string()
+            );
         } else {
             output.push("Expire complete!".green().bold().to_string());
-        }
-
-        output.push(String::new());
-        output.push(format!("Log entries deleted: {}", deleted_count));
-        output.push(format!(
-            "Cutoff time: {}",
-            cutoff_timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-        ));
-
-        if !dry_run {
+            output.push(String::new());
+            output.push(format!("Snapshots removed: {}", deleted_count));
+            output.push(format!(
+                "Cutoff time: {}",
+                cutoff_timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+            ));
             output.push(String::new());
             output.push("Note: Data files are NOT deleted. Use 'icetable vacuum' to remove orphaned data files.".dimmed().to_string());
         }

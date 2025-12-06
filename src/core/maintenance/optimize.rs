@@ -91,7 +91,7 @@ impl OptimizeService {
         }
 
         // Find groups that need compaction
-        let groups_to_compact = self.analyze(&files);
+        let mut groups_to_compact = self.analyze(&files);
 
         if groups_to_compact.is_empty() {
             return Ok(MaintenanceResult::no_changes(
@@ -99,10 +99,47 @@ impl OptimizeService {
             ));
         }
 
+        // Sort groups by file count (most fragmented first) for incremental compaction
+        groups_to_compact.sort_by(|a, b| b.files.len().cmp(&a.files.len()));
+
+        // Apply max_files limit (incremental compaction)
+        let mut limited_groups = Vec::new();
+        let mut accumulated_files = 0usize;
+        let mut accumulated_bytes = 0u64;
+        let mut was_limited = false;
+
+        for group in groups_to_compact {
+            let group_files = group.files.len();
+            let group_bytes = group.total_size;
+
+            // Check max_files limit
+            if let Some(max_files) = self.config.max_files {
+                if accumulated_files + group_files > max_files && !limited_groups.is_empty() {
+                    was_limited = true;
+                    break;
+                }
+            }
+
+            // Check max_bytes limit
+            if let Some(max_bytes) = self.config.max_bytes {
+                if accumulated_bytes + group_bytes > max_bytes && !limited_groups.is_empty() {
+                    was_limited = true;
+                    break;
+                }
+            }
+
+            accumulated_files += group_files;
+            accumulated_bytes += group_bytes;
+            limited_groups.push(group);
+        }
+
+        let groups_to_compact = limited_groups;
+
         // Handle dry-run mode
         if self.config.dry_run {
             let total_input_files: usize = groups_to_compact.iter().map(|g| g.files.len()).sum();
             let total_output_files = groups_to_compact.len();
+            let total_bytes: u64 = groups_to_compact.iter().map(|g| g.total_size).sum();
 
             let mut details = HashMap::new();
             details.insert("mode".to_string(), "dry-run".to_string());
@@ -114,12 +151,24 @@ impl OptimizeService {
                 "partitions".to_string(),
                 groups_to_compact.len().to_string(),
             );
+            details.insert(
+                "bytes_to_process".to_string(),
+                format_bytes(total_bytes),
+            );
+
+            if was_limited {
+                details.insert("incremental".to_string(), "true".to_string());
+                details.insert(
+                    "note".to_string(),
+                    "More files need compaction. Run again to continue.".to_string(),
+                );
+            }
 
             return Ok(MaintenanceResult {
                 files_added: total_output_files,
                 files_removed: total_input_files,
                 bytes_added: 0,
-                bytes_removed: 0,
+                bytes_removed: total_bytes,
                 records_affected: 0,
                 operation: "optimize (dry-run)".to_string(),
                 details,

@@ -182,7 +182,15 @@ impl SnapshotService {
         let (metadata, current_version) = service.load_metadata().await?;
 
         let snapshots: Vec<_> = metadata.snapshots().collect();
-        let current_id = metadata.current_snapshot_id();
+
+        // Get the current snapshot ID for the target branch
+        // This ensures we protect the branch's current snapshot from expiration
+        let target_branch = service.target_branch();
+        let current_id = if target_branch == "main" {
+            metadata.current_snapshot_id()
+        } else {
+            metadata.snapshot_for_ref(target_branch).map(|s| s.snapshot_id())
+        };
 
         let to_expire = self.determine_snapshots_to_expire(
             &snapshots,

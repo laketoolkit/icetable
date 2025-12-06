@@ -106,9 +106,13 @@ impl CompletionsArgs {
 /// Arguments for doctor command
 #[derive(Parser, Debug)]
 pub struct DoctorArgs {
-    /// Optional path to test storage connectivity
+    /// Path to table (uses default from config if not provided)
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
+
+    /// Also verify that all data files referenced in manifests exist (slow)
+    #[arg(long)]
+    pub check_files: bool,
 
     /// Output format: human or json
     #[arg(short, long, default_value = "human")]
@@ -360,6 +364,10 @@ pub struct VacuumArgs {
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
 
+    /// Branch to vacuum (defaults to scanning all branches)
+    #[arg(short, long)]
+    pub branch: Option<String>,
+
     /// Retention period (e.g., "7d", "168h", or hours as number)
     #[arg(short, long, default_value = "168")]
     pub retention_hours: u64,
@@ -394,6 +402,10 @@ pub struct OptimizeDataArgs {
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
 
+    /// Branch to optimize (defaults to main/current)
+    #[arg(short, long)]
+    pub branch: Option<String>,
+
     /// Target file size in bytes (default: 256MB)
     #[arg(long, default_value = "268435456")]
     pub target_size: u64,
@@ -418,6 +430,14 @@ pub struct OptimizeDataArgs {
     #[arg(long, value_delimiter = ',')]
     pub zorder: Option<Vec<String>>,
 
+    /// Maximum number of files to compact in this run (for incremental compaction)
+    #[arg(long)]
+    pub max_files: Option<usize>,
+
+    /// Maximum bytes to process in this run (e.g., "10GB", "500MB")
+    #[arg(long)]
+    pub max_bytes: Option<String>,
+
     /// Dry run mode - show what would be done without making changes
     #[arg(long)]
     pub dry_run: bool,
@@ -433,6 +453,10 @@ pub struct OptimizeManifestsArgs {
     /// Path to table (uses default from config if not provided)
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
+
+    /// Branch to optimize (defaults to main/current)
+    #[arg(short, long)]
+    pub branch: Option<String>,
 
     /// Target manifest size in bytes (default: 8MB)
     #[arg(long, default_value = "8388608")]
@@ -523,6 +547,10 @@ pub struct SnapshotExpireArgs {
     /// Path to table (uses default from config if not provided)
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
+
+    /// Branch to expire snapshots from (defaults to main/current)
+    #[arg(short, long)]
+    pub branch: Option<String>,
 
     /// Expire snapshots older than this time (e.g., "7d", "24h", "2w", or "2024-01-15")
     #[arg(long)]

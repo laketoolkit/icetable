@@ -140,18 +140,29 @@ impl IcebergSnapshotWriter {
             .build()
     }
 
-    /// Update table metadata with new snapshot
+    /// Update table metadata with new snapshot (defaults to main branch)
     pub fn update_metadata(
         &self,
         old_metadata: TableMetadata,
         snapshot: Snapshot,
         current_version: i32,
     ) -> Result<TableMetadata> {
+        self.update_metadata_for_branch(old_metadata, snapshot, current_version, MAIN_BRANCH)
+    }
+
+    /// Update table metadata with new snapshot on a specific branch
+    pub fn update_metadata_for_branch(
+        &self,
+        old_metadata: TableMetadata,
+        snapshot: Snapshot,
+        current_version: i32,
+        branch: &str,
+    ) -> Result<TableMetadata> {
         let metadata_log_path = format!("v{}.metadata.json", current_version);
 
         let build_result =
             TableMetadataBuilder::new_from_metadata(old_metadata, Some(metadata_log_path))
-                .set_branch_snapshot(snapshot, MAIN_BRANCH)
+                .set_branch_snapshot(snapshot, branch)
                 .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
                 .build()
                 .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;

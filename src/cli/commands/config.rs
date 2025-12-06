@@ -8,7 +8,7 @@ use crate::cli::parser::{
     ConfigAddArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs, ConfigListArgs, ConfigRemoveArgs,
     ConfigUnsetArgs, ConfigUseArgs,
 };
-use crate::config::Config;
+use crate::config::{Config, ResolvedTable};
 use crate::error::Result;
 
 /// Handler for config command
@@ -27,40 +27,47 @@ impl ConfigCommand {
         }
     }
 
-    /// Set current table context
+    /// Set current context (table alias, path, or catalog.table)
     async fn use_table(args: ConfigUseArgs) -> Result<()> {
         let mut config = Config::load()?;
 
-        // Resolve alias if it exists
-        let resolved_path = config.resolve_table(&args.table);
+        // Validate the reference exists (path, alias, or catalog.table)
+        let display_name = match config.resolve_table(&args.table)? {
+            ResolvedTable::Path(path) => path,
+            ResolvedTable::Catalog { catalog_name, table_name, .. } => {
+                format!("{}.{}", catalog_name, table_name)
+            }
+        };
 
-        config.set_current_table(resolved_path.clone());
+        // Store the original reference (not resolved path) as context
+        config.set_current_context(args.table.clone());
         config.save()?;
 
         println!(
-            "{} Current table set to: {}",
+            "{} Current context set to: {} ({})",
             "✓".green(),
-            resolved_path.cyan()
+            args.table.cyan(),
+            display_name.dimmed()
         );
 
         Ok(())
     }
 
-    /// Show current table context
+    /// Show current context
     async fn current(args: ConfigCurrentArgs) -> Result<()> {
         let config = Config::load()?;
 
         if args.output == "json" {
             let json = serde_json::json!({
-                "current_table": config.get_current_table(),
+                "current_context": config.get_current_context(),
             });
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json).unwrap_or_default()
             );
         } else {
-            match config.get_current_table() {
-                Some(table) => println!("{}", table.cyan()),
+            match config.get_current_context() {
+                Some(context) => println!("{}", context.cyan()),
                 None => println!("{}", "(none)".dimmed()),
             }
         }
@@ -68,13 +75,13 @@ impl ConfigCommand {
         Ok(())
     }
 
-    /// Unset current table context
+    /// Unset current context
     async fn unset(_args: ConfigUnsetArgs) -> Result<()> {
         let mut config = Config::load()?;
-        config.unset_current_table();
+        config.unset_current_context();
         config.save()?;
 
-        println!("{} Current table unset", "✓".green());
+        println!("{} Current context unset", "✓".green());
 
         Ok(())
     }
@@ -82,7 +89,7 @@ impl ConfigCommand {
     /// Add a named table alias
     async fn add(args: ConfigAddArgs) -> Result<()> {
         let mut config = Config::load()?;
-        config.add_table(args.name.clone(), args.path.clone(), args.description);
+        config.add_table(args.name.clone(), args.path.clone());
         config.save()?;
 
         println!(
@@ -113,18 +120,24 @@ impl ConfigCommand {
         Ok(())
     }
 
-    /// List all configured tables
+    /// List all configured tables and catalogs
     async fn list(args: ConfigListArgs) -> Result<()> {
         let config = Config::load()?;
 
         if args.output == "json" {
             let json = serde_json::json!({
-                "current_table": config.get_current_table(),
-                "tables": config.tables.iter().map(|(name, tc)| {
+                "current_context": config.get_current_context(),
+                "tables": config.tables.iter().map(|(name, path)| {
                     serde_json::json!({
                         "name": name,
-                        "path": tc.path,
-                        "description": tc.description,
+                        "path": path,
+                    })
+                }).collect::<Vec<_>>(),
+                "catalogs": config.catalogs.iter().map(|(name, cat)| {
+                    serde_json::json!({
+                        "name": name,
+                        "type": cat.catalog_type,
+                        "uri": cat.uri,
                     })
                 }).collect::<Vec<_>>(),
             });
@@ -133,14 +146,14 @@ impl ConfigCommand {
                 serde_json::to_string_pretty(&json).unwrap_or_default()
             );
         } else {
-            // Show current table
-            println!("{}", "Current table:".bold());
-            match config.get_current_table() {
-                Some(table) => println!("  {}", table.cyan()),
+            // Show current context
+            println!("{}", "Current context:".bold());
+            match config.get_current_context() {
+                Some(context) => println!("  {}", context.cyan()),
                 None => println!("  {}", "(none)".dimmed()),
             }
 
-            // Show aliases
+            // Show table aliases
             println!();
             println!("{}", "Table aliases:".bold());
             if config.tables.is_empty() {
@@ -150,15 +163,31 @@ impl ConfigCommand {
                 names.sort();
 
                 for name in names {
-                    let tc = &config.tables[name];
-                    let is_current = config.get_current_table() == Some(&tc.path);
-                    let marker = if is_current { "*" } else { " " };
+                    let path = &config.tables[name];
+                    let is_current = config.get_current_context() == Some(name.as_str());
+                    let marker = if is_current { "→ " } else { "  " };
 
-                    print!("  {}{} → {}", marker.green(), name.cyan(), tc.path.dimmed());
-                    if let Some(ref desc) = tc.description {
-                        print!(" ({})", desc.dimmed());
-                    }
-                    println!();
+                    println!("{}{} → {}", marker.green(), name.cyan(), path.dimmed());
+                }
+            }
+
+            // Show catalogs
+            println!();
+            println!("{}", "Catalogs:".bold());
+            if config.catalogs.is_empty() {
+                println!("  {}", "(none)".dimmed());
+            } else {
+                let mut names: Vec<_> = config.catalogs.keys().collect();
+                names.sort();
+
+                for name in names {
+                    let cat = &config.catalogs[name];
+                    println!(
+                        "  {} ({}) → {}",
+                        name.cyan(),
+                        cat.catalog_type.dimmed(),
+                        cat.uri.dimmed()
+                    );
                 }
             }
 

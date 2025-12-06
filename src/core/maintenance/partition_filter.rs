@@ -4,7 +4,8 @@
 //! - Exact match: `date=2024-01-01`
 //! - Wildcard: `date=2024-01-*` or `date=2024-*`
 //! - Multiple filters (AND): `date=2024-01-01,region=us`
-//! - Prefix match: `date>=2024-01-01` (coming soon)
+//! - Range operators: `date>=2024-01-01`, `date<2024-02-01`
+//! - Combined range: `date>=2024-01-01,date<2024-02-01`
 
 use regex::Regex;
 
@@ -17,6 +18,15 @@ pub struct PartitionFilter {
     conditions: Vec<FilterCondition>,
 }
 
+/// Comparison operator for range filters
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CompareOp {
+    GreaterThanOrEqual,  // >=
+    GreaterThan,         // >
+    LessThanOrEqual,     // <=
+    LessThan,            // <
+}
+
 #[derive(Debug, Clone)]
 enum FilterCondition {
     /// Exact match: key=value
@@ -25,6 +35,8 @@ enum FilterCondition {
     Wildcard { key: String, pattern: Regex },
     /// Key exists check
     Exists { key: String },
+    /// Range comparison: key>=value, key<value, etc.
+    Range { key: String, op: CompareOp, value: String },
 }
 
 impl PartitionFilter {
@@ -35,6 +47,10 @@ impl PartitionFilter {
     /// - `key=value*` - prefix match (wildcard)
     /// - `key=*value` - suffix match (wildcard)
     /// - `key=*` - key exists
+    /// - `key>=value` - greater than or equal
+    /// - `key>value` - greater than
+    /// - `key<=value` - less than or equal
+    /// - `key<value` - less than
     /// - `key1=val1,key2=val2` - multiple conditions (AND)
     pub fn parse(filter: &str) -> Result<Self, String> {
         let conditions = filter
@@ -49,9 +65,51 @@ impl PartitionFilter {
     }
 
     fn parse_condition(part: &str) -> Result<FilterCondition, String> {
+        // Check for range operators first (order matters: >= before >, <= before <)
+        if let Some(idx) = part.find(">=") {
+            let key = part[..idx].trim().to_string();
+            let value = part[idx + 2..].trim().to_string();
+            if key.is_empty() || value.is_empty() {
+                return Err(format!("Invalid filter: '{}'", part));
+            }
+            return Ok(FilterCondition::Range { key, op: CompareOp::GreaterThanOrEqual, value });
+        }
+        if let Some(idx) = part.find("<=") {
+            let key = part[..idx].trim().to_string();
+            let value = part[idx + 2..].trim().to_string();
+            if key.is_empty() || value.is_empty() {
+                return Err(format!("Invalid filter: '{}'", part));
+            }
+            return Ok(FilterCondition::Range { key, op: CompareOp::LessThanOrEqual, value });
+        }
+        // Check single operators (but not inside a value after =)
+        if let Some(idx) = part.find('>') {
+            // Make sure it's not after an = sign
+            if part.find('=').map_or(true, |eq_idx| idx < eq_idx) {
+                let key = part[..idx].trim().to_string();
+                let value = part[idx + 1..].trim().to_string();
+                if key.is_empty() || value.is_empty() {
+                    return Err(format!("Invalid filter: '{}'", part));
+                }
+                return Ok(FilterCondition::Range { key, op: CompareOp::GreaterThan, value });
+            }
+        }
+        if let Some(idx) = part.find('<') {
+            // Make sure it's not after an = sign
+            if part.find('=').map_or(true, |eq_idx| idx < eq_idx) {
+                let key = part[..idx].trim().to_string();
+                let value = part[idx + 1..].trim().to_string();
+                if key.is_empty() || value.is_empty() {
+                    return Err(format!("Invalid filter: '{}'", part));
+                }
+                return Ok(FilterCondition::Range { key, op: CompareOp::LessThan, value });
+            }
+        }
+
+        // Standard exact match or wildcard
         let eq_pos = part.find('=').ok_or_else(|| {
             format!(
-                "Invalid filter format: '{}'. Expected 'key=value' format.",
+                "Invalid filter format: '{}'. Expected 'key=value' or 'key>=value' format.",
                 part
             )
         })?;
@@ -111,7 +169,23 @@ impl PartitionFilter {
                 parts.get(key.as_str()).is_some_and(|v| pattern.is_match(v))
             }
             FilterCondition::Exists { key } => parts.contains_key(key.as_str()),
+            FilterCondition::Range { key, op, value } => {
+                parts.get(key.as_str()).is_some_and(|v| {
+                    Self::compare_values(v, value, *op)
+                })
+            }
         })
+    }
+
+    /// Compare two string values using the given operator
+    /// Uses lexicographic comparison which works well for ISO dates and numeric strings
+    fn compare_values(actual: &str, filter_value: &str, op: CompareOp) -> bool {
+        match op {
+            CompareOp::GreaterThanOrEqual => actual >= filter_value,
+            CompareOp::GreaterThan => actual > filter_value,
+            CompareOp::LessThanOrEqual => actual <= filter_value,
+            CompareOp::LessThan => actual < filter_value,
+        }
     }
 
     /// Get the raw filter string
@@ -207,5 +281,59 @@ mod tests {
             "date=2024-01-01",
             "date=2024-01-01"
         ));
+    }
+
+    #[test]
+    fn test_range_greater_than_or_equal() {
+        let filter = PartitionFilter::parse("date>=2024-01-15").unwrap();
+        assert!(filter.matches("date=2024-01-15")); // Equal
+        assert!(filter.matches("date=2024-01-16")); // Greater
+        assert!(filter.matches("date=2024-02-01")); // Greater
+        assert!(!filter.matches("date=2024-01-14")); // Less
+        assert!(!filter.matches("date=2024-01-01")); // Less
+    }
+
+    #[test]
+    fn test_range_less_than() {
+        let filter = PartitionFilter::parse("date<2024-02-01").unwrap();
+        assert!(filter.matches("date=2024-01-31")); // Less
+        assert!(filter.matches("date=2024-01-01")); // Less
+        assert!(!filter.matches("date=2024-02-01")); // Equal
+        assert!(!filter.matches("date=2024-02-15")); // Greater
+    }
+
+    #[test]
+    fn test_range_combined() {
+        // Range: January 2024
+        let filter = PartitionFilter::parse("date>=2024-01-01,date<2024-02-01").unwrap();
+        assert!(filter.matches("date=2024-01-01")); // Start of range
+        assert!(filter.matches("date=2024-01-15")); // Middle
+        assert!(filter.matches("date=2024-01-31")); // End of month
+        assert!(!filter.matches("date=2023-12-31")); // Before
+        assert!(!filter.matches("date=2024-02-01")); // After
+    }
+
+    #[test]
+    fn test_range_with_other_conditions() {
+        // Range + exact match
+        let filter = PartitionFilter::parse("date>=2024-01-01,date<2024-02-01,region=us").unwrap();
+        assert!(filter.matches("date=2024-01-15/region=us"));
+        assert!(!filter.matches("date=2024-01-15/region=eu")); // Wrong region
+        assert!(!filter.matches("date=2024-02-15/region=us")); // Out of range
+    }
+
+    #[test]
+    fn test_range_greater_than() {
+        let filter = PartitionFilter::parse("date>2024-01-15").unwrap();
+        assert!(!filter.matches("date=2024-01-15")); // Not strictly greater
+        assert!(filter.matches("date=2024-01-16")); // Greater
+    }
+
+    #[test]
+    fn test_range_less_than_or_equal() {
+        let filter = PartitionFilter::parse("date<=2024-01-15").unwrap();
+        assert!(filter.matches("date=2024-01-15")); // Equal
+        assert!(filter.matches("date=2024-01-14")); // Less
+        assert!(!filter.matches("date=2024-01-16")); // Greater
     }
 }

@@ -41,6 +41,10 @@ pub struct MaintenanceConfig {
     pub parallelism: usize,
     /// Filter to specific partition (e.g., "day=2024-01-01/currency=USD")
     pub partition_filter: Option<String>,
+    /// Maximum number of input files to process (for incremental compaction)
+    pub max_files: Option<usize>,
+    /// Maximum bytes to process (for incremental compaction)
+    pub max_bytes: Option<u64>,
 }
 
 impl Default for MaintenanceConfig {
@@ -52,6 +56,8 @@ impl Default for MaintenanceConfig {
             dry_run: false,
             parallelism: 4,
             partition_filter: None,
+            max_files: None,
+            max_bytes: None,
         }
     }
 }

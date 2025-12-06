@@ -10,6 +10,7 @@ use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsAr
 use crate::config::ResolvePath;
 use crate::core::maintenance::{MaintenanceConfig, OptimizeService};
 use crate::core::metadata::MaintenanceResult;
+use crate::core::utils::parse_bytes;
 use crate::core::{TableFormat, detect_table_format_async, format_bytes};
 use crate::error::{Error, Result};
 
@@ -32,12 +33,21 @@ impl OptimizeCommand {
         // Detect table format (supports remote storage)
         let format = detect_table_format_async(&table_path).await;
 
+        // Parse max_bytes if provided
+        let max_bytes = args.max_bytes.as_ref()
+            .map(|s| parse_bytes(s))
+            .transpose()
+            .map_err(|e| Error::General(e))?;
+
         // Create service configuration
         let config = MaintenanceConfig {
             target_size: args.target_size,
             min_size: args.min_file_size.unwrap_or(args.target_size / 16),
             dry_run: args.dry_run,
             parallelism: args.max_concurrent_tasks,
+            partition_filter: args.partition.clone(),
+            max_files: args.max_files,
+            max_bytes,
             ..Default::default()
         };
 
@@ -45,7 +55,7 @@ impl OptimizeCommand {
 
         let result = match format {
             TableFormat::Delta => Self::optimize_delta_data(&args, &service).await?,
-            TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service).await?,
+            TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref()).await?,
             TableFormat::Unknown => {
                 return Err(Error::General(format!(
                     "Path '{}' is not a Delta Lake or Iceberg table",
@@ -95,12 +105,25 @@ impl OptimizeCommand {
     async fn optimize_iceberg_data(
         table_path: &str,
         service: &OptimizeService,
+        branch: Option<&str>,
     ) -> Result<MaintenanceResult> {
         use crate::core::metadata::IcebergMetadataService;
 
-        println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
+        if let Some(b) = branch {
+            println!(
+                "{} Iceberg table at {} (branch: {})",
+                "Optimizing".green(),
+                table_path,
+                b.cyan()
+            );
+        } else {
+            println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
+        }
 
-        let metadata_service = IcebergMetadataService::new_async(table_path.to_string()).await?;
+        let metadata_service = IcebergMetadataService::new_with_branch(
+            table_path.to_string(),
+            branch.map(|s| s.to_string()),
+        ).await?;
         service.execute(&metadata_service).await
     }
 
@@ -114,21 +137,42 @@ impl OptimizeCommand {
         use indicatif::{ProgressBar, ProgressStyle};
         use std::sync::Arc;
 
-        println!(
-            "{} Iceberg manifests at {}",
-            "Rewriting".green(),
-            table_path
-        );
+        // Determine target branch
+        let target_branch = args.branch.as_deref().unwrap_or("main");
+
+        if args.branch.is_some() {
+            println!(
+                "{} Iceberg manifests at {} (branch: {})",
+                "Rewriting".green(),
+                table_path,
+                target_branch.cyan()
+            );
+        } else {
+            println!(
+                "{} Iceberg manifests at {}",
+                "Rewriting".green(),
+                table_path
+            );
+        }
 
         // Load metadata
-        let service = IcebergMetadataService::new_async(table_path.to_string()).await?;
+        let service = IcebergMetadataService::new_with_branch(
+            table_path.to_string(),
+            args.branch.clone(),
+        ).await?;
         let (metadata, current_version) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
 
-        // Get current snapshot
-        let current_snapshot = metadata
-            .current_snapshot()
-            .ok_or_else(|| Error::General("No current snapshot found".to_string()))?;
+        // Get snapshot for the target branch
+        let current_snapshot = if target_branch == "main" {
+            metadata
+                .current_snapshot()
+                .ok_or_else(|| Error::General("No current snapshot found".to_string()))?
+        } else {
+            metadata
+                .snapshot_for_ref(target_branch)
+                .ok_or_else(|| Error::General(format!("Branch '{}' not found", target_branch)))?
+        };
         let snapshot_id = current_snapshot.snapshot_id();
         let parent_snapshot_id = current_snapshot.parent_snapshot_id();
         let sequence_number = current_snapshot.sequence_number();
@@ -461,7 +505,7 @@ impl OptimizeCommand {
             .with_schema_id(metadata.current_schema_id())
             .build();
 
-        // Use TableMetadataBuilder to add the new snapshot and update current-snapshot-id
+        // Use TableMetadataBuilder to add the new snapshot and update the branch ref
         let metadata_file_path = service.current_metadata_path().await?;
         let metadata_clone = (*metadata).clone();
         let build_result = metadata_clone
@@ -469,7 +513,7 @@ impl OptimizeCommand {
             .add_snapshot(new_snapshot)
             .map_err(|e| Error::General(format!("Failed to add snapshot: {}", e)))?
             .set_ref(
-                "main",
+                target_branch,
                 iceberg::spec::SnapshotReference {
                     snapshot_id: new_snapshot_id,
                     retention: iceberg::spec::SnapshotRetention::Branch {
@@ -543,9 +587,13 @@ impl OptimizeCommand {
 
     /// Output result in the requested format
     fn output_data_result(result: &MaintenanceResult, output_format: &str) -> Result<()> {
+        let is_dry_run = result.operation.contains("dry-run")
+            || result.details.get("mode").map(|m| m == "dry-run").unwrap_or(false);
+
         match output_format {
             "json" => {
                 let json = serde_json::json!({
+                    "dry_run": is_dry_run,
                     "operation": result.operation,
                     "files_added": result.files_added,
                     "files_removed": result.files_removed,
@@ -562,7 +610,47 @@ impl OptimizeCommand {
             }
             _ => {
                 println!();
-                if result.files_added == 0 && result.files_removed == 0 {
+
+                // Check if dry-run
+                if is_dry_run {
+                    println!("{}", "DRY RUN - No changes made".yellow().bold());
+                    println!();
+
+                    if result.files_added == 0 && result.files_removed == 0 {
+                        println!("{}", "Table is already optimized.".green());
+                        if let Some(reason) = result.details.get("reason") {
+                            println!("{}", reason);
+                        }
+                    } else {
+                        println!("{}", "Would perform the following changes:".cyan());
+                        println!();
+                        println!(
+                            "  Files to compact:  {} -> {}",
+                            result.files_removed.to_string().yellow(),
+                            result.files_added.to_string().yellow()
+                        );
+
+                        if let Some(partitions) = result.details.get("partitions") {
+                            println!(
+                                "  Partitions:        {}",
+                                partitions.yellow()
+                            );
+                        }
+
+                        if let Some(would_compact) = result.details.get("would_compact") {
+                            println!(
+                                "  Summary:           {}",
+                                would_compact.yellow()
+                            );
+                        }
+
+                        println!();
+                        println!(
+                            "{}",
+                            "Run without --dry-run to apply these changes.".dimmed()
+                        );
+                    }
+                } else if result.files_added == 0 && result.files_removed == 0 {
                     println!("{}", "Table is already optimized.".green());
                     if let Some(reason) = result.details.get("reason") {
                         println!("{}", reason);
