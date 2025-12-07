@@ -65,12 +65,11 @@ pub fn extract_version_from_path(path: &str) -> Option<i32> {
 
     // Standard format: <version>-<uuid>.metadata.json
     // The version is zero-padded, e.g., 00015-abc123.metadata.json
-    if filename.ends_with(".metadata.json") {
-        if let Some(version_part) = filename.split('-').next() {
-            if let Ok(version) = version_part.parse::<i32>() {
-                return Some(version);
-            }
-        }
+    if filename.ends_with(".metadata.json")
+        && let Some(version_part) = filename.split('-').next()
+        && let Ok(version) = version_part.parse::<i32>()
+    {
+        return Some(version);
     }
 
     None

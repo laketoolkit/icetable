@@ -88,11 +88,11 @@ impl InspectCommand {
 
         // If physical mode, use new physical layout inspection
         if physical_mode {
-            return Self::execute_physical_inspect(&path, args).await;
+            return Self::execute_physical_inspect(path, args).await;
         }
 
         // Otherwise, use legacy inspect (for backwards compatibility)
-        Self::execute_legacy_inspect(&path, args).await
+        Self::execute_legacy_inspect(path, args).await
     }
 
     /// Execute physical layout inspection (new mode)

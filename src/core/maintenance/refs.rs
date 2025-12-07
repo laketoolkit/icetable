@@ -72,6 +72,7 @@ impl RefService {
     }
 
     /// Create a new branch
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_branch(
         &self,
         service: &IcebergMetadataService,

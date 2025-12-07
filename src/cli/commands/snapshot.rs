@@ -226,6 +226,7 @@ impl SnapshotCommand {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn iceberg_expire(
         path: &str,
         older_than: Option<String>,
@@ -338,6 +339,7 @@ impl SnapshotCommand {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn iceberg_set(
         path: &str,
         id: Option<i64>,

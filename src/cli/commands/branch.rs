@@ -137,6 +137,7 @@ impl BranchCommand {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create(
         ctx: &TableContext,
         name: &str,

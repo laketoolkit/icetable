@@ -38,6 +38,7 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Help, global = true)]
     pub help: Option<bool>,
 
+    /// The subcommand to execute
     #[command(subcommand)]
     pub command: Commands,
 }

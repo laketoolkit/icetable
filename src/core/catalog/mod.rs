@@ -71,7 +71,7 @@ impl TableRef {
     /// Get display name for the table
     pub fn display_name(&self) -> String {
         match self {
-            TableRef::Path(p) => p.split('/').last().unwrap_or(p).to_string(),
+            TableRef::Path(p) => p.split('/').next_back().unwrap_or(p).to_string(),
             TableRef::Catalog { namespace, name } => {
                 format!("{}.{}", namespace.join("."), name)
             }

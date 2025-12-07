@@ -227,7 +227,7 @@ impl CatalogCommand {
             println!("{} {}", catalog_name.bold(), "●".green());
             println!();
             println!("  {}  {}", "uri".dimmed(), config.uri);
-            println!("  {} {}", "type".dimmed(), "rest");
+            println!("  {} rest", "type".dimmed());
             if let Some(wh) = &config.warehouse {
                 println!("  {}  {}", "warehouse".dimmed(), wh);
             }

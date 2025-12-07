@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use iceberg::table::Table;
 
 /// Resolved table that can be either a direct path or a catalog table
+#[allow(clippy::large_enum_variant)]
 pub enum TableResolution {
     /// Direct path to table on storage
     Path(String),
