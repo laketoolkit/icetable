@@ -13,7 +13,7 @@ pub use format_detection::{
 };
 pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
 pub use iceberg::iceberg_to_arrow_type;
-pub use iceberg::{extract_version_from_filename, find_latest_metadata};
+pub use iceberg::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
 pub use parquet::read_parquet_record_count;
 pub use snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,

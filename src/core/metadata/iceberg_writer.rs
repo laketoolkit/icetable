@@ -145,9 +145,9 @@ impl IcebergSnapshotWriter {
         &self,
         old_metadata: TableMetadata,
         snapshot: Snapshot,
-        current_version: i32,
+        current_metadata_path: &str,
     ) -> Result<TableMetadata> {
-        self.update_metadata_for_branch(old_metadata, snapshot, current_version, MAIN_BRANCH)
+        self.update_metadata_for_branch(old_metadata, snapshot, current_metadata_path, MAIN_BRANCH)
     }
 
     /// Update table metadata with new snapshot on a specific branch
@@ -155,13 +155,17 @@ impl IcebergSnapshotWriter {
         &self,
         old_metadata: TableMetadata,
         snapshot: Snapshot,
-        current_version: i32,
+        current_metadata_path: &str,
         branch: &str,
     ) -> Result<TableMetadata> {
-        let metadata_log_path = format!("v{}.metadata.json", current_version);
+        // Extract just the filename for the metadata log
+        let metadata_filename = current_metadata_path
+            .split('/')
+            .next_back()
+            .unwrap_or(current_metadata_path);
 
         let build_result =
-            TableMetadataBuilder::new_from_metadata(old_metadata, Some(metadata_log_path))
+            TableMetadataBuilder::new_from_metadata(old_metadata, Some(metadata_filename.to_string()))
                 .set_branch_snapshot(snapshot, branch)
                 .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
                 .build()
@@ -170,19 +174,27 @@ impl IcebergSnapshotWriter {
         Ok(build_result.metadata)
     }
 
-    /// Write metadata to file
+    /// Write metadata to file using standard Iceberg naming: `<version>-<uuid>.metadata.json`
     ///
     /// Validates metadata before writing to ensure consistency.
     /// Also performs conflict detection to prevent concurrent modifications.
-    pub async fn write_metadata_file(&self, metadata: &TableMetadata, version: i32) -> Result<()> {
+    ///
+    /// Returns the path of the new metadata file.
+    pub async fn write_metadata_file(
+        &self,
+        metadata: &TableMetadata,
+        current_metadata_path: &str,
+    ) -> Result<String> {
         use crate::core::storage::traits::PutOptions;
+        use crate::core::utils::{extract_version_from_path, metadata_location_filename, next_metadata_location};
 
         // Validate metadata before writing
         super::iceberg_validator::validate_or_error(metadata)?;
 
+        // Parse current metadata location and get next version
+        let expected_version = extract_version_from_path(current_metadata_path);
+
         // Check for conflicts before writing (optimistic concurrency control)
-        // Expected previous version is version - 1
-        let expected_version = version - 1;
         super::iceberg_conflict::check_and_fail_on_conflict(
             &self.table_path,
             &self.storage,
@@ -190,7 +202,9 @@ impl IcebergSnapshotWriter {
         )
         .await?;
 
-        let metadata_path = format!("{}/v{}.metadata.json", self.metadata_dir(), version);
+        // Generate next metadata location with new UUID
+        let next_location = next_metadata_location(current_metadata_path)?;
+        let metadata_path = format!("{}/{}", self.metadata_dir(), metadata_location_filename(&next_location));
 
         let metadata_json = serde_json::to_string_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
@@ -206,30 +220,7 @@ impl IcebergSnapshotWriter {
             .await
             .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
 
-        Ok(())
-    }
-
-    /// Update version-hint.text
-    pub async fn update_version_hint(&self, version: i32) -> Result<()> {
-        use crate::core::storage::traits::PutOptions;
-
-        let version_hint_path = format!("{}/version-hint.text", self.metadata_dir());
-        let put_opts = PutOptions {
-            content_type: Some("text/plain".to_string()),
-            metadata: std::collections::HashMap::new(),
-            if_none_match: None,
-        };
-
-        self.storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(version.to_string()),
-                &put_opts,
-            )
-            .await
-            .map_err(|e| Error::General(format!("Failed to update version hint: {}", e)))?;
-
-        Ok(())
+        Ok(metadata_path)
     }
 
     /// Convert DataFileInfo to Iceberg DataFile

@@ -438,7 +438,7 @@ impl DoctorCommand {
         // Create storage backend
         let storage: Arc<dyn StorageBackend> =
             match StorageBackendFactory::create_backend(table_path).await {
-                Ok(s) => s.into(),
+                Ok(s) => s,
                 Err(e) => {
                     checks.push(CheckResult {
                         name: "Storage Access".to_string(),
@@ -465,18 +465,23 @@ impl DoctorCommand {
             suggestion: None,
         });
 
-        // Check 1: version-hint.text exists and is valid
-        let version_hint_check =
-            Self::check_version_hint(&storage, table_path).await;
-        let current_version = match &version_hint_check {
+        // Check 1: Metadata format (standard Iceberg format)
+        let metadata_format_check =
+            Self::check_metadata_format(&storage, table_path).await;
+        let current_version = match &metadata_format_check {
             CheckResult {
                 status: CheckStatus::Ok,
                 message,
                 ..
-            } => message.split(' ').next().and_then(|v| v.parse::<i32>().ok()),
+            } => {
+                // Extract version from message like "v15 (00015-uuid.metadata.json)"
+                message.strip_prefix('v')
+                    .and_then(|s| s.split_whitespace().next())
+                    .and_then(|v| v.parse::<i32>().ok())
+            },
             _ => None,
         };
-        checks.push(version_hint_check);
+        checks.push(metadata_format_check);
 
         // Check 2: Metadata JSON is valid and parseable
         let (metadata_check, metadata) =
@@ -548,42 +553,52 @@ impl DoctorCommand {
         Ok(())
     }
 
-    /// Check version-hint.text
-    async fn check_version_hint(
+    /// Check metadata format (standard Iceberg naming)
+    ///
+    /// Verifies that the table uses standard Iceberg metadata format:
+    /// `<version>-<uuid>.metadata.json` (e.g., 00015-abc123.metadata.json)
+    async fn check_metadata_format(
         storage: &Arc<dyn StorageBackend>,
         table_path: &str,
     ) -> CheckResult {
-        use crate::core::storage::traits::GetOptions;
+        use crate::core::utils::{extract_version_from_path, find_latest_metadata};
+        use iceberg::MetadataLocation;
+        use std::str::FromStr;
 
-        let version_hint_path = format!("{}/metadata/version-hint.text", table_path.trim_end_matches('/'));
-        let get_opts = GetOptions::default();
+        match find_latest_metadata(table_path, storage).await {
+            Ok(metadata_path) => {
+                let filename = metadata_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&metadata_path);
 
-        match storage.get(&version_hint_path, &get_opts).await {
-            Ok(bytes) => {
-                let content = String::from_utf8_lossy(&bytes).trim().to_string();
-                match content.parse::<i32>() {
-                    Ok(version) => CheckResult {
-                        name: "version-hint.text".to_string(),
+                let version = extract_version_from_path(&metadata_path);
+
+                // Verify it's a valid standard Iceberg format
+                if version > 0 && MetadataLocation::from_str(&metadata_path).is_ok() {
+                    CheckResult {
+                        name: "Metadata Format".to_string(),
                         status: CheckStatus::Ok,
-                        message: format!("{} (valid)", version),
+                        message: format!("v{} ({})", version, filename),
                         suggestion: None,
-                    },
-                    Err(_) => CheckResult {
-                        name: "version-hint.text".to_string(),
-                        status: CheckStatus::Warning,
-                        message: format!("Invalid content: '{}'", content),
+                    }
+                } else {
+                    CheckResult {
+                        name: "Metadata Format".to_string(),
+                        status: CheckStatus::Error,
+                        message: format!("Invalid format: {}", filename),
                         suggestion: Some(
-                            "version-hint.text should contain a single integer".to_string(),
+                            "Expected standard Iceberg format: <version>-<uuid>.metadata.json".to_string(),
                         ),
-                    },
+                    }
                 }
             }
-            Err(_) => CheckResult {
-                name: "version-hint.text".to_string(),
-                status: CheckStatus::Warning,
-                message: "Not found (optional file)".to_string(),
+            Err(e) => CheckResult {
+                name: "Metadata Format".to_string(),
+                status: CheckStatus::Error,
+                message: format!("Cannot find metadata: {}", e),
                 suggestion: Some(
-                    "Without version-hint.text, clients must scan metadata/ directory".to_string(),
+                    "No valid metadata.json files found in metadata/ directory".to_string(),
                 ),
             },
         }
@@ -593,64 +608,26 @@ impl DoctorCommand {
     async fn check_metadata_json(
         storage: &Arc<dyn StorageBackend>,
         table_path: &str,
-        version: Option<i32>,
+        _version: Option<i32>, // Version is now derived from metadata format check
     ) -> (CheckResult, Option<serde_json::Value>) {
-        use crate::core::storage::traits::{GetOptions, ListOptions};
+        use crate::core::storage::traits::GetOptions;
+        use crate::core::utils::find_latest_metadata;
 
-        // Find metadata file
-        let metadata_path = if let Some(v) = version {
-            format!(
-                "{}/metadata/v{}.metadata.json",
-                table_path.trim_end_matches('/'),
-                v
-            )
-        } else {
-            // List metadata directory to find latest
-            let list_opts = ListOptions {
-                prefix: Some(format!("{}/metadata/", table_path.trim_end_matches('/'))),
-                delimiter: None,
-                max_results: None,
-                continuation_token: None,
-            };
-
-            match storage.list(&list_opts).await {
-                Ok(result) => {
-                    let mut metadata_files: Vec<_> = result
-                        .objects
-                        .iter()
-                        .filter(|o| o.path.ends_with(".metadata.json"))
-                        .collect();
-
-                    metadata_files.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-
-                    match metadata_files.first() {
-                        Some(f) => f.path.clone(),
-                        None => {
-                            return (
-                                CheckResult {
-                                    name: "Metadata JSON".to_string(),
-                                    status: CheckStatus::Error,
-                                    message: "No metadata files found".to_string(),
-                                    suggestion: Some(
-                                        "Table metadata/ directory is empty or corrupted".to_string(),
-                                    ),
-                                },
-                                None,
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    return (
-                        CheckResult {
-                            name: "Metadata JSON".to_string(),
-                            status: CheckStatus::Error,
-                            message: format!("Cannot list metadata: {}", e),
-                            suggestion: Some("Check storage permissions".to_string()),
-                        },
-                        None,
-                    );
-                }
+        // Find latest metadata using standard utility
+        let metadata_path = match find_latest_metadata(table_path, storage).await {
+            Ok(path) => path,
+            Err(e) => {
+                return (
+                    CheckResult {
+                        name: "Metadata JSON".to_string(),
+                        status: CheckStatus::Error,
+                        message: format!("Cannot find metadata: {}", e),
+                        suggestion: Some(
+                            "Table metadata/ directory is empty or corrupted".to_string(),
+                        ),
+                    },
+                    None,
+                );
             }
         };
 
@@ -766,11 +743,10 @@ impl DoctorCommand {
         // Check for cycles (simple: ensure parent exists or is 0/-1)
         let mut orphan_count = 0;
         for snapshot in snapshots {
-            if let Some(parent_id) = snapshot.get("parent-snapshot-id").and_then(|id| id.as_i64()) {
-                if parent_id > 0 && !snapshot_ids.contains(&parent_id) {
+            if let Some(parent_id) = snapshot.get("parent-snapshot-id").and_then(|id| id.as_i64())
+                && parent_id > 0 && !snapshot_ids.contains(&parent_id) {
                     orphan_count += 1;
                 }
-            }
         }
 
         if orphan_count > 0 {
@@ -937,8 +913,8 @@ impl DoctorCommand {
 
         let mut manifest_paths = Vec::new();
         for value_result in manifest_reader {
-            if let Ok(apache_avro::types::Value::Record(fields)) = value_result {
-                if let Some(path) = fields
+            if let Ok(apache_avro::types::Value::Record(fields)) = value_result
+                && let Some(path) = fields
                     .iter()
                     .find(|(name, _)| name == "manifest-path" || name == "manifest_path")
                     .and_then(|(_, v)| {
@@ -951,7 +927,6 @@ impl DoctorCommand {
                 {
                     manifest_paths.push(Self::resolve_path(table_location, &path));
                 }
-            }
         }
 
         // Check each manifest exists
@@ -1072,8 +1047,8 @@ impl DoctorCommand {
         // Collect manifest paths
         let mut manifest_paths = Vec::new();
         for value_result in manifest_reader {
-            if let Ok(apache_avro::types::Value::Record(fields)) = value_result {
-                if let Some(path) = fields
+            if let Ok(apache_avro::types::Value::Record(fields)) = value_result
+                && let Some(path) = fields
                     .iter()
                     .find(|(name, _)| name == "manifest-path" || name == "manifest_path")
                     .and_then(|(_, v)| {
@@ -1086,7 +1061,6 @@ impl DoctorCommand {
                 {
                     manifest_paths.push(Self::resolve_path(table_location, &path));
                 }
-            }
         }
 
         // Collect all data file paths from manifests
@@ -1125,8 +1099,7 @@ impl DoctorCommand {
                                 None
                             }
                         })
-                    {
-                        if let Some(file_path) = data_file
+                        && let Some(file_path) = data_file
                             .iter()
                             .find(|(name, _)| name == "file_path")
                             .and_then(|(_, v)| {
@@ -1139,7 +1112,6 @@ impl DoctorCommand {
                         {
                             data_files.push(Self::resolve_path(table_location, &file_path));
                         }
-                    }
                 }
             }
         }

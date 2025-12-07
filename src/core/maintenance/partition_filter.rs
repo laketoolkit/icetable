@@ -85,7 +85,7 @@ impl PartitionFilter {
         // Check single operators (but not inside a value after =)
         if let Some(idx) = part.find('>') {
             // Make sure it's not after an = sign
-            if part.find('=').map_or(true, |eq_idx| idx < eq_idx) {
+            if part.find('=').is_none_or(|eq_idx| idx < eq_idx) {
                 let key = part[..idx].trim().to_string();
                 let value = part[idx + 1..].trim().to_string();
                 if key.is_empty() || value.is_empty() {
@@ -96,7 +96,7 @@ impl PartitionFilter {
         }
         if let Some(idx) = part.find('<') {
             // Make sure it's not after an = sign
-            if part.find('=').map_or(true, |eq_idx| idx < eq_idx) {
+            if part.find('=').is_none_or(|eq_idx| idx < eq_idx) {
                 let key = part[..idx].trim().to_string();
                 let value = part[idx + 1..].trim().to_string();
                 if key.is_empty() || value.is_empty() {

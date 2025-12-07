@@ -181,15 +181,12 @@ impl InitCommand {
         let metadata_json = serde_json::to_string_pretty(&metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
-        // Write metadata file
-        let metadata_file = metadata_dir.join("v1.metadata.json");
+        // Write metadata file with standard Iceberg naming: 00000-<uuid>.metadata.json
+        use crate::core::utils::{metadata_location_filename, new_metadata_location};
+        let initial_location = new_metadata_location(&location);
+        let metadata_file = metadata_dir.join(metadata_location_filename(&initial_location));
         fs::write(&metadata_file, metadata_json)
             .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
-
-        // Write version hint
-        let version_hint_file = metadata_dir.join("version-hint.text");
-        fs::write(&version_hint_file, "1")
-            .map_err(|e| Error::General(format!("Failed to write version hint: {}", e)))?;
 
         println!(
             "{} Created Apache Iceberg table at {}",

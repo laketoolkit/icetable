@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::core::storage::StorageBackend;
-use crate::core::utils::find_latest_metadata;
+use crate::core::utils::{extract_version_from_path, find_latest_metadata};
 use crate::error::{Error, Result};
 
 /// Result of conflict detection
@@ -70,9 +70,9 @@ impl ConflictDetector {
     /// # Returns
     /// * `Ok(ConflictCheckResult)` with conflict status
     pub async fn check_for_conflicts(&self, expected_version: i32) -> Result<ConflictCheckResult> {
-        // Get current metadata path
+        // Get current metadata path using standard format
         let current_metadata = find_latest_metadata(&self.table_path, &self.storage).await?;
-        let current_version = extract_version(&current_metadata);
+        let current_version = extract_version_from_path(&current_metadata);
 
         if current_version != expected_version {
             return Ok(ConflictCheckResult::conflict(
@@ -85,63 +85,13 @@ impl ConflictDetector {
             ));
         }
 
-        // Also check if the next version file already exists (shouldn't happen but good to verify)
-        let next_version = expected_version + 1;
-        let next_metadata_path = format!(
-            "{}/metadata/v{}.metadata.json",
-            self.table_path.trim_end_matches('/'),
-            next_version
-        );
-
-        if self.file_exists(&next_metadata_path).await? {
-            return Ok(ConflictCheckResult::conflict(
-                expected_version,
-                next_version,
-                format!(
-                    "Version v{}.metadata.json already exists. Another process may have committed.",
-                    next_version
-                ),
-            ));
-        }
+        // For standard format, we don't need to check next version file since
+        // each version has a unique UUID in its filename. The version check above
+        // is sufficient for conflict detection.
 
         Ok(ConflictCheckResult::no_conflict(expected_version))
     }
 
-    /// Check if a file exists on storage
-    async fn file_exists(&self, path: &str) -> Result<bool> {
-        use crate::core::storage::GetOptions;
-
-        match self.storage.get(path, &GetOptions::default()).await {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                // Check if it's a "not found" error
-                let error_str = e.to_string().to_lowercase();
-                if error_str.contains("not found")
-                    || error_str.contains("does not exist")
-                    || error_str.contains("no such file")
-                    || error_str.contains("404")
-                {
-                    Ok(false)
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-}
-
-/// Extract version number from metadata filename
-fn extract_version(path: &str) -> i32 {
-    // Path like: s3://bucket/table/metadata/v5.metadata.json
-    path.split('/')
-        .last()
-        .and_then(|filename| {
-            filename
-                .strip_prefix('v')
-                .and_then(|rest| rest.strip_suffix(".metadata.json"))
-                .and_then(|num| num.parse().ok())
-        })
-        .unwrap_or(0)
 }
 
 /// Helper function to check for conflicts and return error if found
@@ -172,17 +122,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_version() {
+    fn test_extract_version_from_path_standard_format() {
+        // Standard Iceberg format: <version>-<uuid>.metadata.json
         assert_eq!(
-            extract_version("s3://bucket/table/metadata/v5.metadata.json"),
+            extract_version_from_path("s3://bucket/table/metadata/00005-abc123.metadata.json"),
             5
         );
         assert_eq!(
-            extract_version("/path/to/table/metadata/v123.metadata.json"),
+            extract_version_from_path("/path/to/table/metadata/00123-uuid.metadata.json"),
             123
         );
-        assert_eq!(extract_version("v1.metadata.json"), 1);
-        assert_eq!(extract_version("invalid"), 0);
+        assert_eq!(extract_version_from_path("00001-test.metadata.json"), 1);
+        assert_eq!(extract_version_from_path("invalid"), 0);
     }
 
     #[test]

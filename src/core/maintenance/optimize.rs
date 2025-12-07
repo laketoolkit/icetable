@@ -6,8 +6,10 @@
 //! Features:
 //! - **True streaming**: Batches are streamed directly from readers to writer
 //!   without accumulating in memory
-//! - **Parallel partitions**: Uses rayon for true CPU parallelization across
-//!   partition groups
+//! - **Concurrent partitions**: Uses async concurrency for I/O-bound partition
+//!   processing with configurable parallelism
+//! - **Target size splitting**: Splits output files when exceeding target_size
+//!   to avoid OOM and produce optimally-sized files
 //! - **Cloud storage support**: Works with S3, GCS, Azure through object_store
 
 use std::collections::HashMap;
@@ -18,7 +20,7 @@ use std::time::Duration;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_cast::cast;
-use futures::TryStreamExt;
+use futures::{TryStreamExt, stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use object_store::ObjectStore;
 use object_store::path::Path as ObjectPath;
@@ -26,7 +28,6 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use rayon::prelude::*;
 
 use super::{FileGroup, MaintenanceConfig, group_files_by_partition};
 use crate::core::metadata::{
@@ -67,11 +68,10 @@ impl OptimizeService {
             .into_iter()
             .filter(|(key, g)| {
                 // Filter by partition if specified (supports wildcards)
-                if let Some(ref filter) = self.config.partition_filter {
-                    if !super::matches_partition_filter(key, filter) {
+                if let Some(ref filter) = self.config.partition_filter
+                    && !super::matches_partition_filter(key, filter) {
                         return false;
                     }
-                }
                 g.needs_compaction(self.config.min_size)
             })
             .map(|(_, g)| g)
@@ -113,20 +113,18 @@ impl OptimizeService {
             let group_bytes = group.total_size;
 
             // Check max_files limit
-            if let Some(max_files) = self.config.max_files {
-                if accumulated_files + group_files > max_files && !limited_groups.is_empty() {
+            if let Some(max_files) = self.config.max_files
+                && accumulated_files + group_files > max_files && !limited_groups.is_empty() {
                     was_limited = true;
                     break;
                 }
-            }
 
             // Check max_bytes limit
-            if let Some(max_bytes) = self.config.max_bytes {
-                if accumulated_bytes + group_bytes > max_bytes && !limited_groups.is_empty() {
+            if let Some(max_bytes) = self.config.max_bytes
+                && accumulated_bytes + group_bytes > max_bytes && !limited_groups.is_empty() {
                     was_limited = true;
                     break;
                 }
-            }
 
             accumulated_files += group_files;
             accumulated_bytes += group_bytes;
@@ -195,38 +193,46 @@ impl OptimizeService {
         let files_processed = Arc::new(AtomicUsize::new(0));
         let bytes_written = Arc::new(AtomicU64::new(0));
 
-        // Get tokio runtime handle for async operations inside rayon
-        let rt = tokio::runtime::Handle::current();
-
-        // Process partition groups in parallel using rayon
-        let results: Vec<Result<CompactionResult>> = groups_to_compact
-            .par_iter()
+        // Process partition groups concurrently using async streams
+        let concurrency = self.config.parallelism;
+        let results: Vec<Result<CompactionResult>> = stream::iter(groups_to_compact.iter())
             .map(|group| {
-                // Each rayon thread uses block_on to run async code
-                let result = rt.block_on(self.compact_group_streaming(
-                    group,
-                    &schema,
-                    &data_dir,
-                    &object_store,
-                ));
+                let schema = schema.clone();
+                let data_dir = data_dir.clone();
+                let object_store = object_store.clone();
+                let files_processed = files_processed.clone();
+                let bytes_written = bytes_written.clone();
+                let overall_pb = overall_pb.clone();
+                let group = group.clone();
 
-                // Update progress
-                files_processed.fetch_add(group.files.len(), Ordering::Relaxed);
-                overall_pb.inc(1);
+                async move {
+                    let result = self.compact_group_streaming(
+                        &group,
+                        &schema,
+                        &data_dir,
+                        &object_store,
+                    ).await;
 
-                if let Ok(ref r) = result {
-                    let added_bytes: u64 = r.added.iter().map(|f| f.size).sum();
-                    bytes_written.fetch_add(added_bytes, Ordering::Relaxed);
-                    overall_pb.set_message(format!(
-                        "{} files -> {}",
-                        files_processed.load(Ordering::Relaxed),
-                        format_bytes(bytes_written.load(Ordering::Relaxed))
-                    ));
+                    // Update progress
+                    files_processed.fetch_add(group.files.len(), Ordering::Relaxed);
+                    overall_pb.inc(1);
+
+                    if let Ok(ref r) = result {
+                        let added_bytes: u64 = r.added.iter().map(|f| f.size).sum();
+                        bytes_written.fetch_add(added_bytes, Ordering::Relaxed);
+                        overall_pb.set_message(format!(
+                            "{} files -> {}",
+                            files_processed.load(Ordering::Relaxed),
+                            format_bytes(bytes_written.load(Ordering::Relaxed))
+                        ));
+                    }
+
+                    result
                 }
-
-                result
             })
-            .collect();
+            .buffer_unordered(concurrency)
+            .collect()
+            .await;
 
         overall_pb.finish_with_message("done");
 
@@ -274,11 +280,11 @@ impl OptimizeService {
         })
     }
 
-    /// Compact a group of files using true streaming
+    /// Compact a group of files using true streaming with target size splitting
     ///
     /// Batches are streamed directly from input files to the output writer
-    /// without accumulating in memory. This allows processing arbitrarily
-    /// large partitions with constant memory usage.
+    /// without accumulating in memory. When the current output file exceeds
+    /// target_size, a new output file is started.
     ///
     /// Uses the table's schema from metadata (not from parquet files) to ensure
     /// the output file has the current schema, handling schema evolution correctly.
@@ -296,41 +302,29 @@ impl OptimizeService {
             });
         }
 
-        // Generate output file path
-        let unique_id = generate_unique_id();
-        let output_path = if group.partition_key.is_empty() {
-            data_dir.join(format!("compact-{}.parquet", unique_id))
-        } else {
-            data_dir
-                .join(&group.partition_key)
-                .join(format!("compact-{}.parquet", unique_id))
-        };
-
         // Get the table base path for computing relative paths
         let data_dir_str = data_dir.to_string_lossy();
         let table_base = data_dir_str.trim_end_matches("/data");
 
-        // Convert output path to ObjectPath
-        let output_path_str = output_path.to_string_lossy();
-        let output_object_path = self.path_to_object_path(&output_path_str, table_base)?;
+        // Parse partition from group key (used for all output files)
+        let partition = self.parse_partition_key(&group.partition_key);
 
-        // Create writer properties with ZSTD compression
+        // Writer properties with ZSTD compression
         let props = WriterProperties::builder()
             .set_compression(Compression::ZSTD(Default::default()))
             .build();
 
-        // Create async parquet writer
-        let writer = parquet::arrow::async_writer::ParquetObjectWriter::new(
-            object_store.clone(),
-            output_object_path.clone(),
-        );
+        // Track all output files
+        let mut output_files: Vec<DataFileInfo> = Vec::new();
 
-        let mut async_writer = AsyncArrowWriter::try_new(writer, table_schema.clone(), Some(props))
-            .map_err(|e| Error::General(format!("Failed to create async writer: {}", e)))?;
+        // Current writer state
+        let mut current_writer: Option<AsyncArrowWriter<parquet::arrow::async_writer::ParquetObjectWriter>> = None;
+        let mut current_path: Option<std::path::PathBuf> = None;
+        let mut current_records = 0u64;
+        let mut current_bytes_estimate = 0u64;
+        let mut file_counter = 0u32;
 
-        let mut total_records = 0u64;
-
-        // Stream batches from each input file directly to writer
+        // Stream batches from each input file
         for file in &group.files {
             let path = self.path_to_object_path(&file.path, table_base)?;
 
@@ -353,44 +347,104 @@ impl OptimizeService {
                 ))
             })?;
 
-            // Stream each batch directly to writer - no intermediate buffer!
+            // Stream each batch
             while let Some(batch) = stream.try_next().await.map_err(|e| {
                 Error::General(format!("Failed to read batch from {}: {}", file.path, e))
             })? {
-                // Coerce batch to table schema to handle schema evolution
                 let coerced = Self::coerce_batch_to_schema(&batch, table_schema)?;
-                total_records += coerced.num_rows() as u64;
-                async_writer
-                    .write(&coerced)
-                    .await
-                    .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+                let batch_size_estimate = coerced.get_array_memory_size() as u64;
+
+                // Check if we need to start a new file (before writing this batch)
+                // Only split if we have written something and would exceed target
+                if current_writer.is_some()
+                    && current_bytes_estimate > 0
+                    && current_bytes_estimate + batch_size_estimate > self.config.target_size
+                {
+                    // Finalize current writer
+                    if let (Some(writer), Some(ref out_path)) = (current_writer.take(), current_path.take()) {
+                        writer
+                            .close()
+                            .await
+                            .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
+
+                        let out_object_path = self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
+                        let meta = object_store
+                            .head(&out_object_path)
+                            .await
+                            .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
+
+                        output_files.push(DataFileInfo {
+                            path: out_path.to_string_lossy().to_string(),
+                            size: meta.size,
+                            record_count: current_records,
+                            partition: partition.clone(),
+                        });
+                    }
+                    current_records = 0;
+                    current_bytes_estimate = 0;
+                }
+
+                // Create new writer if needed
+                if current_writer.is_none() {
+                    let unique_id = generate_unique_id();
+                    let filename = format!("compact-{}-{}.parquet", unique_id, file_counter);
+                    let output_path = if group.partition_key.is_empty() {
+                        data_dir.join(filename)
+                    } else {
+                        data_dir.join(&group.partition_key).join(filename)
+                    };
+                    file_counter += 1;
+
+                    let output_object_path = self.path_to_object_path(&output_path.to_string_lossy(), table_base)?;
+
+                    let writer_obj = parquet::arrow::async_writer::ParquetObjectWriter::new(
+                        object_store.clone(),
+                        output_object_path,
+                    );
+
+                    let async_writer =
+                        AsyncArrowWriter::try_new(writer_obj, table_schema.clone(), Some(props.clone()))
+                            .map_err(|e| Error::General(format!("Failed to create async writer: {}", e)))?;
+
+                    current_writer = Some(async_writer);
+                    current_path = Some(output_path);
+                }
+
+                // Write the batch
+                if let Some(ref mut writer) = current_writer {
+                    current_records += coerced.num_rows() as u64;
+                    current_bytes_estimate += batch_size_estimate;
+                    writer
+                        .write(&coerced)
+                        .await
+                        .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+                }
             }
         }
 
-        // Close writer and flush to storage
-        async_writer
-            .close()
-            .await
-            .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
+        // Finalize the last writer
+        if let (Some(writer), Some(ref out_path)) = (current_writer, current_path) {
+            writer
+                .close()
+                .await
+                .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
 
-        // Get the file size from object store
-        let meta = object_store
-            .head(&output_object_path)
-            .await
-            .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
+            let out_object_path = self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
+            let meta = object_store
+                .head(&out_object_path)
+                .await
+                .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
 
-        // Parse partition from group key
-        let partition = self.parse_partition_key(&group.partition_key);
-
-        let output_info = DataFileInfo {
-            path: output_path.to_string_lossy().to_string(),
-            size: meta.size,
-            record_count: total_records,
-            partition,
-        };
+            output_files.push(DataFileInfo {
+                path: out_path.to_string_lossy().to_string(),
+                size: meta.size,
+                record_count: current_records,
+                partition: partition.clone(),
+            });
+        }
 
         Ok(CompactionResult {
-            added: vec![output_info],
+            added: output_files,
             removed: group.files.clone(),
         })
     }

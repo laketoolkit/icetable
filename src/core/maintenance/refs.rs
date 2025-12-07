@@ -461,18 +461,27 @@ impl RefService {
         })
     }
 
-    /// Write new metadata and update version hint
+    /// Write new metadata using standard Iceberg naming
     async fn write_metadata(
         &self,
         table_path: &str,
         metadata: &iceberg::spec::TableMetadata,
-        current_version: i32,
+        _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
+        use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
+
         let storage = StorageBackendFactory::create_backend(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-        let new_version = (current_version + 1) as i64;
-        let new_metadata_filename = format!("v{}.metadata.json", new_version);
-        let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
+
+        // Find current metadata to derive next version
+        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
+
+        // Generate next metadata location with standard naming
+        let next_location = next_metadata_location(&current_metadata_path)
+            .unwrap_or_else(|_| new_metadata_location(table_path));
+
+        let new_version = extract_version_from_path(&next_location.to_string()) as i64;
+        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
@@ -492,23 +501,6 @@ impl RefService {
             )
             .await
             .map_err(|e| Error::General(format!("Failed to write metadata: {}", e)))?;
-
-        // Update version hint
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        let version_hint_opts = PutOptions {
-            content_type: Some("text/plain".to_string()),
-            metadata: std::collections::HashMap::new(),
-            if_none_match: None,
-        };
-
-        storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(new_version.to_string()),
-                &version_hint_opts,
-            )
-            .await
-            .map_err(|e| Error::General(format!("Failed to update version hint: {}", e)))?;
 
         Ok(new_version)
     }

@@ -321,17 +321,24 @@ impl SnapshotService {
     /// This creates a timestamped backup of the current metadata file,
     /// which can be useful before destructive operations.
     pub async fn create_metadata_backup(&self, table_path: &str) -> Result<CreateBackupResult> {
+        use crate::core::storage::StorageBackendFactory;
+        use crate::core::utils::{extract_version_from_path, find_latest_metadata};
+
+        let storage = StorageBackendFactory::create_backend(table_path).await?;
+
+        // Find the current metadata file using standard format
+        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
+        let current_version = extract_version_from_path(&current_metadata_path);
+
+        let metadata_filename = current_metadata_path
+            .split('/')
+            .next_back()
+            .unwrap_or(&current_metadata_path);
+
+        // For local storage, do filesystem backup
         let table_path_obj = std::path::Path::new(table_path);
         let metadata_dir = table_path_obj.join("metadata");
-
-        // Get current version
-        let version_hint = metadata_dir.join("version-hint.text");
-        let current_version: i32 = std::fs::read_to_string(&version_hint)
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(1);
-
-        let metadata_file = metadata_dir.join(format!("v{}.metadata.json", current_version));
+        let metadata_file = metadata_dir.join(metadata_filename);
 
         if !metadata_file.exists() {
             return Err(Error::General(format!(
@@ -343,8 +350,8 @@ impl SnapshotService {
         // Create backup with timestamp
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let backup_file = metadata_dir.join(format!(
-            "v{}.metadata.{}.backup.json",
-            current_version, timestamp
+            "{}.{}.backup",
+            metadata_filename, timestamp
         ));
 
         std::fs::copy(&metadata_file, &backup_file)
@@ -490,18 +497,27 @@ impl SnapshotService {
         }
     }
 
-    /// Write new metadata file and update version hint
+    /// Write new metadata file using standard Iceberg naming
     async fn write_metadata(
         &self,
         table_path: &str,
         metadata: &TableMetadata,
-        current_version: i32,
+        _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
+        use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
+
         let storage = StorageBackendFactory::create_backend(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-        let new_version = (current_version + 1) as i64;
-        let new_metadata_filename = format!("v{}.metadata.json", new_version);
-        let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
+
+        // Find current metadata to derive next version
+        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
+
+        // Generate next metadata location with standard naming
+        let next_location = next_metadata_location(&current_metadata_path)
+            .unwrap_or_else(|_| new_metadata_location(table_path));
+
+        let new_version = extract_version_from_path(&next_location.to_string()) as i64;
+        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
@@ -510,16 +526,6 @@ impl SnapshotService {
             .put(
                 &new_metadata_path,
                 bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
-            .await?;
-
-        // Update version-hint.text
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(new_version.to_string()),
                 &PutOptions::default(),
             )
             .await?;

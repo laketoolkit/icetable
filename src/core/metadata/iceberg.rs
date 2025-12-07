@@ -21,7 +21,7 @@ use object_store::ObjectStore;
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::storage::{ObjectStoreAdapter, StorageBackend, StorageBackendFactory, s3};
 use crate::core::utils::{
-    extract_version_from_filename, find_latest_metadata, iceberg_to_arrow_type,
+    extract_version_from_path, find_latest_metadata, iceberg_to_arrow_type,
 };
 use crate::error::{Error, Result};
 
@@ -120,7 +120,7 @@ impl IcebergMetadataService {
     /// Load current table metadata
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
         let metadata_file = find_latest_metadata(&self.table_path, &self.storage).await?;
-        let version = extract_version_from_filename(&metadata_file);
+        let version = extract_version_from_path(&metadata_file);
 
         let table_ident = TableIdent::from_strs(["iceberg", "table"])
             .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;
@@ -187,15 +187,14 @@ impl IcebergMetadataService {
         }
 
         // Always include "main" pointing to current snapshot if not already present
-        if !refs.iter().any(|r| r.name == "main") {
-            if let Some(current_id) = json.get("current-snapshot-id").and_then(|v| v.as_i64()) {
+        if !refs.iter().any(|r| r.name == "main")
+            && let Some(current_id) = json.get("current-snapshot-id").and_then(|v| v.as_i64()) {
                 refs.push(RefInfo {
                     name: "main".to_string(),
                     snapshot_id: current_id,
                     ref_type: "branch".to_string(),
                 });
             }
-        }
 
         Ok(refs)
     }
@@ -348,6 +347,7 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn list_data_files(&self) -> Result<Vec<DataFileInfo>> {
+        use futures::stream::{self, StreamExt};
         use std::collections::HashSet;
 
         let (metadata, _) = self.load_metadata().await?;
@@ -382,81 +382,83 @@ impl MetadataService for IcebergMetadataService {
             ManifestList::parse_with_version(&manifest_list_content, metadata.format_version())
                 .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
 
-        // Read all manifests and collect data files
-        // Track deleted paths separately to handle cross-manifest deletions
-        let mut seen_paths: HashSet<String> = HashSet::new();
+        // Filter data manifests only
+        let data_manifests: Vec<_> = manifest_list
+            .entries()
+            .iter()
+            .filter(|e| e.content == iceberg::spec::ManifestContentType::Data)
+            .cloned()
+            .collect();
+
+        if data_manifests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Load manifests concurrently (limit to 10 at a time to control memory)
+        const CONCURRENCY: usize = 10;
+
+        // Single pass: load all manifests and collect entries
+        // We need to collect deleted paths first, then filter alive files
         let mut deleted_paths: HashSet<String> = HashSet::new();
-        let mut data_files = Vec::new();
+        let mut alive_entries: Vec<(String, u64, u64, HashMap<String, String>)> = Vec::new();
 
-        // Debug counters (prefixed with _ as they're for debugging)
-        let mut _total_entries = 0usize;
-        let mut _added_count = 0usize;
-        let mut _existing_count = 0usize;
-        let mut _deleted_count = 0usize;
+        // Process in batches to control memory
+        for chunk in data_manifests.chunks(CONCURRENCY) {
+            // Clone entries to own them in the async block
+            let chunk_owned: Vec<_> = chunk.to_vec();
+            let file_io = self.file_io.clone();
 
-        // First pass: collect all deleted paths from all manifests
-        for manifest_file_entry in manifest_list.entries() {
-            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
-                continue;
-            }
+            let results: Vec<_> = stream::iter(chunk_owned)
+                .map(|entry| {
+                    let file_io = file_io.clone();
+                    async move { entry.load_manifest(&file_io).await.ok() }
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
 
-            let manifest = manifest_file_entry
-                .load_manifest(&self.file_io)
-                .await
-                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
+            for manifest_opt in results {
+                let Some(manifest) = manifest_opt else { continue };
 
-            for entry in manifest.entries() {
-                if entry.status() == ManifestStatus::Deleted {
-                    deleted_paths.insert(entry.data_file().file_path().to_string());
+                for entry in manifest.entries() {
+                    let path = entry.data_file().file_path().to_string();
+
+                    match entry.status() {
+                        ManifestStatus::Deleted => {
+                            deleted_paths.insert(path);
+                        }
+                        ManifestStatus::Added | ManifestStatus::Existing => {
+                            let data_file = entry.data_file();
+                            alive_entries.push((
+                                path,
+                                data_file.file_size_in_bytes(),
+                                data_file.record_count(),
+                                iceberg_partition::extract_partition_from_path_static(
+                                    data_file.file_path(),
+                                ),
+                            ));
+                        }
+                    }
                 }
+                // Manifest is dropped here, freeing memory
             }
         }
 
-        // Second pass: collect alive files that are not in deleted set
-        for manifest_file_entry in manifest_list.entries() {
-            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
+        // Build final result, filtering deleted and deduplicating
+        let mut seen_paths: HashSet<String> = HashSet::new();
+        let mut data_files = Vec::with_capacity(alive_entries.len());
+
+        for (path, size, record_count, partition) in alive_entries {
+            if deleted_paths.contains(&path) || seen_paths.contains(&path) {
                 continue;
             }
-
-            let manifest = manifest_file_entry
-                .load_manifest(&self.file_io)
-                .await
-                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
-
-            for entry in manifest.entries() {
-                _total_entries += 1;
-                match entry.status() {
-                    ManifestStatus::Added => _added_count += 1,
-                    ManifestStatus::Existing => _existing_count += 1,
-                    ManifestStatus::Deleted => {
-                        _deleted_count += 1;
-                        continue;
-                    }
-                }
-
-                let data_file = entry.data_file();
-                let path = data_file.file_path().to_string();
-
-                // Skip if this file was deleted in any manifest
-                if deleted_paths.contains(&path) {
-                    continue;
-                }
-
-                // Deduplicate by full path
-                if seen_paths.contains(&path) {
-                    continue;
-                }
-                seen_paths.insert(path.clone());
-
-                data_files.push(DataFileInfo {
-                    path,
-                    size: data_file.file_size_in_bytes(),
-                    record_count: data_file.record_count(),
-                    partition: iceberg_partition::extract_partition_from_path_static(
-                        data_file.file_path(),
-                    ),
-                });
-            }
+            seen_paths.insert(path.clone());
+            data_files.push(DataFileInfo {
+                path,
+                size,
+                record_count,
+                partition,
+            });
         }
 
         Ok(data_files)
@@ -493,7 +495,7 @@ impl MetadataService for IcebergMetadataService {
         summary: HashMap<String, String>,
     ) -> Result<SnapshotInfo> {
         // Load current metadata
-        let (metadata, current_version) = self.load_metadata().await?;
+        let (metadata, _current_version) = self.load_metadata().await?;
         let partition_spec = metadata.default_partition_spec();
         let schema_id = metadata.current_schema().schema_id();
         // Create snapshot writer
@@ -604,18 +606,17 @@ impl MetadataService for IcebergMetadataService {
             schema_id,
         );
 
+        // Get current metadata path for the update
+        let current_metadata_path = self.current_metadata_path().await?;
+
         // Update metadata for the target branch
         let new_metadata =
-            writer.update_metadata_for_branch((*metadata).clone(), snapshot, current_version, target_branch)?;
+            writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
 
-        // Write new metadata file
-        let new_version = current_version + 1;
+        // Write new metadata file (no longer need version hint)
         writer
-            .write_metadata_file(&new_metadata, new_version)
+            .write_metadata_file(&new_metadata, &current_metadata_path)
             .await?;
-
-        // Update version hint
-        writer.update_version_hint(new_version).await?;
 
         Ok(SnapshotInfo {
             id: snapshot_id,
@@ -675,6 +676,7 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>> {
+        use futures::stream::{self, StreamExt};
         use indicatif::{ProgressBar, ProgressStyle};
         use std::collections::HashSet;
 
@@ -727,27 +729,39 @@ impl MetadataService for IcebergMetadataService {
         );
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        // Process manifests sequentially (load_manifest requires &self.file_io)
-        // but we only process each unique manifest once
+        // Process manifests concurrently in batches
+        const CONCURRENCY: usize = 10;
         let mut all_alive: HashSet<String> = HashSet::new();
+        let mut processed = 0usize;
 
-        for manifest_entry in manifest_entries {
-            let manifest = match manifest_entry.load_manifest(&self.file_io).await {
-                Ok(m) => m,
-                Err(_) => {
-                    pb.inc(1);
-                    continue;
-                }
-            };
+        for chunk in manifest_entries.chunks(CONCURRENCY) {
+            // Clone entries to own them in the async block
+            let chunk_owned: Vec<_> = chunk.to_vec();
+            let file_io = self.file_io.clone();
 
-            for entry in manifest.entries() {
-                // For orphan detection: if a file appears as Added/Existing in ANY manifest,
-                // it's referenced and not an orphan
-                if entry.status() != ManifestStatus::Deleted {
-                    all_alive.insert(entry.data_file().file_path().to_string());
+            let results: Vec<_> = stream::iter(chunk_owned)
+                .map(|entry| {
+                    let file_io = file_io.clone();
+                    async move { entry.load_manifest(&file_io).await.ok() }
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
+
+            for manifest_opt in results {
+                processed += 1;
+                let Some(manifest) = manifest_opt else { continue };
+
+                for entry in manifest.entries() {
+                    // For orphan detection: if a file appears as Added/Existing in ANY manifest,
+                    // it's referenced and not an orphan
+                    if entry.status() != ManifestStatus::Deleted {
+                        all_alive.insert(entry.data_file().file_path().to_string());
+                    }
                 }
+                // Manifest is dropped here, freeing memory
             }
-            pb.inc(1);
+            pb.set_position(processed as u64);
         }
 
         pb.finish_and_clear();

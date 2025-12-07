@@ -2,97 +2,108 @@
 //!
 //! Common utilities for working with Iceberg tables.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::core::storage::StorageBackend;
-use crate::core::storage::traits::{GetOptions, ListOptions};
-use crate::error::{Error, Result};
-
+use iceberg::MetadataLocation;
 use iceberg::spec::{PrimitiveType, Type};
+
+use crate::core::storage::StorageBackend;
+use crate::core::storage::traits::ListOptions;
+use crate::error::{Error, Result};
 
 /// Find the latest metadata file for an Iceberg table
 ///
-/// Uses version-hint.text first (authoritative), falls back to listing
-/// if version-hint doesn't exist or is invalid.
+/// Lists the metadata directory and finds the file with highest version number.
+/// Supports the standard Iceberg format: `<version>-<uuid>.metadata.json`
 pub async fn find_latest_metadata(
     table_path: &str,
     storage: &Arc<dyn StorageBackend>,
 ) -> Result<String> {
     let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
-    // First try to read version-hint.text for authoritative version
-    // This avoids S3 eventual consistency issues with list operations
-    let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-    let get_opts = GetOptions::default();
-
-    if let Ok(version_bytes) = storage.get(&version_hint_path, &get_opts).await
-        && let Ok(version_str) = String::from_utf8(version_bytes.to_vec())
-        && let Ok(version) = version_str.trim().parse::<i32>()
-    {
-        let metadata_path = format!("{}/v{}.metadata.json", metadata_dir, version);
-        // Verify file exists by trying to read it
-        if storage.get(&metadata_path, &get_opts).await.is_ok() {
-            return Ok(metadata_path);
-        }
-    }
-
-    // Fallback to listing if version-hint doesn't exist or is invalid
     let list_opts = ListOptions {
         prefix: Some(format!("{}/", metadata_dir)),
         delimiter: None,
-        max_results: Some(500),
+        max_results: Some(1000),
         continuation_token: None,
     };
 
     let files = storage.list(&list_opts).await?;
 
     // Find the latest metadata.json file by version number
-    // Supports both formats: v1.metadata.json and 00001-uuid.metadata.json
+    // Supports both formats:
+    // - Standard: <version>-<uuid>.metadata.json (e.g., 00015-abc123.metadata.json)
+    // - Legacy Hadoop: v<version>.metadata.json (e.g., v15.metadata.json)
     let metadata_file = files
         .objects
         .iter()
-        .filter(|obj| obj.path.contains(".metadata.json"))
-        .max_by_key(|obj| {
-            let name = obj.path.rsplit('/').next().unwrap_or("");
-            if name.starts_with('v') {
-                name.trim_start_matches('v')
-                    .split('.')
-                    .next()
-                    .and_then(|n| n.parse::<i64>().ok())
-                    .unwrap_or(0)
+        .filter(|obj| obj.path.ends_with(".metadata.json"))
+        .filter_map(|obj| {
+            let version = extract_version_from_path(&obj.path);
+            if version > 0 {
+                Some((obj, version))
             } else {
-                name.split('-')
-                    .next()
-                    .and_then(|n| n.parse::<i64>().ok())
-                    .unwrap_or(0)
+                None
             }
         })
+        .max_by_key(|(_, version)| *version)
+        .map(|(obj, _)| obj)
         .ok_or_else(|| {
-            Error::General("No metadata.json file found in metadata/ directory".to_string())
+            Error::General(format!(
+                "No valid metadata.json file found in {}/",
+                metadata_dir
+            ))
         })?;
 
     Ok(metadata_file.path.clone())
 }
 
-/// Extract version number from a metadata filename
+/// Extract version number from a metadata file path
 ///
-/// Supports both formats:
-/// - v1.metadata.json -> 1
-/// - 00001-uuid.metadata.json -> 1
-pub fn extract_version_from_filename(filename: &str) -> i32 {
-    let name = filename.rsplit('/').next().unwrap_or(filename);
-    if name.starts_with('v') {
-        name.trim_start_matches('v')
-            .split('.')
-            .next()
-            .and_then(|n| n.parse::<i32>().ok())
-            .unwrap_or(1)
-    } else {
-        name.split('-')
-            .next()
-            .and_then(|n| n.parse::<i32>().ok())
-            .unwrap_or(1)
+/// Only supports standard Iceberg format: `00015-uuid.metadata.json` -> 15
+///
+/// Returns 0 if the path cannot be parsed.
+pub fn extract_version_from_path(path: &str) -> i32 {
+    let filename = path.split('/').next_back().unwrap_or(path);
+
+    // Standard format: <version>-<uuid>.metadata.json
+    // The version is zero-padded, e.g., 00015-abc123.metadata.json
+    if let Some(version_part) = filename.split('-').next() {
+        if let Ok(version) = version_part.parse::<i32>() {
+            if filename.ends_with(".metadata.json") {
+                return version;
+            }
+        }
     }
+
+    0
+}
+
+/// Get just the filename from a MetadataLocation
+///
+/// Returns the filename portion of the metadata location path (e.g., "00001-uuid.metadata.json")
+pub fn metadata_location_filename(location: &MetadataLocation) -> String {
+    let full_path = location.to_string();
+    full_path.split('/').next_back().unwrap_or(&full_path).to_string()
+}
+
+/// Create a new metadata location for the next version
+///
+/// Given the current metadata path, creates a new MetadataLocation
+/// with incremented version and new UUID.
+pub fn next_metadata_location(current_path: &str) -> Result<MetadataLocation> {
+    let current = MetadataLocation::from_str(current_path).map_err(|e| {
+        Error::General(format!("Failed to parse metadata location '{}': {}", current_path, e))
+    })?;
+    Ok(current.with_next_version())
+}
+
+/// Create a new metadata location for a new table
+///
+/// Creates the initial MetadataLocation (version 0) for a new table.
+pub fn new_metadata_location(table_location: &str) -> MetadataLocation {
+    MetadataLocation::new_with_table_location(table_location)
 }
 
 /// Convert Iceberg type to Arrow type (simplified)

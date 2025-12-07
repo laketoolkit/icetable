@@ -163,7 +163,7 @@ impl AnalyzeCommand {
         };
         table.add_row(vec![
             Cell::new("Manifests"),
-            Cell::new(format_count(manifest.total_manifests as usize))
+            Cell::new(format_count(manifest.total_manifests))
                 .set_alignment(CellAlignment::Right),
             Cell::new("-").set_alignment(CellAlignment::Right),
             Cell::new(manifest_status).set_alignment(CellAlignment::Center),

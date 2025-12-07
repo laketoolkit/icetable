@@ -140,15 +140,14 @@ impl Config {
         }
 
         // 2. Check if it's a catalog.table reference
-        if let Some((catalog_name, table_name)) = name_or_path.split_once('.') {
-            if let Some(catalog) = self.catalogs.get(catalog_name) {
+        if let Some((catalog_name, table_name)) = name_or_path.split_once('.')
+            && let Some(catalog) = self.catalogs.get(catalog_name) {
                 return Ok(ResolvedTable::Catalog {
                     catalog_name: catalog_name.to_string(),
                     catalog_config: catalog.clone(),
                     table_name: table_name.to_string(),
                 });
             }
-        }
 
         // 3. Check if it's a table alias
         if let Some(path) = self.tables.get(name_or_path) {

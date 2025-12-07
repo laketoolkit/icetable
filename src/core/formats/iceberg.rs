@@ -215,52 +215,16 @@ impl IcebergHandler {
     }
 
     /// Find the metadata file location for an Iceberg table
+    ///
+    /// Uses standard Iceberg format: `<version>-<uuid>.metadata.json`
     async fn find_metadata_location(&self, table_path: &str) -> Result<String> {
-        use crate::core::storage::traits::{GetOptions, ListOptions};
-
         // If path already points to a metadata.json file, use it directly
         if table_path.ends_with(".metadata.json") || table_path.ends_with("metadata.json") {
             return Ok(table_path.to_string());
         }
 
-        let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-
-        // Try to read version-hint.text first
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        let get_opts = GetOptions::default();
-
-        if let Ok(version_bytes) = self.storage.get(&version_hint_path, &get_opts).await {
-            let version_str = String::from_utf8_lossy(&version_bytes).trim().to_string();
-            if let Ok(version) = version_str.parse::<i32>() {
-                return Ok(format!("{}/v{}.metadata.json", metadata_dir, version));
-            }
-        }
-
-        // Fallback: list metadata directory and find the latest metadata file
-        let list_opts = ListOptions {
-            prefix: Some(format!("{}/", metadata_dir)),
-            delimiter: None,
-            max_results: Some(100),
-            continuation_token: None,
-        };
-
-        if let Ok(listing) = self.storage.list(&list_opts).await {
-            // Find the latest v*.metadata.json file
-            let metadata_file = listing
-                .objects
-                .iter()
-                .filter(|obj| obj.path.contains(".metadata.json"))
-                .max_by_key(|obj| &obj.last_modified);
-
-            if let Some(file) = metadata_file {
-                return Ok(file.path.clone());
-            }
-        }
-
-        Err(Error::General(format!(
-            "Could not find metadata file in {}",
-            metadata_dir
-        )))
+        // Use the centralized find_latest_metadata utility
+        crate::core::utils::find_latest_metadata(table_path, &self.storage).await
     }
 
     /// Convert Iceberg schema to Arrow schema
@@ -848,30 +812,32 @@ impl FormatHandler for IcebergHandler {
         // Build new metadata - need to dereference Arc
         let old_metadata_owned: iceberg::spec::TableMetadata = (*old_metadata).clone();
 
-        // Get current metadata version for the metadata log path
-        let current_version = get_current_version(&metadata_dir)?;
-        let metadata_log_path = format!("v{}.metadata.json", current_version);
+        // Find current metadata file and get its name for the log
+        let current_metadata_path = self.find_metadata_location(&table_path).await?;
+        let current_metadata_filename = current_metadata_path
+            .split('/')
+            .next_back()
+            .unwrap_or(&current_metadata_path);
 
         let new_metadata =
-            TableMetadataBuilder::new_from_metadata(old_metadata_owned, Some(metadata_log_path))
+            TableMetadataBuilder::new_from_metadata(old_metadata_owned, Some(current_metadata_filename.to_string()))
                 .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
                 .map_err(|e| Error::General(format!("Failed to set branch snapshot: {}", e)))?
                 .build()
                 .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
-        let new_version = current_version + 1;
+        // Generate next metadata location using standard format
+        use crate::core::utils::{metadata_location_filename, new_metadata_location, next_metadata_location};
 
-        // Write new metadata file
-        let new_metadata_file = format!("{}/v{}.metadata.json", metadata_dir, new_version);
+        let next_location = next_metadata_location(&current_metadata_path)
+            .unwrap_or_else(|_| new_metadata_location(&table_path));
+
+        // Write new metadata file with standard naming
+        let new_metadata_file = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
         let metadata_json = serde_json::to_string_pretty(&new_metadata.metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
         std::fs::write(&new_metadata_file, metadata_json)
             .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
-
-        // Update version hint
-        let version_hint_file = format!("{}/version-hint.text", metadata_dir);
-        std::fs::write(&version_hint_file, new_version.to_string())
-            .map_err(|e| Error::General(format!("Failed to update version hint: {}", e)))?;
 
         Ok(())
     }
@@ -879,34 +845,4 @@ impl FormatHandler for IcebergHandler {
     fn has_native_statistics(&self) -> bool {
         true // Iceberg maintains statistics in manifest files
     }
-}
-
-/// Get current version from metadata directory
-fn get_current_version(metadata_dir: &str) -> Result<i32> {
-    // Try version-hint.text first
-    let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-    if let Ok(content) = std::fs::read_to_string(&version_hint_path)
-        && let Ok(version) = content.trim().parse::<i32>()
-    {
-        return Ok(version);
-    }
-
-    // Fallback: scan for v*.metadata.json files
-    let mut max_version = 0;
-    if let Ok(entries) = std::fs::read_dir(metadata_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('v')
-                && name.ends_with(".metadata.json")
-                && let Some(version_str) = name
-                    .strip_prefix('v')
-                    .and_then(|s| s.strip_suffix(".metadata.json"))
-                && let Ok(v) = version_str.parse::<i32>()
-            {
-                max_version = max_version.max(v);
-            }
-        }
-    }
-
-    Ok(max_version)
 }

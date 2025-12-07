@@ -37,7 +37,7 @@ impl OptimizeCommand {
         let max_bytes = args.max_bytes.as_ref()
             .map(|s| parse_bytes(s))
             .transpose()
-            .map_err(|e| Error::General(e))?;
+            .map_err(Error::General)?;
 
         // Create service configuration
         let config = MaintenanceConfig {
@@ -160,7 +160,7 @@ impl OptimizeCommand {
             table_path.to_string(),
             args.branch.clone(),
         ).await?;
-        let (metadata, current_version) = service.load_metadata().await?;
+        let (metadata, _current_version) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
 
         // Get snapshot for the target branch
@@ -529,11 +529,17 @@ impl OptimizeCommand {
 
         let new_metadata = build_result.metadata;
 
-        // Write new metadata file with incremented version
+        // Write new metadata file with standard Iceberg naming
+        use crate::core::utils::{extract_version_from_path, metadata_location_filename, new_metadata_location, next_metadata_location};
+
         let storage = StorageBackendFactory::create_backend(table_path).await?;
-        let new_version = current_version + 1;
-        let new_metadata_filename = format!("v{}.metadata.json", new_version);
-        let new_metadata_path = format!("{}/{}", metadata_dir, new_metadata_filename);
+
+        // Generate next metadata location from current
+        let next_location = next_metadata_location(&metadata_file_path)
+            .unwrap_or_else(|_| new_metadata_location(table_path));
+
+        let new_version = extract_version_from_path(&next_location.to_string());
+        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
@@ -542,16 +548,6 @@ impl OptimizeCommand {
             .put(
                 &new_metadata_path,
                 bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
-            .await?;
-
-        // Update version-hint.text
-        let version_hint_path = format!("{}/version-hint.text", metadata_dir);
-        storage
-            .put(
-                &version_hint_path,
-                bytes::Bytes::from(new_version.to_string()),
                 &PutOptions::default(),
             )
             .await?;

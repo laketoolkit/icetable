@@ -444,7 +444,7 @@ impl SnapshotCommand {
             // Show items up to limit
             let display_count = if is_truncated { max_items - 1 } else { total_count };
 
-            for (_, (id, parent, ts, op)) in full_lineage.iter().take(display_count).enumerate() {
+            for (id, parent, ts, op) in full_lineage.iter().take(display_count) {
                 let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
                     .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                     .unwrap_or_else(|| ts.to_string());
