@@ -11,27 +11,27 @@ use std::path::PathBuf;
 #[command(disable_help_flag = true)]
 pub struct Cli {
     /// Suppress non-error output
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, help_heading = "Global Options")]
     pub quiet: bool,
 
     /// Log level [default: off]
-    #[arg(long, global = true, default_value = "off", value_parser = parse_log_level, hide_default_value = true)]
+    #[arg(long, global = true, default_value = "off", value_parser = parse_log_level, hide_default_value = true, help_heading = "Global Options")]
     pub log_level: crate::utils::LogLevel,
 
     /// Log to file
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global Options")]
     pub log_file: Option<PathBuf>,
 
     /// REST Catalog URI [env: ICETABLE_CATALOG_URI]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide_env = true)]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide_env = true, help_heading = "Catalog Options")]
     pub catalog_uri: Option<String>,
 
     /// Catalog warehouse location [env: ICETABLE_CATALOG_WAREHOUSE]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide_env = true)]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide_env = true, help_heading = "Catalog Options")]
     pub catalog_warehouse: Option<String>,
 
     /// Catalog credential [env: ICETABLE_CATALOG_CREDENTIAL]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide_env = true)]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide_env = true, help_heading = "Catalog Options")]
     pub catalog_credential: Option<String>,
 
     /// Print help
