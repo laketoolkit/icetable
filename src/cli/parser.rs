@@ -4,6 +4,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
+use crate::utils::credentials::CredentialSource;
+
 /// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and migrate from Delta Lake
 #[derive(Parser, Debug)]
 #[command(name = "icetable")]
@@ -33,6 +35,38 @@ pub struct Cli {
     /// Catalog credential [env: ICETABLE_CATALOG_CREDENTIAL]
     #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide_env = true, help_heading = "Catalog Options")]
     pub catalog_credential: Option<String>,
+
+    /// Catalog credential from environment variable [env: ICETABLE_CATALOG_CREDENTIAL_ENV]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_ENV", hide_env = true, help_heading = "Catalog Options")]
+    pub catalog_credential_env: Option<String>,
+
+    /// Catalog credential from file [env: ICETABLE_CATALOG_CREDENTIAL_FILE]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_FILE", hide_env = true, help_heading = "Catalog Options")]
+    pub catalog_credential_file: Option<std::path::PathBuf>,
+
+    /// Use IAM role for authentication (AWS, GCP, Azure)
+    #[arg(long, global = true, help_heading = "Catalog Options")]
+    pub catalog_use_iam_role: bool,
+
+    /// Use OAuth2 for authentication
+    #[arg(long, global = true, help_heading = "Catalog Options")]
+    pub catalog_use_oauth2: bool,
+
+    /// Maximum memory usage (e.g., 2GB, 512MB). 0 = unlimited [env: ICETABLE_MAX_MEMORY]
+    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_MEMORY", hide_env = true, help_heading = "Resource Limits")]
+    pub max_memory: String,
+
+    /// Operation timeout in seconds. 0 = no timeout [env: ICETABLE_TIMEOUT]
+    #[arg(long, global = true, default_value = "0", env = "ICETABLE_TIMEOUT", hide_env = true, help_heading = "Resource Limits")]
+    pub timeout: u64,
+
+    /// Maximum concurrent operations [env: ICETABLE_MAX_CONCURRENCY]
+    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_CONCURRENCY", hide_env = true, help_heading = "Resource Limits")]
+    pub max_concurrency: u32,
+
+    /// Maximum worker threads for runtime. 0 = use system default [env: ICETABLE_MAX_THREADS]
+    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_THREADS", hide_env = true, help_heading = "Resource Limits")]
+    pub max_threads: usize,
 
     /// Print help
     #[arg(short, long, action = clap::ArgAction::Help, global = true)]
@@ -115,9 +149,21 @@ impl Cli {
             if let Some(ref warehouse) = self.catalog_warehouse {
                 config = config.with_warehouse(warehouse);
             }
-            if let Some(ref credential) = self.catalog_credential {
-                config = config.with_credential(credential);
+            
+            // Build credential source from CLI options
+            let credential_source = CredentialSource::from_cli_options(
+                self.catalog_credential.clone(),
+                self.catalog_credential_env.clone(),
+                self.catalog_credential_file.clone(),
+                self.catalog_use_iam_role,
+                self.catalog_use_oauth2,
+            );
+            
+            // Set credential source if present
+            if let Some(source) = credential_source {
+                config = config.with_credential(source);
             }
+            
             config
         })
     }
@@ -1110,8 +1156,8 @@ pub struct ConfigAddCatalogArgs {
     pub uri: String,
 
     /// Catalog type (rest, hive, glue)
-    #[arg(short = 't', long, default_value = "rest")]
-    pub catalog_type: String,
+    #[arg(short = 't', long, value_enum, default_value = "rest")]
+    pub catalog_type: crate::core::CatalogType,
 
     /// Warehouse location (optional, some catalogs provide this)
     #[arg(short, long)]
@@ -1120,6 +1166,22 @@ pub struct ConfigAddCatalogArgs {
     /// Credential (optional, format depends on catalog type)
     #[arg(short, long)]
     pub credential: Option<String>,
+
+    /// Credential from environment variable
+    #[arg(long)]
+    pub credential_env: Option<String>,
+
+    /// Credential from file
+    #[arg(long)]
+    pub credential_file: Option<String>,
+
+    /// Use IAM Role for authentication (AWS/GCP/Azure)
+    #[arg(long)]
+    pub use_iam_role: bool,
+
+    /// Use OAuth2 for authentication
+    #[arg(long)]
+    pub use_oauth2: bool,
 }
 
 /// Arguments for config remove-catalog

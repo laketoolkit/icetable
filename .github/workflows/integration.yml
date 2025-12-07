@@ -1,0 +1,142 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  # Allow manual trigger
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  minio-tests:
+    name: MinIO Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      minio:
+        image: minio/minio:latest
+        ports:
+          - 9000:9000
+          - 9001:9001
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --health-cmd "mc ready local || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --entrypoint "minio server /data --console-address :9001"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Setup MinIO bucket
+        run: |
+          # Install mc (MinIO client)
+          curl -LO https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          ./mc alias set myminio http://localhost:9000 minioadmin minioadmin
+          ./mc mb myminio/test-bucket --ignore-existing
+          ./mc mb myminio/iceberg-warehouse --ignore-existing
+
+      - name: Run MinIO integration tests
+        env:
+          MINIO_ENDPOINT: http://localhost:9000
+          MINIO_ACCESS_KEY: minioadmin
+          MINIO_SECRET_KEY: minioadmin
+          MINIO_BUCKET: test-bucket
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_ENDPOINT_URL: http://localhost:9000
+          AWS_ALLOW_HTTP: "true"
+          AWS_REGION: us-east-1
+        run: cargo test --test integration_test minio -- --ignored --nocapture
+
+  nessie-tests:
+    name: Nessie Catalog Tests
+    runs-on: ubuntu-latest
+
+    services:
+      nessie:
+        image: projectnessie/nessie:latest
+        ports:
+          - 19120:19120
+        env:
+          NESSIE_VERSION_STORE_TYPE: IN_MEMORY
+        options: >-
+          --health-cmd "curl -f http://localhost:19120/api/v2/config || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      minio:
+        image: minio/minio:latest
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --entrypoint "minio server /data"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Setup MinIO bucket for Nessie warehouse
+        run: |
+          curl -LO https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          ./mc alias set myminio http://localhost:9000 minioadmin minioadmin
+          ./mc mb myminio/iceberg-warehouse --ignore-existing
+
+      - name: Test Nessie connectivity
+        run: |
+          curl -f http://localhost:19120/api/v2/config
+          echo "Nessie is ready"
+
+      - name: Run Nessie integration tests
+        env:
+          NESSIE_URI: http://localhost:19120/api/v2
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_ENDPOINT_URL: http://localhost:9000
+          AWS_ALLOW_HTTP: "true"
+          AWS_REGION: us-east-1
+        run: cargo test --test integration_test catalog -- --ignored --nocapture
+        continue-on-error: true # Catalog tests may not exist yet

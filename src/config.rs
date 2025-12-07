@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub use crate::core::catalog::CatalogConfig;
 use crate::error::{Error, Result};
 
 /// Configuration file name
@@ -29,24 +30,8 @@ pub struct Config {
     pub catalogs: HashMap<String, CatalogConfig>,
 }
 
-/// Configuration for a catalog
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogConfig {
-    /// Catalog type (rest, hive, glue, etc.)
-    #[serde(rename = "type")]
-    pub catalog_type: String,
 
-    /// Catalog URI
-    pub uri: String,
 
-    /// Credential (optional, format depends on catalog type)
-    #[serde(default)]
-    pub credential: Option<String>,
-
-    /// Additional properties
-    #[serde(default)]
-    pub properties: HashMap<String, String>,
-}
 
 impl Config {
     /// Get the config directory path

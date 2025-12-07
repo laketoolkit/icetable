@@ -6,14 +6,57 @@ use std::process;
 
 use icetable::cli::commands::*;
 use icetable::cli::parser::{Cli, Commands, ImportCommands};
+use icetable::utils::{ResourceLimits, init_resource_limits, is_cancelled};
 
-#[tokio::main]
-async fn main() {
-    // Parse command-line arguments
+fn main() {
+    // Parse command-line arguments first (before runtime setup)
     let cli = Cli::parse();
 
+    // Build tokio runtime with thread limits
+    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    runtime_builder.enable_all();
+
+    if cli.max_threads > 0 {
+        runtime_builder.worker_threads(cli.max_threads);
+    }
+
+    let runtime = runtime_builder.build().unwrap_or_else(|e| {
+        eprintln!("{} Failed to create runtime: {}", "Error:".red().bold(), e);
+        process::exit(1);
+    });
+
+    // Run async main on the runtime with signal handling
+    let exit_code = runtime.block_on(async {
+        // Setup signal handlers for graceful shutdown
+        let _cts = icetable::utils::setup_signal_handlers().await;
+
+        // Run the main application
+        let result = async_main(cli).await;
+
+        // Check if cancelled
+        if is_cancelled() {
+            eprintln!("\n{}", "Operation cancelled by user".yellow());
+            130 // Standard SIGINT exit code
+        } else {
+            result
+        }
+    });
+
+    process::exit(exit_code);
+}
+
+async fn async_main(cli: Cli) -> i32 {
     // Initialize logger with settings from CLI
     icetable::utils::init_logger(cli.log_level);
+
+    // Initialize resource limits from CLI options
+    match ResourceLimits::from_cli(&cli.max_memory, cli.timeout, cli.max_concurrency) {
+        Ok(limits) => init_resource_limits(limits),
+        Err(e) => {
+            eprintln!("{} {}", "Error:".red().bold(), e.user_message());
+            return 1;
+        }
+    }
 
     // Build catalog config from CLI options (if any)
     let catalog_config = cli.catalog_config();
@@ -58,15 +101,22 @@ async fn main() {
     };
 
     // Handle errors with user-friendly messages
-    if let Err(e) = result {
-        eprintln!("{}", "Error:".red().bold());
-        eprintln!("{}", e.user_message());
-
-        if std::env::var("RUST_BACKTRACE").is_ok() {
-            eprintln!("\n{}", "Backtrace:".yellow());
-            eprintln!("{:?}", e);
+    match result {
+        Ok(()) => 0,
+        Err(icetable::error::Error::Cancelled) => {
+            // Cancelled errors are handled by signal handler output
+            130
         }
+        Err(e) => {
+            eprintln!("{}", "Error:".red().bold());
+            eprintln!("{}", e.user_message());
 
-        process::exit(1);
+            if std::env::var("RUST_BACKTRACE").is_ok() {
+                eprintln!("\n{}", "Backtrace:".yellow());
+                eprintln!("{:?}", e);
+            }
+
+            1
+        }
     }
 }

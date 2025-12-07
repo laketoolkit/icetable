@@ -1,7 +1,7 @@
 //! Common utilities for CLI commands
 
 use crate::config::{ResolveTableRef, ResolvedTable};
-use crate::core::{CatalogClient, CatalogConfig, CatalogType, TableRef};
+use crate::core::{CatalogClient, CatalogConfig, TableRef};
 use crate::error::{Error, Result};
 use iceberg::table::Table;
 
@@ -81,20 +81,11 @@ pub async fn resolve_table(
     match resolved {
         ResolvedTable::Path(path) => Ok(TableResolution::Path(path)),
         ResolvedTable::Catalog {
-            catalog_config: cfg,
+            catalog_config,
             table_name,
             ..
         } => {
-            // Convert config CatalogConfig to core CatalogConfig
-            let core_catalog = CatalogConfig {
-                catalog_type: CatalogType::Rest,
-                uri: cfg.uri.clone(),
-                warehouse: cfg.properties.get("warehouse").cloned(),
-                credential: cfg.credential.clone(),
-                properties: Default::default(),
-            };
-
-            resolve_from_catalog(&table_name, &core_catalog).await
+            resolve_from_catalog(&table_name, &catalog_config).await
         }
     }
 }

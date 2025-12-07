@@ -10,6 +10,7 @@ use crate::cli::parser::{
 };
 use crate::config::{CatalogConfig, Config, ResolvedTable};
 use crate::error::Result;
+use std::path::PathBuf;
 
 /// Handler for config command
 pub struct ConfigCommand;
@@ -132,10 +133,25 @@ impl ConfigCommand {
             properties.insert("warehouse".to_string(), warehouse.clone());
         }
 
+        let credential = if let Some(token) = &args.credential {
+            Some(crate::utils::credentials::CredentialSource::Inline(token.clone()))
+        } else if let Some(env_var) = &args.credential_env {
+            Some(crate::utils::credentials::CredentialSource::EnvVar(env_var.clone()))
+        } else if let Some(file_path) = &args.credential_file {
+            Some(crate::utils::credentials::CredentialSource::File(PathBuf::from(file_path)))
+        } else if args.use_iam_role {
+            Some(crate::utils::credentials::CredentialSource::IamRole)
+        } else if args.use_oauth2 {
+            Some(crate::utils::credentials::CredentialSource::OAuth2)
+        } else {
+            None
+        };
+        
         let catalog_config = CatalogConfig {
             catalog_type: args.catalog_type.clone(),
             uri: args.uri.clone(),
-            credential: args.credential.clone(),
+            warehouse: args.warehouse.clone(),
+            credential,
             properties,
         };
 
@@ -146,7 +162,7 @@ impl ConfigCommand {
             "{} Added catalog: {} ({}) → {}",
             "✓".green(),
             args.name.cyan(),
-            args.catalog_type.dimmed(),
+            args.catalog_type.to_string().dimmed(),
             args.uri.dimmed()
         );
 
@@ -242,7 +258,7 @@ impl ConfigCommand {
                     println!(
                         "  {} ({}) → {}",
                         name.cyan(),
-                        cat.catalog_type.dimmed(),
+                        cat.catalog_type.to_string().dimmed(),
                         cat.uri.dimmed()
                     );
                 }

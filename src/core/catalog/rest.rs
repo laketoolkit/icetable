@@ -27,8 +27,8 @@ impl RestCatalogClient {
             props.insert("warehouse".to_string(), warehouse.clone());
         }
 
-        if let Some(ref credential) = config.credential {
-            props.insert("credential".to_string(), credential.clone());
+        if let Some(credential) = config.resolve_credential()? {
+            props.insert("credential".to_string(), credential);
         }
 
         // Add any additional properties

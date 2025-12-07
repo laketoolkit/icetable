@@ -79,6 +79,7 @@ proptest = "1.5"
 insta = { version = "1.40", features = ["yaml"] }
 tempfile = "3.13"
 tokio-test = "0.4"
+uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = ["rest-catalog"]

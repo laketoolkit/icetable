@@ -144,6 +144,19 @@ pub enum Error {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// Operation was cancelled by user (Ctrl+C)
+    #[error("Operation cancelled by user")]
+    Cancelled,
+
+    /// Memory limit exceeded
+    #[error("Memory limit exceeded: {current} used, {limit} allowed")]
+    MemoryLimitExceeded {
+        /// Current memory usage
+        current: String,
+        /// Configured memory limit
+        limit: String,
+    },
+
     /// Multiple errors accumulated during batch operations
     #[error("Multiple errors occurred: {}", format_errors(.0))]
     Multiple(Vec<Error>),

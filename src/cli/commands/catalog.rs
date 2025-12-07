@@ -10,8 +10,8 @@ use crate::cli::parser::{
     CatalogArgs, CatalogCommands, CatalogCreateNamespaceArgs, CatalogCreateTableArgs,
     CatalogDropNamespaceArgs, CatalogDropTableArgs, CatalogNamespacesArgs,
 };
-use crate::config::Config;
-use crate::core::{CatalogConfig, CatalogType, RestCatalogClient};
+use crate::config::{CatalogConfig, Config};
+use crate::core::RestCatalogClient;
 use crate::error::{Error, Result};
 
 /// Handler for catalog command
@@ -66,16 +66,7 @@ impl CatalogCommand {
             ))
         })?;
 
-        // Convert config catalog to core catalog
-        let core_config = CatalogConfig {
-            catalog_type: CatalogType::Rest,
-            uri: catalog_cfg.uri.clone(),
-            warehouse: catalog_cfg.properties.get("warehouse").cloned(),
-            credential: catalog_cfg.credential.clone(),
-            properties: catalog_cfg.properties.clone(),
-        };
-
-        Ok((name, core_config))
+        Ok((name, catalog_cfg.clone()))
     }
 
     /// List namespaces in a catalog
@@ -214,7 +205,7 @@ impl CatalogCommand {
             let json = serde_json::json!({
                 "name": catalog_name,
                 "uri": config.uri,
-                "type": "rest",
+                "type": config.catalog_type.to_string(),
                 "warehouse": config.warehouse,
                 "connected": true,
             });
@@ -227,7 +218,7 @@ impl CatalogCommand {
             println!("{} {}", catalog_name.bold(), "●".green());
             println!();
             println!("  {}  {}", "uri".dimmed(), config.uri);
-            println!("  {} rest", "type".dimmed());
+            println!("  {} {}", "type".dimmed(), config.catalog_type);
             if let Some(wh) = &config.warehouse {
                 println!("  {}  {}", "warehouse".dimmed(), wh);
             }

@@ -5,6 +5,7 @@
 //! be run separately with the catalog available.
 
 use icetable::core::catalog::{CatalogConfig, TableCommitter};
+use icetable::utils::credentials::CredentialSource;
 
 /// Test that TableCommitter can be created for direct mode (no catalog)
 #[test]
@@ -54,20 +55,22 @@ fn test_committer_multi_level_namespace() {
 #[test]
 fn test_catalog_config_with_credential() {
     let config = CatalogConfig::rest("http://localhost:19120/api/v2")
-        .with_credential("user:password");
+        .with_credential(CredentialSource::Inline("user:password".to_string()));
 
     assert_eq!(config.uri, "http://localhost:19120/api/v2");
-    assert_eq!(config.credential.as_deref(), Some("user:password"));
+    assert_eq!(config.credential, Some(CredentialSource::Inline("user:password".to_string())));
 }
 
 /// Test catalog config with bearer token
 #[test]
 fn test_catalog_config_with_bearer_token() {
+    let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test";
     let config = CatalogConfig::rest("http://localhost:19120/api/v2")
-        .with_credential("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test");
+        .with_credential(CredentialSource::Inline(token.to_string()));
 
     // Bearer tokens don't contain ':' so they're used with bearer_auth
-    assert!(config.credential.as_ref().map(|c| !c.contains(':')).unwrap_or(true));
+    let resolved = config.resolve_credential().unwrap();
+    assert!(resolved.as_ref().map(|c| !c.contains(':')).unwrap_or(true));
 }
 
 /// Test single-level namespace
@@ -90,7 +93,7 @@ fn test_committer_single_level_namespace() {
 #[test]
 fn test_committer_config_accessible() {
     let config = CatalogConfig::rest("http://nessie:19120/api/v2")
-        .with_credential("admin:secret")
+        .with_credential(CredentialSource::Inline("admin:secret".to_string()))
         .with_warehouse("s3://lakehouse/warehouse");
 
     let committer = TableCommitter::with_catalog(

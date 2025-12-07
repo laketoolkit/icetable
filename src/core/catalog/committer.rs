@@ -236,13 +236,13 @@ impl TableCommitter {
             let mut request = self.http_client.post(&endpoint).json(&request_body);
 
             // Add credential if configured
-            if let Some(ref credential) = config.credential {
+            if let Some(credential) = config.resolve_credential()? {
                 // Basic auth or bearer token
                 if credential.contains(':') {
                     let parts: Vec<&str> = credential.splitn(2, ':').collect();
                     request = request.basic_auth(parts[0], Some(parts[1]));
                 } else {
-                    request = request.bearer_auth(credential);
+                    request = request.bearer_auth(&credential);
                 }
             }
 

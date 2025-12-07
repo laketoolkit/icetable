@@ -10,8 +10,9 @@ use crate::config::{ResolveTableRef, ResolvedTable};
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
-use crate::core::{CatalogConfig, CatalogType, TableRef};
+use crate::core::{CatalogConfig, TableRef};
 use crate::error::Result;
+
 use common::{PhysicalInspectOptions, VerbosityLevel};
 
 /// Handler for inspect command
@@ -49,16 +50,7 @@ impl InspectCommand {
                 // Direct path mode
                 return Self::execute_path_inspect(&path_str, args).await;
             }
-            ResolvedTable::Catalog { catalog_config: cat_cfg, table_name, .. } => {
-                // Catalog from config - parse namespace.table from table_name
-                let core_catalog = CatalogConfig {
-                    catalog_type: CatalogType::Rest,
-                    uri: cat_cfg.uri.clone(),
-                    warehouse: cat_cfg.properties.get("warehouse").cloned(),
-                    credential: cat_cfg.credential.clone(),
-                    properties: Default::default(),
-                };
-
+            ResolvedTable::Catalog { catalog_config, table_name, .. } => {
                 // Parse table_name which may be "namespace.table" or "ns1.ns2.table"
                 let parts: Vec<&str> = table_name.split('.').collect();
                 let (namespace, name) = if parts.len() >= 2 {
@@ -73,7 +65,7 @@ impl InspectCommand {
                     (vec!["default".to_string()], table_name.clone())
                 };
 
-                return Self::execute_catalog_inspect(&namespace, &name, &core_catalog, args).await;
+                return Self::execute_catalog_inspect(&namespace, &name, &catalog_config, args).await;
             }
         }
     }
