@@ -19,6 +19,7 @@ use iceberg::table::StaticTable;
 use object_store::ObjectStore;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
+use crate::core::catalog::TableCommitter;
 use crate::core::storage::{ObjectStoreAdapter, StorageBackend, StorageBackendFactory, s3};
 use crate::core::utils::{
     extract_version_from_path, find_latest_metadata, iceberg_to_arrow_type,
@@ -36,6 +37,8 @@ pub struct IcebergMetadataService {
     storage: Arc<dyn StorageBackend>,
     /// Target branch for operations (defaults to "main")
     target_branch: Option<String>,
+    /// Optional committer for catalog-aware commits
+    committer: Option<TableCommitter>,
 }
 
 impl IcebergMetadataService {
@@ -49,6 +52,7 @@ impl IcebergMetadataService {
             file_io,
             storage,
             target_branch: None,
+            committer: None,
         })
     }
 
@@ -62,6 +66,25 @@ impl IcebergMetadataService {
             file_io,
             storage,
             target_branch: branch,
+            committer: None,
+        })
+    }
+
+    /// Create a new Iceberg metadata service with a catalog committer
+    pub async fn new_with_committer(
+        table_path: String,
+        branch: Option<String>,
+        committer: TableCommitter,
+    ) -> Result<Self> {
+        let file_io = Self::create_file_io(&table_path)?;
+        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+
+        Ok(Self {
+            table_path,
+            file_io,
+            storage,
+            target_branch: branch,
+            committer: Some(committer),
         })
     }
 
@@ -606,17 +629,31 @@ impl MetadataService for IcebergMetadataService {
             schema_id,
         );
 
-        // Get current metadata path for the update
-        let current_metadata_path = self.current_metadata_path().await?;
-
-        // Update metadata for the target branch
-        let new_metadata =
-            writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
-
-        // Write new metadata file (no longer need version hint)
-        writer
-            .write_metadata_file(&new_metadata, &current_metadata_path)
-            .await?;
+        // Commit the snapshot - either via catalog or direct write
+        if let Some(ref committer) = self.committer {
+            if committer.uses_catalog() {
+                // Catalog mode: commit via REST API
+                committer
+                    .commit_add_snapshot(&metadata, snapshot, target_branch)
+                    .await?;
+            } else {
+                // Direct mode through committer (fallback)
+                let current_metadata_path = self.current_metadata_path().await?;
+                let new_metadata =
+                    writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
+                writer
+                    .write_metadata_file(&new_metadata, &current_metadata_path)
+                    .await?;
+            }
+        } else {
+            // No committer: direct write to storage
+            let current_metadata_path = self.current_metadata_path().await?;
+            let new_metadata =
+                writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
+            writer
+                .write_metadata_file(&new_metadata, &current_metadata_path)
+                .await?;
+        }
 
         Ok(SnapshotInfo {
             id: snapshot_id,

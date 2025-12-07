@@ -3,9 +3,13 @@
 //! Provides operations for managing Iceberg table references:
 //! - Create/delete/rename branches
 //! - Create/delete/rename tags
+//!
+//! When a `TableCommitter` is provided, commits go through the REST catalog
+//! API for multi-writer safety. Otherwise, commits write directly to storage.
 
 use iceberg::spec::{SnapshotReference, SnapshotRetention};
 
+use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::StorageBackendFactory;
 use crate::error::{Error, Result};
@@ -33,6 +37,8 @@ pub struct RefConfig {
 /// Service for managing branches and tags
 pub struct RefService {
     config: RefConfig,
+    /// Optional committer for catalog-aware commits
+    committer: Option<TableCommitter>,
 }
 
 impl RefService {
@@ -40,12 +46,29 @@ impl RefService {
     pub fn new() -> Self {
         Self {
             config: RefConfig::default(),
+            committer: None,
         }
     }
 
     /// Create with configuration
     pub fn with_config(config: RefConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            committer: None,
+        }
+    }
+
+    /// Create with committer for catalog-aware operations
+    pub fn with_committer(committer: TableCommitter) -> Self {
+        Self {
+            config: RefConfig::default(),
+            committer: Some(committer),
+        }
+    }
+
+    /// Create with both config and committer
+    pub fn with_config_and_committer(config: RefConfig, committer: Option<TableCommitter>) -> Self {
+        Self { config, committer }
     }
 
     /// Create a new branch
@@ -90,10 +113,6 @@ impl RefService {
             });
         }
 
-        // Build new metadata
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-
         let branch_ref = SnapshotReference {
             snapshot_id: target_id,
             retention: SnapshotRetention::Branch {
@@ -103,16 +122,26 @@ impl RefService {
             },
         };
 
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path))
-            .set_ref(name, branch_ref)
-            .map_err(|e| Error::General(format!("Failed to set branch: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        // Use committer if available (catalog mode)
+        let new_version = if let Some(ref committer) = self.committer {
+            committer
+                .commit_add_ref(table_path, &metadata, name, branch_ref, current_version)
+                .await?
+        } else {
+            // Direct mode: build and write new metadata
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let new_version = self
-            .write_metadata(table_path, &build_result.metadata, current_version)
-            .await?;
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path))
+                .set_ref(name, branch_ref)
+                .map_err(|e| Error::General(format!("Failed to set branch: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+
+            self.write_metadata(table_path, &build_result.metadata, current_version)
+                .await?
+        };
 
         Ok(RefResult {
             name: name.to_string(),
@@ -162,25 +191,31 @@ impl RefService {
             });
         }
 
-        // Build new metadata
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-
         let tag_ref = SnapshotReference {
             snapshot_id: target_id,
             retention: SnapshotRetention::Tag { max_ref_age_ms },
         };
 
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path))
-            .set_ref(name, tag_ref)
-            .map_err(|e| Error::General(format!("Failed to set tag: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        // Use committer if available (catalog mode)
+        let new_version = if let Some(ref committer) = self.committer {
+            committer
+                .commit_add_ref(table_path, &metadata, name, tag_ref, current_version)
+                .await?
+        } else {
+            // Direct mode: build and write new metadata
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let new_version = self
-            .write_metadata(table_path, &build_result.metadata, current_version)
-            .await?;
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path))
+                .set_ref(name, tag_ref)
+                .map_err(|e| Error::General(format!("Failed to set tag: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+
+            self.write_metadata(table_path, &build_result.metadata, current_version)
+                .await?
+        };
 
         Ok(RefResult {
             name: name.to_string(),
@@ -218,19 +253,25 @@ impl RefService {
             });
         }
 
-        // Build new metadata
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
+        // Use committer if available (catalog mode)
+        let new_version = if let Some(ref committer) = self.committer {
+            committer
+                .commit_remove_ref(table_path, &metadata, name, current_version)
+                .await?
+        } else {
+            // Direct mode: build and write new metadata
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path))
-            .remove_ref(name)
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path))
+                .remove_ref(name)
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
-        let new_version = self
-            .write_metadata(table_path, &build_result.metadata, current_version)
-            .await?;
+            self.write_metadata(table_path, &build_result.metadata, current_version)
+                .await?
+        };
 
         Ok(RefResult {
             name: name.to_string(),
@@ -290,21 +331,27 @@ impl RefService {
             },
         };
 
-        // Build new metadata: remove old, add new
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
+        // Use committer if available (catalog mode)
+        let new_version = if let Some(ref committer) = self.committer {
+            committer
+                .commit_rename_ref(table_path, &metadata, old_name, new_name, new_ref, current_version)
+                .await?
+        } else {
+            // Direct mode: build and write new metadata
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path))
-            .remove_ref(old_name)
-            .set_ref(new_name, new_ref)
-            .map_err(|e| Error::General(format!("Failed to set reference: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path))
+                .remove_ref(old_name)
+                .set_ref(new_name, new_ref)
+                .map_err(|e| Error::General(format!("Failed to set reference: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
-        let new_version = self
-            .write_metadata(table_path, &build_result.metadata, current_version)
-            .await?;
+            self.write_metadata(table_path, &build_result.metadata, current_version)
+                .await?
+        };
 
         Ok(RefResult {
             name: new_name.to_string(),
@@ -353,21 +400,27 @@ impl RefService {
             retention: SnapshotRetention::Tag { max_ref_age_ms: None },
         };
 
-        // Build new metadata: remove old, add new
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
+        // Use committer if available (catalog mode)
+        let new_version = if let Some(ref committer) = self.committer {
+            committer
+                .commit_rename_ref(table_path, &metadata, old_name, new_name, new_ref, current_version)
+                .await?
+        } else {
+            // Direct mode: build and write new metadata
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path))
-            .remove_ref(old_name)
-            .set_ref(new_name, new_ref)
-            .map_err(|e| Error::General(format!("Failed to set reference: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path))
+                .remove_ref(old_name)
+                .set_ref(new_name, new_ref)
+                .map_err(|e| Error::General(format!("Failed to set reference: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
-        let new_version = self
-            .write_metadata(table_path, &build_result.metadata, current_version)
-            .await?;
+            self.write_metadata(table_path, &build_result.metadata, current_version)
+                .await?
+        };
 
         Ok(RefResult {
             name: new_name.to_string(),
@@ -429,10 +482,6 @@ impl RefService {
             });
         }
 
-        // Build new metadata with updated branch (use default branch retention)
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-
         let new_ref = SnapshotReference {
             snapshot_id: target_id,
             retention: SnapshotRetention::Branch {
@@ -442,16 +491,26 @@ impl RefService {
             },
         };
 
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path))
-            .set_ref(name, new_ref)
-            .map_err(|e| Error::General(format!("Failed to update branch: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        // Use committer if available (catalog mode)
+        let new_version = if let Some(ref committer) = self.committer {
+            committer
+                .commit_add_ref(table_path, &metadata, name, new_ref, current_version)
+                .await?
+        } else {
+            // Direct mode: build and write new metadata
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let new_version = self
-            .write_metadata(table_path, &build_result.metadata, current_version)
-            .await?;
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path))
+                .set_ref(name, new_ref)
+                .map_err(|e| Error::General(format!("Failed to update branch: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+
+            self.write_metadata(table_path, &build_result.metadata, current_version)
+                .await?
+        };
 
         Ok(RefResult {
             name: name.to_string(),

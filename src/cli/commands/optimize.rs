@@ -6,8 +6,9 @@
 
 use colored::Colorize;
 
-use super::common::resolve_table_path;
+use super::common::{resolve_table, TableResolution};
 use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
+use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{MaintenanceConfig, OptimizeService};
 use crate::core::metadata::MaintenanceResult;
 use crate::core::utils::parse_bytes;
@@ -28,7 +29,11 @@ impl OptimizeCommand {
 
     /// Execute optimize data subcommand
     async fn execute_data(args: OptimizeDataArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+        let table_path = resolution.location().to_string();
+
+        // Create committer if using catalog
+        let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
 
         // Detect table format (supports remote storage)
         let format = detect_table_format_async(&table_path).await;
@@ -55,7 +60,7 @@ impl OptimizeCommand {
 
         let result = match format {
             TableFormat::Delta => Self::optimize_delta_data(&args, &service).await?,
-            TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref()).await?,
+            TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), committer).await?,
             TableFormat::Unknown => {
                 return Err(Error::General(format!(
                     "Path '{}' is not a Delta Lake or Iceberg table",
@@ -68,9 +73,30 @@ impl OptimizeCommand {
         Ok(())
     }
 
+    /// Create a TableCommitter if catalog is configured
+    fn create_committer(
+        catalog_config: Option<&CatalogConfig>,
+        resolution: &TableResolution,
+    ) -> Option<TableCommitter> {
+        match (catalog_config, resolution) {
+            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
+                Some(TableCommitter::with_catalog(
+                    config.clone(),
+                    namespace.clone(),
+                    name.clone(),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// Execute optimize manifests subcommand
     async fn execute_manifests(args: OptimizeManifestsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+        let table_path = resolution.location().to_string();
+
+        // Create committer if using catalog
+        let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
 
         // Detect table format (supports remote storage)
         let format = detect_table_format_async(&table_path).await;
@@ -83,7 +109,7 @@ impl OptimizeCommand {
                 );
                 Ok(())
             }
-            TableFormat::Iceberg => Self::rewrite_iceberg_manifests(&table_path, &args).await,
+            TableFormat::Iceberg => Self::rewrite_iceberg_manifests(&table_path, &args, committer).await,
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 table_path
@@ -106,6 +132,7 @@ impl OptimizeCommand {
         table_path: &str,
         service: &OptimizeService,
         branch: Option<&str>,
+        committer: Option<TableCommitter>,
     ) -> Result<MaintenanceResult> {
         use crate::core::metadata::IcebergMetadataService;
 
@@ -120,15 +147,26 @@ impl OptimizeCommand {
             println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
         }
 
-        let metadata_service = IcebergMetadataService::new_with_branch(
-            table_path.to_string(),
-            branch.map(|s| s.to_string()),
-        ).await?;
+        let metadata_service = match committer {
+            Some(c) => IcebergMetadataService::new_with_committer(
+                table_path.to_string(),
+                branch.map(|s| s.to_string()),
+                c,
+            ).await?,
+            None => IcebergMetadataService::new_with_branch(
+                table_path.to_string(),
+                branch.map(|s| s.to_string()),
+            ).await?,
+        };
         service.execute(&metadata_service).await
     }
 
     /// Rewrite Iceberg manifest files
-    async fn rewrite_iceberg_manifests(table_path: &str, args: &OptimizeManifestsArgs) -> Result<()> {
+    async fn rewrite_iceberg_manifests(
+        table_path: &str,
+        args: &OptimizeManifestsArgs,
+        committer: Option<TableCommitter>,
+    ) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
         use iceberg::spec::{
             ManifestContentType, ManifestEntry, ManifestListWriter, ManifestStatus,
@@ -437,8 +475,6 @@ impl OptimizeCommand {
             .map_err(|e| Error::General(format!("Failed to close manifest list writer: {}", e)))?;
 
         // Create new snapshot pointing to the new manifest list
-        use crate::core::storage::StorageBackendFactory;
-        use crate::core::storage::traits::PutOptions;
         use iceberg::spec::{Operation, Snapshot, Summary};
         use std::collections::HashMap;
 
@@ -505,52 +541,65 @@ impl OptimizeCommand {
             .with_schema_id(metadata.current_schema_id())
             .build();
 
-        // Use TableMetadataBuilder to add the new snapshot and update the branch ref
+        // Commit the snapshot - either via catalog or direct write
         let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path.clone()))
-            .add_snapshot(new_snapshot)
-            .map_err(|e| Error::General(format!("Failed to add snapshot: {}", e)))?
-            .set_ref(
-                target_branch,
-                iceberg::spec::SnapshotReference {
-                    snapshot_id: new_snapshot_id,
-                    retention: iceberg::spec::SnapshotRetention::Branch {
-                        min_snapshots_to_keep: None,
-                        max_snapshot_age_ms: None,
-                        max_ref_age_ms: None,
+
+        let new_version = if let Some(ref c) = committer {
+            if c.uses_catalog() {
+                // Catalog mode: commit via REST API
+                c.commit_add_snapshot(&metadata, new_snapshot, target_branch)
+                    .await?
+                    .unwrap_or(1) as u32
+            } else {
+                // Direct mode: build metadata and write to storage
+                let metadata_clone = (*metadata).clone();
+                let build_result = metadata_clone
+                    .into_builder(Some(metadata_file_path.clone()))
+                    .add_snapshot(new_snapshot)
+                    .map_err(|e| Error::General(format!("Failed to add snapshot: {}", e)))?
+                    .set_ref(
+                        target_branch,
+                        iceberg::spec::SnapshotReference {
+                            snapshot_id: new_snapshot_id,
+                            retention: iceberg::spec::SnapshotRetention::Branch {
+                                min_snapshots_to_keep: None,
+                                max_snapshot_age_ms: None,
+                                max_ref_age_ms: None,
+                            },
+                        },
+                    )
+                    .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
+                    .build()
+                    .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+
+                let new_metadata = build_result.metadata;
+                Self::write_metadata_direct(table_path, &metadata_dir, &metadata_file_path, &new_metadata).await?
+            }
+        } else {
+            // No committer: build metadata and write to storage
+            let metadata_clone = (*metadata).clone();
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path.clone()))
+                .add_snapshot(new_snapshot)
+                .map_err(|e| Error::General(format!("Failed to add snapshot: {}", e)))?
+                .set_ref(
+                    target_branch,
+                    iceberg::spec::SnapshotReference {
+                        snapshot_id: new_snapshot_id,
+                        retention: iceberg::spec::SnapshotRetention::Branch {
+                            min_snapshots_to_keep: None,
+                            max_snapshot_age_ms: None,
+                            max_ref_age_ms: None,
+                        },
                     },
-                },
-            )
-            .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+                )
+                .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
-        let new_metadata = build_result.metadata;
-
-        // Write new metadata file with standard Iceberg naming
-        use crate::core::utils::{extract_version_from_path, metadata_location_filename, new_metadata_location, next_metadata_location};
-
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
-
-        // Generate next metadata location from current
-        let next_location = next_metadata_location(&metadata_file_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0);
-        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
-
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
-            .await?;
+            let new_metadata = build_result.metadata;
+            Self::write_metadata_direct(table_path, &metadata_dir, &metadata_file_path, &new_metadata).await?
+        };
 
         println!();
         println!("{}", "Manifests rewritten successfully!".green().bold());
@@ -675,5 +724,38 @@ impl OptimizeCommand {
             }
         }
         Ok(())
+    }
+
+    /// Write metadata directly to storage (used when no catalog is configured)
+    async fn write_metadata_direct(
+        table_path: &str,
+        metadata_dir: &str,
+        metadata_file_path: &str,
+        new_metadata: &iceberg::spec::TableMetadata,
+    ) -> Result<u32> {
+        use crate::core::utils::{extract_version_from_path, metadata_location_filename, new_metadata_location, next_metadata_location};
+        use crate::core::storage::{StorageBackendFactory, PutOptions};
+
+        let storage = StorageBackendFactory::create_backend(table_path).await?;
+
+        // Generate next metadata location from current
+        let next_location = next_metadata_location(metadata_file_path)
+            .unwrap_or_else(|_| new_metadata_location(table_path));
+
+        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
+        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+
+        let new_metadata_bytes = serde_json::to_vec_pretty(new_metadata)
+            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+
+        storage
+            .put(
+                &new_metadata_path,
+                bytes::Bytes::from(new_metadata_bytes),
+                &PutOptions::default(),
+            )
+            .await?;
+
+        Ok(new_version)
     }
 }

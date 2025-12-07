@@ -4,7 +4,9 @@
 
 use colored::Colorize;
 
+use super::common::{resolve_table, TableResolution};
 use crate::cli::parser::{TagArgs, TagCommands};
+use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{RefConfig, RefService};
 use crate::core::{CatalogConfig, TableContext};
 use crate::error::{Error, Result};
@@ -14,29 +16,52 @@ pub struct TagCommand;
 
 impl TagCommand {
     /// Execute tag command
-    pub async fn execute(args: TagArgs, _catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // TODO: Add catalog support for tag in future
+    pub async fn execute(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         match args.command {
             TagCommands::List(a) => {
-                let ctx = TableContext::from_path(a.path).await?;
+                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
+                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
                 Self::list(&ctx, &a.output).await
             }
             TagCommands::Create(a) => {
-                let ctx = TableContext::from_path(a.path).await?;
+                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
+                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
-                Self::create(&ctx, &a.name, a.snapshot_id, a.max_ref_age_ms, &a.output).await
+                let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
+                Self::create(&ctx, &a.name, a.snapshot_id, a.max_ref_age_ms, &a.output, committer).await
             }
             TagCommands::Delete(a) => {
-                let ctx = TableContext::from_path(a.path).await?;
+                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
+                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
-                Self::delete(&ctx, &a.name, a.dry_run, &a.output).await
+                let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
+                Self::delete(&ctx, &a.name, a.dry_run, &a.output, committer).await
             }
             TagCommands::Rename(a) => {
-                let ctx = TableContext::from_path(a.path).await?;
+                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
+                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
-                Self::rename(&ctx, &a.old_name, &a.new_name, &a.output).await
+                let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
+                Self::rename(&ctx, &a.old_name, &a.new_name, &a.output, committer).await
             }
+        }
+    }
+
+    /// Create a TableCommitter if catalog is configured
+    fn create_committer(
+        catalog_config: Option<&CatalogConfig>,
+        resolution: &TableResolution,
+    ) -> Option<TableCommitter> {
+        match (catalog_config, resolution) {
+            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
+                Some(TableCommitter::with_catalog(
+                    config.clone(),
+                    namespace.clone(),
+                    name.clone(),
+                ))
+            }
+            _ => None,
         }
     }
 
@@ -89,9 +114,13 @@ impl TagCommand {
         snapshot_id: Option<i64>,
         max_ref_age_ms: Option<i64>,
         output: &str,
+        committer: Option<TableCommitter>,
     ) -> Result<()> {
         let service = ctx.iceberg_service().await?;
-        let ref_service = RefService::new();
+        let ref_service = match committer {
+            Some(c) => RefService::with_committer(c),
+            None => RefService::new(),
+        };
 
         let result = ref_service
             .create_tag(&service, &ctx.path, name, snapshot_id, max_ref_age_ms)
@@ -122,10 +151,16 @@ impl TagCommand {
         Ok(())
     }
 
-    async fn delete(ctx: &TableContext, name: &str, dry_run: bool, output: &str) -> Result<()> {
+    async fn delete(
+        ctx: &TableContext,
+        name: &str,
+        dry_run: bool,
+        output: &str,
+        committer: Option<TableCommitter>,
+    ) -> Result<()> {
         let service = ctx.iceberg_service().await?;
         let config = RefConfig { dry_run };
-        let ref_service = RefService::with_config(config);
+        let ref_service = RefService::with_config_and_committer(config, committer);
 
         let result = ref_service.delete_ref(&service, &ctx.path, name).await?;
 
@@ -168,9 +203,18 @@ impl TagCommand {
         Ok(())
     }
 
-    async fn rename(ctx: &TableContext, old_name: &str, new_name: &str, output: &str) -> Result<()> {
+    async fn rename(
+        ctx: &TableContext,
+        old_name: &str,
+        new_name: &str,
+        output: &str,
+        committer: Option<TableCommitter>,
+    ) -> Result<()> {
         let service = ctx.iceberg_service().await?;
-        let ref_service = RefService::new();
+        let ref_service = match committer {
+            Some(c) => RefService::with_committer(c),
+            None => RefService::new(),
+        };
 
         let result = ref_service
             .rename_tag(&service, &ctx.path, old_name, new_name)
