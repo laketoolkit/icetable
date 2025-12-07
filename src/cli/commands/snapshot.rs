@@ -6,14 +6,15 @@
 use colored::Colorize;
 use std::sync::Arc;
 
+use super::common::{resolve_table, TableResolution};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
-use crate::config::ResolvePath;
-use crate::core::TableFormat;
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::{StorageBackend, StorageBackendFactory};
 use crate::core::utils::detect_table_format_with_storage;
+use crate::core::{CatalogConfig, TableCommitter};
+use crate::core::TableFormat;
 use crate::error::{Error, Result};
 
 /// Handler for snapshot command
@@ -21,16 +22,20 @@ pub struct SnapshotCommand;
 
 impl SnapshotCommand {
     /// Execute snapshot command
-    pub async fn execute(args: SnapshotArgs) -> Result<()> {
-        // Get path from subcommand and resolve via config
-        let path = match &args.command {
-            SnapshotCommands::List(a) => a.path.resolve()?,
-            SnapshotCommands::Create(a) => a.path.resolve()?,
-            SnapshotCommands::Expire(a) => a.path.resolve()?,
-            SnapshotCommands::Set(a) => a.path.resolve()?,
-            SnapshotCommands::Cherrypick(a) => a.path.resolve()?,
-            SnapshotCommands::Lineage(a) => a.path.resolve()?,
+    pub async fn execute(args: SnapshotArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // Get path from subcommand and resolve via config or catalog
+        let subcommand_path = match &args.command {
+            SnapshotCommands::List(a) => &a.path,
+            SnapshotCommands::Create(a) => &a.path,
+            SnapshotCommands::Expire(a) => &a.path,
+            SnapshotCommands::Set(a) => &a.path,
+            SnapshotCommands::Cherrypick(a) => &a.path,
+            SnapshotCommands::Lineage(a) => &a.path,
         };
+
+        // Resolve table to get path and catalog info (namespace/name if from catalog)
+        let resolution = resolve_table(subcommand_path, catalog_config.as_ref()).await?;
+        let path = resolution.location();
 
         // Create storage backend
         let storage = StorageBackendFactory::create_backend(&path).await?;
@@ -40,7 +45,7 @@ impl SnapshotCommand {
 
         match format {
             TableFormat::Delta => Self::execute_delta(args, &path, storage).await,
-            TableFormat::Iceberg => Self::execute_iceberg(args, &path).await,
+            TableFormat::Iceberg => Self::execute_iceberg(args, &path, catalog_config, &resolution).await,
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 path
@@ -78,7 +83,15 @@ impl SnapshotCommand {
     // Iceberg implementation
     // =========================================================================
 
-    async fn execute_iceberg(args: SnapshotArgs, table_path: &str) -> Result<()> {
+    async fn execute_iceberg(
+        args: SnapshotArgs,
+        table_path: &str,
+        catalog_config: Option<CatalogConfig>,
+        resolution: &TableResolution,
+    ) -> Result<()> {
+        // Create committer based on catalog config and table resolution
+        let committer = Self::create_committer(catalog_config.as_ref(), resolution);
+
         match args.command {
             SnapshotCommands::List(a) => {
                 Self::iceberg_list(table_path, a.limit, a.all, &a.output).await
@@ -95,6 +108,7 @@ impl SnapshotCommand {
                     a.dry_run,
                     a.branch.as_deref(),
                     &a.output,
+                    committer,
                 )
                 .await
             }
@@ -107,6 +121,7 @@ impl SnapshotCommand {
                     a.tag,
                     a.dry_run,
                     &a.output,
+                    committer,
                 )
                 .await
             }
@@ -116,6 +131,24 @@ impl SnapshotCommand {
             SnapshotCommands::Lineage(a) => {
                 let limit = if a.all { None } else { Some(a.limit) };
                 Self::iceberg_lineage(table_path, a.snapshot_id, limit, &a.output).await
+            }
+        }
+    }
+
+    /// Create a TableCommitter based on catalog config and table resolution
+    fn create_committer(
+        catalog_config: Option<&CatalogConfig>,
+        resolution: &TableResolution,
+    ) -> Option<TableCommitter> {
+        // Only create committer if we have catalog config AND the table came from a catalog
+        match (catalog_config, resolution) {
+            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
+                // Use the actual namespace and name from catalog resolution
+                Some(TableCommitter::with_catalog(config.clone(), namespace.clone(), name.clone()))
+            }
+            _ => {
+                // No catalog or table is from direct path - use direct mode (no committer)
+                None
             }
         }
     }
@@ -201,6 +234,7 @@ impl SnapshotCommand {
         dry_run: bool,
         branch: Option<&str>,
         output: &str,
+        committer: Option<TableCommitter>,
     ) -> Result<()> {
         use std::collections::HashSet;
 
@@ -217,7 +251,11 @@ impl SnapshotCommand {
             );
         }
         let config = SnapshotConfig { dry_run };
-        let snapshot_service = SnapshotService::with_config(config);
+        let snapshot_service = if let Some(c) = committer {
+            SnapshotService::with_committer(config, c)
+        } else {
+            SnapshotService::with_config(config)
+        };
 
         // Validate explicit IDs and show warnings
         if let Some(ref explicit_ids) = ids {
@@ -308,10 +346,15 @@ impl SnapshotCommand {
         tag: Option<String>,
         dry_run: bool,
         output: &str,
+        committer: Option<TableCommitter>,
     ) -> Result<()> {
         let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
         let config = SnapshotConfig { dry_run };
-        let snapshot_service = SnapshotService::with_config(config);
+        let snapshot_service = if let Some(c) = committer {
+            SnapshotService::with_committer(config, c)
+        } else {
+            SnapshotService::with_config(config)
+        };
 
         let result = snapshot_service
             .set_current_snapshot(&metadata_service, path, id, as_of, branch, tag)

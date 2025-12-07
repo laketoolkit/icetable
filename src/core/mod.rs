@@ -5,6 +5,7 @@
 
 pub mod analysis;
 pub mod arrow_compat;
+pub mod catalog;
 pub mod context;
 pub mod formats;
 pub mod inspection;
@@ -16,6 +17,7 @@ pub mod utils;
 pub mod validation;
 
 // Re-export commonly used types
+pub use catalog::{CatalogClient, CatalogConfig, CatalogType, RestCatalogClient, TableCommitter, TableRef};
 pub use context::{TableContext, TableContextBuilder};
 pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};

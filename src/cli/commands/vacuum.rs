@@ -4,9 +4,10 @@
 
 use colored::Colorize;
 
+use super::common::resolve_table_path;
 use crate::cli::parser::VacuumArgs;
-use crate::config::ResolvePath;
 use crate::core::format_bytes;
+use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
 
 /// Handler for vacuum command
@@ -14,8 +15,8 @@ pub struct VacuumCommand;
 
 impl VacuumCommand {
     /// Execute vacuum command
-    pub async fn execute(args: VacuumArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    pub async fn execute(args: VacuumArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
         Self::vacuum_iceberg(&table_path, &args).await
     }
 

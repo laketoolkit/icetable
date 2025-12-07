@@ -6,7 +6,7 @@ use colored::Colorize;
 
 use crate::cli::parser::{BranchArgs, BranchCommands};
 use crate::core::maintenance::{RefConfig, RefService};
-use crate::core::TableContext;
+use crate::core::{CatalogConfig, TableContext};
 use crate::error::{Error, Result};
 
 /// Handler for branch command
@@ -14,7 +14,8 @@ pub struct BranchCommand;
 
 impl BranchCommand {
     /// Execute branch command
-    pub async fn execute(args: BranchArgs) -> Result<()> {
+    pub async fn execute(args: BranchArgs, _catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // TODO: Add catalog support for branch in future
         match args.command {
             BranchCommands::List(a) => {
                 let ctx = TableContext::from_path(a.path).await?;

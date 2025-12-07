@@ -24,6 +24,7 @@ parquet = { version = "55.2.0", features = ["arrow", "async", "object_store"] }
 # Table formats
 deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"], optional = true }
 iceberg = { version = "0.7" }
+iceberg-catalog-rest = { version = "0.7", optional = true }
 apache-avro = { version = "0.18" }
 
 # Cloud storage abstraction
@@ -70,6 +71,7 @@ num-traits = "0.2"
 # Terminal UI (for tui command)
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
+reqwest = { version = "0.12.24", features = ["json"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -79,11 +81,13 @@ tempfile = "3.13"
 tokio-test = "0.4"
 
 [features]
-default = []
+default = ["rest-catalog"]
 # Delta support is for import only - reading Delta tables to create Iceberg tables
 delta = ["dep:deltalake", "deltalake/s3", "deltalake/gcs", "deltalake/azure"]
 tui = ["dep:ratatui", "dep:crossterm"]
-all = ["delta", "tui"]
+# REST catalog support for Nessie, Polaris, Tabular, etc.
+rest-catalog = ["dep:iceberg-catalog-rest"]
+all = ["delta", "tui", "rest-catalog"]
 
 [[bin]]
 name = "icetable"

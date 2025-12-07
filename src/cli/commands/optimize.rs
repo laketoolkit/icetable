@@ -6,12 +6,12 @@
 
 use colored::Colorize;
 
+use super::common::resolve_table_path;
 use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
-use crate::config::ResolvePath;
 use crate::core::maintenance::{MaintenanceConfig, OptimizeService};
 use crate::core::metadata::MaintenanceResult;
 use crate::core::utils::parse_bytes;
-use crate::core::{TableFormat, detect_table_format_async, format_bytes};
+use crate::core::{CatalogConfig, TableFormat, detect_table_format_async, format_bytes};
 use crate::error::{Error, Result};
 
 /// Handler for optimize command
@@ -19,16 +19,16 @@ pub struct OptimizeCommand;
 
 impl OptimizeCommand {
     /// Execute optimize command
-    pub async fn execute(cmd: OptimizeCommands) -> Result<()> {
+    pub async fn execute(cmd: OptimizeCommands, catalog_config: Option<CatalogConfig>) -> Result<()> {
         match cmd {
-            OptimizeCommands::Data(args) => Self::execute_data(args).await,
-            OptimizeCommands::Manifests(args) => Self::execute_manifests(args).await,
+            OptimizeCommands::Data(args) => Self::execute_data(args, catalog_config).await,
+            OptimizeCommands::Manifests(args) => Self::execute_manifests(args, catalog_config).await,
         }
     }
 
     /// Execute optimize data subcommand
-    async fn execute_data(args: OptimizeDataArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    async fn execute_data(args: OptimizeDataArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // Detect table format (supports remote storage)
         let format = detect_table_format_async(&table_path).await;
@@ -69,8 +69,8 @@ impl OptimizeCommand {
     }
 
     /// Execute optimize manifests subcommand
-    async fn execute_manifests(args: OptimizeManifestsArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    async fn execute_manifests(args: OptimizeManifestsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // Detect table format (supports remote storage)
         let format = detect_table_format_async(&table_path).await;
@@ -538,7 +538,7 @@ impl OptimizeCommand {
         let next_location = next_metadata_location(&metadata_file_path)
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
-        let new_version = extract_version_from_path(&next_location.to_string());
+        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0);
         let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)

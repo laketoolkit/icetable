@@ -6,15 +6,15 @@
 use colored::Colorize;
 use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
 
+use super::common::resolve_table_path;
 use crate::cli::parser::AnalyzeArgs;
-use crate::config::ResolvePath;
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
 };
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::utils::format_bytes;
-use crate::core::{TableFormat, detect_table_format_async};
+use crate::core::{CatalogConfig, TableFormat, detect_table_format_async};
 use crate::error::{Error, Result};
 
 /// Handler for analyze command
@@ -22,8 +22,8 @@ pub struct AnalyzeCommand;
 
 impl AnalyzeCommand {
     /// Execute analyze command
-    pub async fn execute(args: AnalyzeArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // Detect table format
         let format = detect_table_format_async(&table_path).await;

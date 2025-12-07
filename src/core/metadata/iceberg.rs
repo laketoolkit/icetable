@@ -120,7 +120,7 @@ impl IcebergMetadataService {
     /// Load current table metadata
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
         let metadata_file = find_latest_metadata(&self.table_path, &self.storage).await?;
-        let version = extract_version_from_path(&metadata_file);
+        let version = extract_version_from_path(&metadata_file).unwrap_or(0);
 
         let table_ident = TableIdent::from_strs(["iceberg", "table"])
             .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;

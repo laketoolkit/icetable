@@ -1,0 +1,33 @@
+services:
+  nessie:
+    image: ghcr.io/projectnessie/nessie:latest
+    ports:
+      - "19120:19120"
+    environment:
+      # Version store (in-memory for testing)
+      - nessie.version.store.type=IN_MEMORY
+
+      # Catalog configuration
+      - nessie.catalog.default-warehouse=warehouse
+      - nessie.catalog.warehouses.warehouse.location=s3://nessie-warehouse/
+
+      # S3 service configuration for MinIO (using hostname 'minio' in same network)
+      - nessie.catalog.service.s3.default-options.endpoint=http://minio:9000
+      - nessie.catalog.service.s3.default-options.path-style-access=true
+      - nessie.catalog.service.s3.default-options.region=us-east-1
+      - nessie.catalog.service.s3.default-options.auth-type=STATIC
+
+      # S3 credentials reference (using Quarkus secrets)
+      - nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key
+
+      # Actual credentials stored as secrets
+      - nessie.catalog.secrets.access-key.name=minioadmin
+      - nessie.catalog.secrets.access-key.secret=minioadmin
+
+      # Disable authentication for testing
+      - nessie.server.authentication.enabled=false
+
+networks:
+  default:
+    name: icectl_default
+    external: true

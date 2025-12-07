@@ -5,10 +5,10 @@
 use colored::Colorize;
 
 use crate::cli::parser::{
-    ConfigAddArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs, ConfigListArgs, ConfigRemoveArgs,
-    ConfigUnsetArgs, ConfigUseArgs,
+    ConfigAddArgs, ConfigAddCatalogArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs,
+    ConfigListArgs, ConfigRemoveCatalogArgs, ConfigRemoveArgs, ConfigUnsetArgs, ConfigUseArgs,
 };
-use crate::config::{Config, ResolvedTable};
+use crate::config::{CatalogConfig, Config, ResolvedTable};
 use crate::error::Result;
 
 /// Handler for config command
@@ -23,6 +23,8 @@ impl ConfigCommand {
             ConfigCommands::Unset(args) => Self::unset(args).await,
             ConfigCommands::Add(args) => Self::add(args).await,
             ConfigCommands::Remove(args) => Self::remove(args).await,
+            ConfigCommands::AddCatalog(args) => Self::add_catalog(args).await,
+            ConfigCommands::RemoveCatalog(args) => Self::remove_catalog(args).await,
             ConfigCommands::List(args) => Self::list(args).await,
         }
     }
@@ -115,6 +117,61 @@ impl ConfigCommand {
                 "!".yellow(),
                 args.name.cyan()
             );
+        }
+
+        Ok(())
+    }
+
+    /// Add a catalog configuration
+    async fn add_catalog(args: ConfigAddCatalogArgs) -> Result<()> {
+        let mut config = Config::load()?;
+
+        // Build properties from optional args
+        let mut properties = std::collections::HashMap::new();
+        if let Some(warehouse) = &args.warehouse {
+            properties.insert("warehouse".to_string(), warehouse.clone());
+        }
+
+        let catalog_config = CatalogConfig {
+            catalog_type: args.catalog_type.clone(),
+            uri: args.uri.clone(),
+            credential: args.credential.clone(),
+            properties,
+        };
+
+        config.add_catalog(args.name.clone(), catalog_config);
+        config.save()?;
+
+        println!(
+            "{} Added catalog: {} ({}) → {}",
+            "✓".green(),
+            args.name.cyan(),
+            args.catalog_type.dimmed(),
+            args.uri.dimmed()
+        );
+
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Use tables with: icectl inspect -t {}.namespace.table",
+                args.name
+            )
+            .dimmed()
+        );
+
+        Ok(())
+    }
+
+    /// Remove a catalog configuration
+    async fn remove_catalog(args: ConfigRemoveCatalogArgs) -> Result<()> {
+        let mut config = Config::load()?;
+
+        if config.remove_catalog(&args.name) {
+            config.save()?;
+            println!("{} Removed catalog: {}", "✓".green(), args.name.cyan());
+        } else {
+            println!("{} Catalog not found: {}", "!".yellow(), args.name.cyan());
         }
 
         Ok(())

@@ -72,7 +72,7 @@ impl ConflictDetector {
     pub async fn check_for_conflicts(&self, expected_version: i32) -> Result<ConflictCheckResult> {
         // Get current metadata path using standard format
         let current_metadata = find_latest_metadata(&self.table_path, &self.storage).await?;
-        let current_version = extract_version_from_path(&current_metadata);
+        let current_version = extract_version_from_path(&current_metadata).unwrap_or(0);
 
         if current_version != expected_version {
             return Ok(ConflictCheckResult::conflict(
@@ -126,14 +126,15 @@ mod tests {
         // Standard Iceberg format: <version>-<uuid>.metadata.json
         assert_eq!(
             extract_version_from_path("s3://bucket/table/metadata/00005-abc123.metadata.json"),
-            5
+            Some(5)
         );
         assert_eq!(
             extract_version_from_path("/path/to/table/metadata/00123-uuid.metadata.json"),
-            123
+            Some(123)
         );
-        assert_eq!(extract_version_from_path("00001-test.metadata.json"), 1);
-        assert_eq!(extract_version_from_path("invalid"), 0);
+        assert_eq!(extract_version_from_path("00001-test.metadata.json"), Some(1));
+        assert_eq!(extract_version_from_path("00000-initial.metadata.json"), Some(0));
+        assert_eq!(extract_version_from_path("invalid"), None);
     }
 
     #[test]

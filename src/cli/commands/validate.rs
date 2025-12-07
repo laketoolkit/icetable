@@ -4,12 +4,13 @@
 
 use std::path::Path;
 
+use super::common::resolve_table_path;
 use crate::cli::parser::ValidateArgs;
-use crate::config::ResolvePath;
 use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::validation::{Severity, ValidationEngine};
+use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
 use crate::utils::progress::ProgressTracker;
 
@@ -18,8 +19,8 @@ pub struct ValidateCommand;
 
 impl ValidateCommand {
     /// Execute validate command
-    pub async fn execute(args: ValidateArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    pub async fn execute(args: ValidateArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // 1. Create storage backend based on path
         let storage = StorageBackendFactory::create_backend(&table_path).await?;

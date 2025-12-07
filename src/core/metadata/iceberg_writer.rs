@@ -192,7 +192,7 @@ impl IcebergSnapshotWriter {
         super::iceberg_validator::validate_or_error(metadata)?;
 
         // Parse current metadata location and get next version
-        let expected_version = extract_version_from_path(current_metadata_path);
+        let expected_version = extract_version_from_path(current_metadata_path).unwrap_or(0);
 
         // Check for conflicts before writing (optimistic concurrency control)
         super::iceberg_conflict::check_and_fail_on_conflict(

@@ -480,7 +480,7 @@ impl RefService {
         let next_location = next_metadata_location(&current_metadata_path)
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
-        let new_version = extract_version_from_path(&next_location.to_string()) as i64;
+        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
         let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)

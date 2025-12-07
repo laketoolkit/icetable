@@ -5,12 +5,13 @@
 
 use std::path::Path;
 
+use super::common::resolve_table_path;
 use crate::cli::parser::StatsArgs;
-use crate::config::ResolvePath;
 use crate::core::format_bytes;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::inspection::formatters::format_number;
 use crate::core::storage::StorageBackendFactory;
+use crate::core::CatalogConfig;
 use crate::error::Result;
 
 /// Handler for stats command
@@ -18,8 +19,8 @@ pub struct StatsCommand;
 
 impl StatsCommand {
     /// Execute stats command
-    pub async fn execute(args: StatsArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    pub async fn execute(args: StatsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
         let path = Path::new(&table_path);
 
         // Create storage backend

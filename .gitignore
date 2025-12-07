@@ -8,7 +8,8 @@ Cargo.lock
 *.swp
 *.swo
 *~
-
+# Python
+.venv
 # OS
 .DS_Store
 Thumbs.db
@@ -35,3 +36,4 @@ benches/results/
 **/*.parquet
 **/data
 examples/**
+

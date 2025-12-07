@@ -6,10 +6,11 @@ use std::path::Path;
 
 use crate::cli::output::InspectionFormatter;
 use crate::cli::parser::InspectArgs;
-use crate::config::ResolvePath;
+use crate::config::{ResolveTableRef, ResolvedTable};
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
+use crate::core::{CatalogConfig, CatalogType, TableRef};
 use crate::error::Result;
 use common::{PhysicalInspectOptions, VerbosityLevel};
 
@@ -18,8 +19,68 @@ pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
-    pub async fn execute(args: InspectArgs) -> Result<()> {
-        let path = args.path.resolve()?;
+    pub async fn execute(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // Priority 1: If --catalog-uri is provided, use it directly
+        if let Some(ref cli_catalog) = catalog_config {
+            let table_input = args.path.as_ref().ok_or_else(|| {
+                crate::error::Error::General(
+                    "Table identifier required when using --catalog-uri (e.g., namespace.table)".to_string()
+                )
+            })?;
+
+            let table_ref = TableRef::parse(table_input, Some(cli_catalog));
+
+            if let TableRef::Catalog { namespace, name } = &table_ref {
+                return Self::execute_catalog_inspect(
+                    namespace,
+                    name,
+                    cli_catalog,
+                    args,
+                )
+                .await;
+            }
+        }
+
+        // Priority 2: Try to resolve from config (may return path or catalog reference)
+        let resolved = args.path.resolve_ref()?;
+
+        match resolved {
+            ResolvedTable::Path(path_str) => {
+                // Direct path mode
+                return Self::execute_path_inspect(&path_str, args).await;
+            }
+            ResolvedTable::Catalog { catalog_config: cat_cfg, table_name, .. } => {
+                // Catalog from config - parse namespace.table from table_name
+                let core_catalog = CatalogConfig {
+                    catalog_type: CatalogType::Rest,
+                    uri: cat_cfg.uri.clone(),
+                    warehouse: cat_cfg.properties.get("warehouse").cloned(),
+                    credential: cat_cfg.credential.clone(),
+                    properties: Default::default(),
+                };
+
+                // Parse table_name which may be "namespace.table" or "ns1.ns2.table"
+                let parts: Vec<&str> = table_name.split('.').collect();
+                let (namespace, name) = if parts.len() >= 2 {
+                    let name = parts.last().unwrap().to_string();
+                    let namespace: Vec<String> = parts[..parts.len() - 1]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    (namespace, name)
+                } else {
+                    // Single name, use default namespace
+                    (vec!["default".to_string()], table_name.clone())
+                };
+
+                return Self::execute_catalog_inspect(&namespace, &name, &core_catalog, args).await;
+            }
+        }
+    }
+
+    /// Execute inspect for a direct path
+    async fn execute_path_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
+        let path = path_str;
 
         // Check if any physical layout flags are set
         let physical_mode =
@@ -156,6 +217,65 @@ impl InspectCommand {
                 // Default table format
                 let output = InspectionFormatter::format_inspect_result(&result, &options);
                 println!("{}", output);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute catalog-based inspect (REST catalog mode)
+    async fn execute_catalog_inspect(
+        namespace: &[String],
+        name: &str,
+        catalog_config: &CatalogConfig,
+        args: InspectArgs,
+    ) -> Result<()> {
+        use crate::core::CatalogClient;
+        use colored::Colorize;
+
+        // Create catalog client
+        let catalog = CatalogClient::new(Some(catalog_config.clone())).await?;
+
+        // Load table from catalog
+        let table = catalog.load_table(&crate::core::TableRef::Catalog {
+            namespace: namespace.to_vec(),
+            name: name.to_string(),
+        }).await?;
+
+        // Get table metadata
+        let metadata = table.metadata();
+
+        // Print basic info
+        println!("{}", "Iceberg Table (via Catalog)".cyan().bold());
+        println!();
+        println!("{}: {}.{}", "Table".bold(), namespace.join("."), name);
+        println!("{}: {}", "Format Version".bold(), metadata.format_version());
+        println!("{}: {}", "Location".bold(), metadata.location());
+
+        if let Some(current_snapshot_id) = metadata.current_snapshot_id() {
+            println!("{}: {}", "Current Snapshot".bold(), current_snapshot_id);
+        }
+
+        println!("{}: {}", "Snapshots".bold(), metadata.snapshots().len());
+
+        // Show schema if requested
+        if args.schema || (!args.metadata && !args.stats && !args.preview) {
+            println!();
+            println!("{}", "Schema:".cyan().bold());
+            let schema = metadata.current_schema();
+            for field in schema.as_struct().fields() {
+                let nullable = if field.required { "" } else { " (nullable)" };
+                println!("  {} : {}{}", field.name.bold(), field.field_type, nullable);
+            }
+        }
+
+        // Show partition spec
+        let spec = metadata.default_partition_spec();
+        if !spec.fields().is_empty() {
+            println!();
+            println!("{}", "Partition Spec:".cyan().bold());
+            for field in spec.fields() {
+                println!("  {} ({})", field.name, field.transform);
             }
         }
 

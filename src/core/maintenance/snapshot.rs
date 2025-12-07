@@ -12,6 +12,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use iceberg::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata};
 
+use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::storage::traits::PutOptions;
@@ -119,6 +120,8 @@ pub struct SnapshotConfig {
 /// Service for managing Iceberg table snapshots
 pub struct SnapshotService {
     config: SnapshotConfig,
+    /// Optional committer for catalog-aware commits
+    committer: Option<TableCommitter>,
 }
 
 impl SnapshotService {
@@ -126,12 +129,24 @@ impl SnapshotService {
     pub fn new() -> Self {
         Self {
             config: SnapshotConfig::default(),
+            committer: None,
         }
     }
 
     /// Create a new snapshot service with custom configuration
     pub fn with_config(config: SnapshotConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            committer: None,
+        }
+    }
+
+    /// Create a snapshot service with a catalog committer for multi-writer safety
+    pub fn with_committer(config: SnapshotConfig, committer: TableCommitter) -> Self {
+        Self {
+            config,
+            committer: Some(committer),
+        }
     }
 
     /// List snapshots from an Iceberg table
@@ -223,21 +238,27 @@ impl SnapshotService {
             });
         }
 
-        // Build new metadata with snapshots removed
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path.clone()))
-            .remove_snapshots(&to_expire)
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        // Commit the snapshot removal
+        let new_version = if let Some(ref committer) = self.committer {
+            // Use catalog committer for multi-writer safety
+            committer
+                .commit_remove_snapshots(table_path, &metadata, &to_expire, current_version)
+                .await?
+        } else {
+            // Direct write to storage (single-writer mode)
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path.clone()))
+                .remove_snapshots(&to_expire)
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
-        let new_metadata = build_result.metadata;
+            let new_metadata = build_result.metadata;
 
-        // Write new metadata
-        let new_version = self
-            .write_metadata(table_path, &new_metadata, current_version)
-            .await?;
+            self.write_metadata(table_path, &new_metadata, current_version)
+                .await?
+        };
 
         Ok(ExpireSnapshotsResult {
             expired_count: to_expire.len(),
@@ -281,32 +302,38 @@ impl SnapshotService {
             });
         }
 
-        // Build new metadata with target snapshot as current
-        let metadata_file_path = service.current_metadata_path().await?;
-        let metadata_clone = (*metadata).clone();
+        // Commit the snapshot ref change
+        let new_version = if let Some(ref committer) = self.committer {
+            // Use catalog committer for multi-writer safety
+            committer
+                .commit_set_snapshot_ref(table_path, &metadata, MAIN_BRANCH, target_id, current_version)
+                .await?
+        } else {
+            // Direct write to storage (single-writer mode)
+            let metadata_file_path = service.current_metadata_path().await?;
+            let metadata_clone = (*metadata).clone();
 
-        let branch_ref = SnapshotReference {
-            snapshot_id: target_id,
-            retention: SnapshotRetention::Branch {
-                min_snapshots_to_keep: None,
-                max_snapshot_age_ms: None,
-                max_ref_age_ms: None,
-            },
+            let branch_ref = SnapshotReference {
+                snapshot_id: target_id,
+                retention: SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            };
+
+            let build_result = metadata_clone
+                .into_builder(Some(metadata_file_path.clone()))
+                .set_ref(MAIN_BRANCH, branch_ref)
+                .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+                .build()
+                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+
+            let new_metadata = build_result.metadata;
+
+            self.write_metadata(table_path, &new_metadata, current_version)
+                .await?
         };
-
-        let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path.clone()))
-            .set_ref(MAIN_BRANCH, branch_ref)
-            .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
-
-        let new_metadata = build_result.metadata;
-
-        // Write new metadata
-        let new_version = self
-            .write_metadata(table_path, &new_metadata, current_version)
-            .await?;
 
         Ok(SetSnapshotResult {
             previous_id,
@@ -328,7 +355,7 @@ impl SnapshotService {
 
         // Find the current metadata file using standard format
         let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
-        let current_version = extract_version_from_path(&current_metadata_path);
+        let current_version = extract_version_from_path(&current_metadata_path).unwrap_or(0);
 
         let metadata_filename = current_metadata_path
             .split('/')
@@ -516,7 +543,7 @@ impl SnapshotService {
         let next_location = next_metadata_location(&current_metadata_path)
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
-        let new_version = extract_version_from_path(&next_location.to_string()) as i64;
+        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
         let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)

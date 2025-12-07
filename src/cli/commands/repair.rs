@@ -4,13 +4,13 @@
 
 use colored::Colorize;
 
+use super::common::resolve_table_path;
 use crate::cli::parser::RepairArgs;
-use crate::config::ResolvePath;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::utils::detect_table_format_with_storage;
-use crate::core::{TableFormat, format_bytes};
+use crate::core::{CatalogConfig, TableFormat, format_bytes};
 use crate::error::{Error, Result};
 
 /// Repair options specifying what actions to take
@@ -27,8 +27,8 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(mut args: RepairArgs) -> Result<()> {
-        let table_path = args.path.resolve()?;
+    pub async fn execute(mut args: RepairArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
         args.path = Some(table_path.clone());
 
         // Validate at least one repair option is specified

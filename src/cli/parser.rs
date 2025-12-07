@@ -4,24 +4,40 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
-/// icetable - CLI for Apache Iceberg table management
+/// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and migrate from Delta Lake
 #[derive(Parser, Debug)]
 #[command(name = "icetable")]
 #[command(version, about, long_about = None)]
+#[command(disable_help_flag = true)]
 pub struct Cli {
     /// Suppress non-error output
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Log level (off, error, warn, info, debug, trace)
-    #[arg(long, global = true, default_value = "off", value_parser = parse_log_level)]
+    /// Log level [default: off]
+    #[arg(long, global = true, default_value = "off", value_parser = parse_log_level, hide_default_value = true)]
     pub log_level: crate::utils::LogLevel,
 
     /// Log to file
     #[arg(long, global = true)]
     pub log_file: Option<PathBuf>,
 
-    /// The command to execute
+    /// REST Catalog URI [env: ICETABLE_CATALOG_URI]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide_env = true)]
+    pub catalog_uri: Option<String>,
+
+    /// Catalog warehouse location [env: ICETABLE_CATALOG_WAREHOUSE]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide_env = true)]
+    pub catalog_warehouse: Option<String>,
+
+    /// Catalog credential [env: ICETABLE_CATALOG_CREDENTIAL]
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide_env = true)]
+    pub catalog_credential: Option<String>,
+
+    /// Print help
+    #[arg(short, long, action = clap::ArgAction::Help, global = true)]
+    pub help: Option<bool>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -76,6 +92,9 @@ pub enum Commands {
     /// Manage configuration (default table context)
     Config(ConfigArgs),
 
+    /// Interact with Iceberg REST catalogs (Nessie, Polaris, etc.)
+    Catalog(CatalogArgs),
+
     /// Generate shell completions
     Completions(CompletionsArgs),
 
@@ -85,6 +104,22 @@ pub enum Commands {
     /// Interactive Terminal UI
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
+}
+
+impl Cli {
+    /// Build catalog configuration from CLI options
+    pub fn catalog_config(&self) -> Option<crate::core::CatalogConfig> {
+        self.catalog_uri.as_ref().map(|uri| {
+            let mut config = crate::core::CatalogConfig::rest(uri);
+            if let Some(ref warehouse) = self.catalog_warehouse {
+                config = config.with_warehouse(warehouse);
+            }
+            if let Some(ref credential) = self.catalog_credential {
+                config = config.with_credential(credential);
+            }
+            config
+        })
+    }
 }
 
 /// Arguments for completions command
@@ -1012,7 +1047,15 @@ pub enum ConfigCommands {
     /// Remove a named table alias
     Remove(ConfigRemoveArgs),
 
-    /// List all configured tables
+    /// Add a catalog configuration
+    #[command(name = "add-catalog")]
+    AddCatalog(ConfigAddCatalogArgs),
+
+    /// Remove a catalog configuration
+    #[command(name = "remove-catalog")]
+    RemoveCatalog(ConfigRemoveCatalogArgs),
+
+    /// List all configured tables and catalogs
     List(ConfigListArgs),
 }
 
@@ -1056,12 +1099,176 @@ pub struct ConfigRemoveArgs {
     pub name: String,
 }
 
+/// Arguments for config add-catalog
+#[derive(Parser, Debug)]
+pub struct ConfigAddCatalogArgs {
+    /// Catalog name (used as prefix for tables, e.g., nessie.analytics.events)
+    pub name: String,
+
+    /// Catalog URI (e.g., http://nessie:19120/iceberg/)
+    pub uri: String,
+
+    /// Catalog type (rest, hive, glue)
+    #[arg(short = 't', long, default_value = "rest")]
+    pub catalog_type: String,
+
+    /// Warehouse location (optional, some catalogs provide this)
+    #[arg(short, long)]
+    pub warehouse: Option<String>,
+
+    /// Credential (optional, format depends on catalog type)
+    #[arg(short, long)]
+    pub credential: Option<String>,
+}
+
+/// Arguments for config remove-catalog
+#[derive(Parser, Debug)]
+pub struct ConfigRemoveCatalogArgs {
+    /// Catalog name to remove
+    pub name: String,
+}
+
 /// Arguments for config list
 #[derive(Parser, Debug)]
 pub struct ConfigListArgs {
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
+}
+
+/// Arguments for catalog command
+#[derive(Parser, Debug)]
+pub struct CatalogArgs {
+    /// Catalog name (from config)
+    #[arg(short, long, global = true)]
+    pub catalog: Option<String>,
+
+    /// Namespace (for commands that need it)
+    #[arg(short, long, global = true)]
+    pub namespace: Option<String>,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text", global = true)]
+    pub output: String,
+
+    /// Catalog subcommand
+    #[command(subcommand)]
+    pub command: CatalogCommands,
+}
+
+/// Catalog subcommands
+#[derive(Subcommand, Debug)]
+pub enum CatalogCommands {
+    /// List namespaces in a catalog
+    Namespaces(CatalogNamespacesArgs),
+
+    /// List tables in a namespace
+    Tables(CatalogTablesArgs),
+
+    /// Show catalog information
+    Info,
+
+    /// Create a namespace
+    #[command(name = "create-namespace")]
+    CreateNamespace(CatalogCreateNamespaceArgs),
+
+    /// Drop a namespace
+    #[command(name = "drop-namespace")]
+    DropNamespace(CatalogDropNamespaceArgs),
+
+    /// Create a table
+    #[command(name = "create-table")]
+    CreateTable(CatalogCreateTableArgs),
+
+    /// Drop a table
+    #[command(name = "drop-table")]
+    DropTable(CatalogDropTableArgs),
+}
+
+/// Arguments for catalog namespaces
+#[derive(Parser, Debug)]
+pub struct CatalogNamespacesArgs {
+    /// Parent namespace (for nested namespaces)
+    #[arg(short, long)]
+    pub parent: Option<String>,
+}
+
+/// Arguments for catalog tables
+#[derive(Parser, Debug)]
+pub struct CatalogTablesArgs {
+    // Namespace is now a global flag in CatalogArgs
+}
+
+/// Arguments for catalog create-namespace
+#[derive(Parser, Debug)]
+pub struct CatalogCreateNamespaceArgs {
+    /// Namespace name to create
+    pub namespace: String,
+
+    /// Namespace properties (key=value, can be specified multiple times)
+    #[arg(short, long, value_parser = parse_key_value)]
+    pub property: Vec<(String, String)>,
+}
+
+/// Arguments for catalog drop-namespace
+#[derive(Parser, Debug)]
+pub struct CatalogDropNamespaceArgs {
+    /// Namespace name to drop
+    pub namespace: String,
+
+    /// Force drop even if namespace is not empty
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// Arguments for catalog create-table
+#[derive(Parser, Debug)]
+pub struct CatalogCreateTableArgs {
+    /// Namespace for the table
+    #[arg(short, long)]
+    pub namespace: String,
+
+    /// Table name
+    pub name: String,
+
+    /// Schema file (JSON format)
+    #[arg(long)]
+    pub schema: PathBuf,
+
+    /// Partition columns (comma-separated)
+    #[arg(long, value_delimiter = ',')]
+    pub partition_by: Option<Vec<String>>,
+
+    /// Table location (optional, catalog may provide default)
+    #[arg(long)]
+    pub location: Option<String>,
+
+    /// Table properties (key=value, can be specified multiple times)
+    #[arg(short, long, value_parser = parse_key_value)]
+    pub property: Vec<(String, String)>,
+}
+
+/// Arguments for catalog drop-table
+#[derive(Parser, Debug)]
+pub struct CatalogDropTableArgs {
+    /// Namespace of the table
+    #[arg(short, long)]
+    pub namespace: String,
+
+    /// Table name to drop
+    pub name: String,
+
+    /// Also delete data files (purge)
+    #[arg(long)]
+    pub purge: bool,
+}
+
+/// Parse key=value pairs
+fn parse_key_value(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
 }
 
 /// Parse log level from string

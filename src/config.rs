@@ -165,6 +165,7 @@ impl Config {
 
 /// Check if a string looks like a direct path
 fn is_direct_path(s: &str) -> bool {
+    // Cloud/remote paths
     s.starts_with("s3://")
         || s.starts_with("s3a://")
         || s.starts_with("gs://")
@@ -172,7 +173,12 @@ fn is_direct_path(s: &str) -> bool {
         || s.starts_with("abfs://")
         || s.starts_with("abfss://")
         || s.starts_with("file://")
+        // Absolute paths
         || s.starts_with('/')
+        // Relative paths (contains path separator or starts with ./)
+        || s.contains(std::path::MAIN_SEPARATOR)
+        || s.starts_with("./")
+        || s.starts_with("../")
 }
 
 /// Resolved table reference
@@ -232,12 +238,41 @@ impl ResolvePath for Option<String> {
         match config.resolve_table(&reference)? {
             ResolvedTable::Path(path) => Ok(path),
             ResolvedTable::Catalog { catalog_name, table_name, .. } => {
-                // TODO: Implement catalog table loading
+                // For ResolvePath we only support direct paths
+                // Use ResolveTableRef for catalog support
                 Err(Error::General(format!(
-                    "Catalog tables not yet supported. Referenced: {}.{}",
+                    "Use inspect command with catalog tables: {}.{}",
                     catalog_name, table_name
                 )))
             }
         }
+    }
+}
+
+/// Extension trait for resolving table references from Option<String>
+///
+/// This provides a clean API: `args.path.resolve_ref()?`
+/// Returns the full ResolvedTable including catalog information
+pub trait ResolveTableRef {
+    /// Resolve to a full table reference (path or catalog)
+    fn resolve_ref(&self) -> Result<ResolvedTable>;
+}
+
+impl ResolveTableRef for Option<String> {
+    fn resolve_ref(&self) -> Result<ResolvedTable> {
+        let config = Config::load()?;
+        let reference = match self {
+            Some(path) => path.clone(),
+            None => config
+                .get_current_context()
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    Error::General(
+                        "No table specified. Use -t <path> or set default with 'icectl config use <path>'".to_string()
+                    )
+                })?,
+        };
+
+        config.resolve_table(&reference)
     }
 }

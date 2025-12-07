@@ -6,7 +6,7 @@ use colored::Colorize;
 
 use crate::cli::parser::{TagArgs, TagCommands};
 use crate::core::maintenance::{RefConfig, RefService};
-use crate::core::TableContext;
+use crate::core::{CatalogConfig, TableContext};
 use crate::error::{Error, Result};
 
 /// Handler for tag command
@@ -14,7 +14,8 @@ pub struct TagCommand;
 
 impl TagCommand {
     /// Execute tag command
-    pub async fn execute(args: TagArgs) -> Result<()> {
+    pub async fn execute(args: TagArgs, _catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // TODO: Add catalog support for tag in future
         match args.command {
             TagCommands::List(a) => {
                 let ctx = TableContext::from_path(a.path).await?;

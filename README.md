@@ -1,6 +1,6 @@
 # icetable
 
-A fast, modern CLI for Apache Iceberg table management.
+A fast CLI for Apache Iceberg table management. Inspect, optimize, vacuum, and manage snapshots with support for REST catalogs (Nessie, Polaris, etc.).
 
 ## Installation
 
@@ -18,34 +18,112 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# Inspect a table
-icetable inspect s3://warehouse/my_table
+# Set a default table context (optional, avoids repeating -t)
+icetable config use my_table s3://warehouse/db/my_table
+
+# Inspect the table
+icetable inspect
+
+# Or specify table explicitly
+icetable inspect -t s3://warehouse/db/my_table
 
 # Analyze table health
-icetable analyze s3://warehouse/my_table
+icetable analyze
 
 # List snapshots
-icetable snapshot list s3://warehouse/my_table
+icetable snapshot list
 
-# Optimize small files
-icetable optimize data s3://warehouse/my_table --dry-run
+# Optimize small files (dry-run first)
+icetable optimize --dry-run
+icetable optimize
 
-# Clean up old snapshots
-icetable snapshot expire s3://warehouse/my_table --older-than 7d --dry-run
+# Expire old snapshots
+icetable snapshot expire --older-than 7d --dry-run
 
 # Remove orphan files
-icetable vacuum s3://warehouse/my_table --dry-run
+icetable vacuum --dry-run
 ```
+
+## Table Reference
+
+Commands accept tables in three ways:
+
+1. **Default context** - Set once with `config use`, then omit `-t`:
+   ```bash
+   icetable config use orders s3://warehouse/orders
+   icetable inspect  # uses configured default
+   ```
+
+2. **Explicit path** with `-t/--table`:
+   ```bash
+   icetable inspect -t s3://warehouse/orders
+   ```
+
+3. **Catalog reference** with `--catalog-uri`:
+   ```bash
+   icetable --catalog-uri http://nessie:19120/api/v2 inspect -t analytics.orders
+   ```
+
+## REST Catalog Support
+
+icetable integrates with Iceberg REST catalogs (Nessie, Polaris, Tabular, Unity Catalog).
+
+### Configure a catalog
+
+```bash
+# Add catalog to config
+icetable config add-catalog nessie http://nessie:19120/api/v2
+
+# List namespaces
+icetable catalog -c nessie namespaces
+
+# List tables in a namespace
+icetable catalog -c nessie -n analytics tables
+
+# Inspect a catalog table
+icetable config use my_table nessie.analytics.orders
+icetable inspect
+```
+
+### Or use CLI flags directly
+
+```bash
+# Set env vars
+export ICETABLE_CATALOG_URI=http://nessie:19120/api/v2
+
+# Or use flags
+icetable --catalog-uri http://nessie:19120/api/v2 inspect -t analytics.orders
+```
+
+### Catalog operations
+
+```bash
+# Create namespace
+icetable catalog -c nessie create-namespace analytics
+
+# Create table (requires schema file)
+icetable catalog -c nessie create-table -n analytics --name events --schema schema.json
+
+# Drop table
+icetable catalog -c nessie drop-table -n analytics --name events --purge
+```
+
+When using a catalog, write operations (`snapshot expire`, `snapshot set`) commit changes through the catalog's REST API for atomic commits with conflict detection.
 
 ## Commands
 
 ### inspect
 
-Display table metadata including schema, partitioning, snapshots, and statistics.
+Display table metadata, schema, partitioning, and data preview.
 
 ```bash
-icetable inspect <TABLE_PATH>
-icetable inspect s3://warehouse/orders --output json
+icetable inspect
+icetable inspect -t s3://warehouse/orders --output json
+icetable inspect --schema          # Only show schema
+icetable inspect --metadata        # Show metadata details
+icetable inspect --preview         # Show data preview
+icetable inspect --stats           # Show column statistics
+icetable inspect --as-of 7d        # Time travel to 7 days ago
 ```
 
 ### analyze
@@ -53,36 +131,31 @@ icetable inspect s3://warehouse/orders --output json
 Analyze table health and get optimization recommendations.
 
 ```bash
-icetable analyze <TABLE_PATH>
-icetable analyze s3://warehouse/orders --verbose
-icetable analyze s3://warehouse/orders --skip-orphans  # Skip orphan file scan
+icetable analyze
+icetable analyze --verbose
+icetable analyze --skip-orphans    # Skip orphan file scan (faster)
 ```
-
-Output shows a summary table with status indicators:
-- `✓` (green) - OK
-- `⚠` (yellow) - Needs attention
-- `✗` (red) - Critical issue
 
 ### optimize
 
-Optimize table performance by compacting files.
+Compact small files into larger ones.
 
 ```bash
-# Compact small data files
-icetable optimize data <TABLE_PATH> --dry-run
-icetable optimize data s3://warehouse/orders --partition "date=2024-01-01"
-
-# Rewrite manifests
-icetable optimize manifests <TABLE_PATH> --dry-run
+icetable optimize --dry-run
+icetable optimize
+icetable optimize --partition "date=2024-01-*"   # Only specific partitions
+icetable optimize --target-size 256mb            # Target file size
+icetable optimize --max-files 1000               # Incremental compaction
 ```
 
 ### vacuum
 
-Remove orphan files (data files not referenced by any snapshot).
+Remove orphan files not referenced by any snapshot.
 
 ```bash
-icetable vacuum <TABLE_PATH> --dry-run
-icetable vacuum s3://warehouse/orders --older-than 7d
+icetable vacuum --dry-run
+icetable vacuum
+icetable vacuum --older-than 7d    # Only files older than 7 days
 ```
 
 ### snapshot
@@ -90,24 +163,26 @@ icetable vacuum s3://warehouse/orders --older-than 7d
 Manage table snapshots.
 
 ```bash
-# List all snapshots
-icetable snapshot list <TABLE_PATH>
+# List snapshots
+icetable snapshot list
+icetable snapshot list --all       # Show all (no limit)
+icetable snapshot list -n 20       # Limit to 20
 
 # Show snapshot lineage (ancestor chain)
-icetable snapshot lineage <TABLE_PATH>
-icetable snapshot lineage <TABLE_PATH> --all           # Show full history
-icetable snapshot lineage <TABLE_PATH> -n 20           # Show last 20
+icetable snapshot lineage
+icetable snapshot lineage --all
 
 # Expire old snapshots
-icetable snapshot expire <TABLE_PATH> --older-than 7d --dry-run
-icetable snapshot expire <TABLE_PATH> --older-than 30d
+icetable snapshot expire --older-than 7d --dry-run
+icetable snapshot expire --retain-last 10         # Keep at least 10
+icetable snapshot expire --ids 123,456,789        # Expire specific IDs
 
 # Time travel - set current snapshot
-icetable snapshot set <TABLE_PATH> --id <SNAPSHOT_ID>
-icetable snapshot set <TABLE_PATH> --as-of "2024-01-15T10:00:00Z"
+icetable snapshot set --id 1234567890123
+icetable snapshot set --as-of "2024-01-15T10:00:00Z"
 
-# Cherry-pick changes from a snapshot
-icetable snapshot cherrypick <TABLE_PATH> <SNAPSHOT_ID>
+# Create metadata backup
+icetable snapshot create
 ```
 
 ### branch
@@ -115,18 +190,11 @@ icetable snapshot cherrypick <TABLE_PATH> <SNAPSHOT_ID>
 Manage table branches (mutable named references).
 
 ```bash
-# List branches
-icetable branch list <TABLE_PATH>
-
-# Create a branch
-icetable branch create <TABLE_PATH> <BRANCH_NAME>
-icetable branch create <TABLE_PATH> dev --snapshot-id 123456789
-
-# Delete a branch
-icetable branch delete <TABLE_PATH> <BRANCH_NAME> --dry-run
-
-# Rename a branch
-icetable branch rename <TABLE_PATH> <OLD_NAME> <NEW_NAME>
+icetable branch list
+icetable branch create dev
+icetable branch create feature --snapshot-id 123456789
+icetable branch delete dev --dry-run
+icetable branch rename dev development
 ```
 
 ### tag
@@ -134,38 +202,86 @@ icetable branch rename <TABLE_PATH> <OLD_NAME> <NEW_NAME>
 Manage table tags (immutable named references).
 
 ```bash
-# List tags
-icetable tag list <TABLE_PATH>
-
-# Create a tag
-icetable tag create <TABLE_PATH> <TAG_NAME>
-icetable tag create <TABLE_PATH> v1.0.0 --snapshot-id 123456789
-
-# Delete a tag
-icetable tag delete <TABLE_PATH> <TAG_NAME> --dry-run
-
-# Rename a tag
-icetable tag rename <TABLE_PATH> <OLD_NAME> <NEW_NAME>
+icetable tag list
+icetable tag create v1.0.0
+icetable tag create v1.0.0 --snapshot-id 123456789
+icetable tag delete v1.0.0 --dry-run
+icetable tag rename v1.0.0 release-1.0.0
 ```
 
 ### repair
 
-Fix table metadata issues by syncing with actual storage state.
+Fix table metadata issues.
 
 ```bash
-# Remove references to files that no longer exist on storage
-icetable repair <TABLE_PATH> --remove-missing --dry-run
+# Remove references to missing files
+icetable repair --remove-missing --dry-run
 
-# Add orphan parquet files (on storage but not in metadata) to the table
-icetable repair <TABLE_PATH> --add-orphans --dry-run
+# Add orphan parquet files to table
+icetable repair --add-orphans --dry-run
 
-# Full sync: remove missing references AND add orphan files
-icetable repair <TABLE_PATH> --sync-metadata --dry-run
+# Full sync
+icetable repair --sync-metadata --dry-run
+```
+
+### config
+
+Manage table context and catalog configurations.
+
+```bash
+# Set default table
+icetable config use orders s3://warehouse/orders
+icetable config current
+icetable config unset
+
+# Manage table aliases
+icetable config add orders s3://warehouse/orders
+icetable config remove orders
+icetable config list
+
+# Manage catalogs
+icetable config add-catalog nessie http://nessie:19120/api/v2
+icetable config remove-catalog nessie
+```
+
+### catalog
+
+Interact with REST catalogs directly.
+
+```bash
+icetable catalog -c nessie info
+icetable catalog -c nessie namespaces
+icetable catalog -c nessie -n analytics tables
+icetable catalog -c nessie create-namespace analytics
+icetable catalog -c nessie drop-namespace analytics --force
+```
+
+### Other commands
+
+```bash
+# Initialize new empty table
+icetable init -t s3://warehouse/new_table --schema schema.json
+
+# Compare snapshots
+icetable diff --from 123 --to 456
+
+# View history
+icetable history
+
+# Compute statistics
+icetable stats
+
+# Validate table integrity
+icetable validate
+
+# Import from Delta Lake
+icetable import delta -t s3://warehouse/iceberg_table --source s3://warehouse/delta_table
+
+# Diagnose environment
+icetable doctor
 ```
 
 ## Storage Support
-
-icetable supports multiple storage backends:
 
 - **Local filesystem**: `/path/to/table`
 - **Amazon S3**: `s3://bucket/path/to/table`
@@ -186,72 +302,14 @@ export AWS_ENDPOINT_URL=http://localhost:9000
 
 ## Output Formats
 
-All commands support JSON output for scripting:
+All commands support JSON output:
 
 ```bash
-icetable inspect s3://warehouse/orders --output json
-icetable snapshot list s3://warehouse/orders --output json | jq '.[] | .id'
-```
-
-## Common Options
-
-| Option | Description |
-|--------|-------------|
-| `--output json` | Output as JSON instead of formatted tables |
-| `--dry-run` | Preview changes without applying them |
-| `--verbose` | Show detailed information |
-| `--help` | Show help for command |
-
-## Examples
-
-### Daily maintenance workflow
-
-```bash
-# 1. Check table health
-icetable analyze s3://warehouse/orders
-
-# 2. Compact small files if needed
-icetable optimize data s3://warehouse/orders --dry-run
-icetable optimize data s3://warehouse/orders
-
-# 3. Expire old snapshots (keep 7 days)
-icetable snapshot expire s3://warehouse/orders --older-than 7d --dry-run
-icetable snapshot expire s3://warehouse/orders --older-than 7d
-
-# 4. Remove orphan files
-icetable vacuum s3://warehouse/orders --dry-run
-icetable vacuum s3://warehouse/orders
-```
-
-### Debug a table issue
-
-```bash
-# View current state
-icetable inspect s3://warehouse/orders
-
-# Check snapshot history
-icetable snapshot list s3://warehouse/orders
-
-# View lineage of current snapshot
-icetable snapshot lineage s3://warehouse/orders
-
-# Roll back to previous snapshot
-icetable snapshot set s3://warehouse/orders --id 1234567890123
-```
-
-### Tag a release
-
-```bash
-# Create a tag for the current snapshot
-icetable tag create s3://warehouse/orders v2.0.0
-
-# Or tag a specific snapshot
-icetable tag create s3://warehouse/orders v1.5.0 --snapshot-id 1234567890123
+icetable inspect --output json
+icetable snapshot list --output json | jq '.[].id'
 ```
 
 ## Shell Completions
-
-Generate shell completions for your preferred shell:
 
 ```bash
 # Bash
@@ -262,9 +320,49 @@ icetable completions zsh > ~/.zfunc/_icetable
 
 # Fish
 icetable completions fish > ~/.config/fish/completions/icetable.fish
+```
 
-# PowerShell
-icetable completions powershell > icetable.ps1
+## Examples
+
+### Daily maintenance
+
+```bash
+# Check health
+icetable analyze
+
+# Compact if needed
+icetable optimize --dry-run
+icetable optimize
+
+# Expire old snapshots
+icetable snapshot expire --older-than 7d --retain-last 5
+
+# Clean orphans
+icetable vacuum
+```
+
+### Debug table issue
+
+```bash
+icetable inspect --metadata
+icetable snapshot list --all
+icetable snapshot lineage
+
+# Roll back
+icetable snapshot set --id 1234567890123
+```
+
+### Work with catalog
+
+```bash
+# Setup
+icetable config add-catalog prod http://nessie:19120/api/v2
+icetable config use events prod.analytics.events
+
+# Daily ops
+icetable analyze
+icetable optimize
+icetable snapshot expire --older-than 30d
 ```
 
 ## License

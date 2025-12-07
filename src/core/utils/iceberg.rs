@@ -40,12 +40,8 @@ pub async fn find_latest_metadata(
         .iter()
         .filter(|obj| obj.path.ends_with(".metadata.json"))
         .filter_map(|obj| {
-            let version = extract_version_from_path(&obj.path);
-            if version > 0 {
-                Some((obj, version))
-            } else {
-                None
-            }
+            // extract_version_from_path returns None if it can't parse, Some(version) otherwise
+            extract_version_from_path(&obj.path).map(|version| (obj, version))
         })
         .max_by_key(|(_, version)| *version)
         .map(|(obj, _)| obj)
@@ -63,21 +59,21 @@ pub async fn find_latest_metadata(
 ///
 /// Only supports standard Iceberg format: `00015-uuid.metadata.json` -> 15
 ///
-/// Returns 0 if the path cannot be parsed.
-pub fn extract_version_from_path(path: &str) -> i32 {
+/// Returns None if the path cannot be parsed.
+pub fn extract_version_from_path(path: &str) -> Option<i32> {
     let filename = path.split('/').next_back().unwrap_or(path);
 
     // Standard format: <version>-<uuid>.metadata.json
     // The version is zero-padded, e.g., 00015-abc123.metadata.json
-    if let Some(version_part) = filename.split('-').next() {
-        if let Ok(version) = version_part.parse::<i32>() {
-            if filename.ends_with(".metadata.json") {
-                return version;
+    if filename.ends_with(".metadata.json") {
+        if let Some(version_part) = filename.split('-').next() {
+            if let Ok(version) = version_part.parse::<i32>() {
+                return Some(version);
             }
         }
     }
 
-    0
+    None
 }
 
 /// Get just the filename from a MetadataLocation

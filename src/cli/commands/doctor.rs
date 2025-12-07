@@ -575,12 +575,23 @@ impl DoctorCommand {
                 let version = extract_version_from_path(&metadata_path);
 
                 // Verify it's a valid standard Iceberg format
-                if version > 0 && MetadataLocation::from_str(&metadata_path).is_ok() {
-                    CheckResult {
-                        name: "Metadata Format".to_string(),
-                        status: CheckStatus::Ok,
-                        message: format!("v{} ({})", version, filename),
-                        suggestion: None,
+                if let Some(v) = version {
+                    if MetadataLocation::from_str(&metadata_path).is_ok() {
+                        CheckResult {
+                            name: "Metadata Format".to_string(),
+                            status: CheckStatus::Ok,
+                            message: format!("v{} ({})", v, filename),
+                            suggestion: None,
+                        }
+                    } else {
+                        CheckResult {
+                            name: "Metadata Format".to_string(),
+                            status: CheckStatus::Error,
+                            message: format!("Invalid format: {}", filename),
+                            suggestion: Some(
+                                "Expected standard Iceberg format: <version>-<uuid>.metadata.json".to_string(),
+                            ),
+                        }
                     }
                 } else {
                     CheckResult {
