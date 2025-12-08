@@ -14,8 +14,7 @@ use iceberg::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMeta
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::StorageBackendFactory;
-use crate::core::storage::traits::PutOptions;
+use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::core::utils::snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
 };
@@ -347,10 +346,10 @@ impl SnapshotService {
     /// This creates a timestamped backup of the current metadata file,
     /// which can be useful before destructive operations.
     pub async fn create_metadata_backup(&self, table_path: &str) -> Result<CreateBackupResult> {
-        use crate::core::storage::StorageBackendFactory;
+        use crate::core::storage::create_object_store;
         use crate::core::utils::{extract_version_from_path, find_latest_metadata};
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
 
         // Find the current metadata file using standard format
         let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
@@ -532,7 +531,7 @@ impl SnapshotService {
     ) -> Result<i64> {
         use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         // Find current metadata to derive next version
@@ -549,11 +548,7 @@ impl SnapshotService {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)

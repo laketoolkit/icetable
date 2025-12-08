@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use crate::config::ResolvePath;
 use crate::core::TableFormat;
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
-use crate::core::utils::detect_table_format_with_storage;
+use crate::core::storage::{create_object_store, Storage};
+use crate::core::utils::detect_format;
 use crate::error::{Error, Result};
 
 use crate::core::metadata::IcebergMetadataService;
@@ -26,8 +26,8 @@ use crate::core::metadata::IcebergMetadataService;
 pub struct TableContext {
     /// Resolved table path
     pub path: String,
-    /// Storage backend for the table
-    pub storage: Arc<dyn StorageBackend>,
+    /// Storage backend for the table (object_store)
+    pub storage: Storage,
     /// Detected table format
     pub format: TableFormat,
 }
@@ -41,8 +41,8 @@ impl TableContext {
 
     /// Create context from an explicit path string
     pub async fn new(path: &str) -> Result<Self> {
-        let storage = StorageBackendFactory::create_backend(path).await?;
-        let format = detect_table_format_with_storage(path, &storage).await;
+        let storage = create_object_store(path).await?;
+        let format = detect_format(&storage).await;
 
         Ok(Self {
             path: path.to_string(),

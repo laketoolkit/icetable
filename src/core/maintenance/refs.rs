@@ -11,7 +11,7 @@ use iceberg::spec::{SnapshotReference, SnapshotRetention};
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::error::{Error, Result};
 
 /// Result of a reference operation
@@ -538,7 +538,7 @@ impl RefService {
     ) -> Result<i64> {
         use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         // Find current metadata to derive next version
@@ -554,21 +554,9 @@ impl RefService {
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
-        use crate::core::storage::traits::PutOptions;
-        let put_opts = PutOptions {
-            content_type: Some("application/json".to_string()),
-            metadata: std::collections::HashMap::new(),
-            if_none_match: None,
-        };
-
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &put_opts,
-            )
-            .await
-            .map_err(|e| Error::General(format!("Failed to write metadata: {}", e)))?;
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
+            .await?;
 
         Ok(new_version)
     }

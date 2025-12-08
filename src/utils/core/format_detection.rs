@@ -3,10 +3,11 @@
 //! Centralized logic for detecting table formats.
 
 use std::path::Path;
-use std::sync::Arc;
 
-use crate::core::storage::traits::ListOptions;
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use futures::TryStreamExt;
+use object_store::ObjectStore;
+
+use crate::core::storage::{create_object_store, Storage, StoragePath};
 
 /// Supported table formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,52 +49,44 @@ pub fn detect_table_format(path: &Path) -> TableFormat {
 ///
 /// Creates a storage backend and checks for format-specific directories.
 pub async fn detect_table_format_async(path: &str) -> TableFormat {
-    match StorageBackendFactory::create_backend(path).await {
-        Ok(storage) => detect_table_format_with_storage(path, &storage).await,
+    match create_object_store(path).await {
+        Ok(storage) => detect_format(&storage).await,
         Err(_) => TableFormat::Unknown,
     }
 }
 
-/// Detect the table format using an existing storage backend
+/// Detect the table format using an existing storage (object_store)
 ///
 /// Checks for the presence of format-specific directories:
 /// - `_delta_log` for Delta Lake
 /// - `metadata` for Iceberg
-pub async fn detect_table_format_with_storage(
-    path: &str,
-    storage: &Arc<dyn StorageBackend>,
-) -> TableFormat {
-    let base_path = path.trim_end_matches('/');
-
+pub async fn detect_format(storage: &Storage) -> TableFormat {
     // Check for Delta Lake (_delta_log directory)
-    let delta_prefix = format!("{}/_delta_log/", base_path);
-    let list_opts = ListOptions {
-        prefix: Some(delta_prefix),
-        delimiter: None,
-        max_results: Some(1),
-        continuation_token: None,
-    };
-    if let Ok(result) = storage.list(&list_opts).await
-        && !result.objects.is_empty()
-    {
-        return TableFormat::Delta;
+    // The storage is already prefixed to the table path, so we just check relative paths
+    let delta_prefix = StoragePath::from("_delta_log");
+    if let Ok(item) = storage.list(Some(&delta_prefix)).try_next().await {
+        if item.is_some() {
+            return TableFormat::Delta;
+        }
     }
 
     // Check for Iceberg (metadata directory)
-    let iceberg_prefix = format!("{}/metadata/", base_path);
-    let list_opts = ListOptions {
-        prefix: Some(iceberg_prefix),
-        delimiter: None,
-        max_results: Some(1),
-        continuation_token: None,
-    };
-    if let Ok(result) = storage.list(&list_opts).await
-        && !result.objects.is_empty()
-    {
-        return TableFormat::Iceberg;
+    let iceberg_prefix = StoragePath::from("metadata");
+    if let Ok(item) = storage.list(Some(&iceberg_prefix)).try_next().await {
+        if item.is_some() {
+            return TableFormat::Iceberg;
+        }
     }
 
     TableFormat::Unknown
+}
+
+/// Legacy function for backward compatibility during migration
+pub async fn detect_table_format_with_storage(
+    _path: &str,
+    storage: &Storage,
+) -> TableFormat {
+    detect_format(storage).await
 }
 
 #[cfg(test)]

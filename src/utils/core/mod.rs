@@ -9,7 +9,8 @@ pub mod parquet;
 pub mod snapshot;
 
 pub use format_detection::{
-    TableFormat, detect_table_format, detect_table_format_async, detect_table_format_with_storage,
+    TableFormat, detect_table_format, detect_table_format_async, detect_format,
+    detect_table_format_with_storage,
 };
 pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
 pub use iceberg::iceberg_to_arrow_type;

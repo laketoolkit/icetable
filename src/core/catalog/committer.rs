@@ -24,8 +24,7 @@ use iceberg::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
 use serde::Serialize;
 
 use super::CatalogConfig;
-use crate::core::storage::traits::PutOptions;
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::error::{Error, Result};
 
 /// Request body for committing table updates via REST API
@@ -300,7 +299,7 @@ impl TableCommitter {
 
         let new_metadata = build_result.metadata;
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         // Find current metadata to derive next version
@@ -321,11 +320,7 @@ impl TableCommitter {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)
@@ -364,7 +359,7 @@ impl TableCommitter {
 
         let new_metadata = build_result.metadata;
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
@@ -383,11 +378,7 @@ impl TableCommitter {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)
@@ -483,7 +474,7 @@ impl TableCommitter {
 
         let new_metadata = build_result.metadata;
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
@@ -502,11 +493,7 @@ impl TableCommitter {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)
@@ -534,7 +521,7 @@ impl TableCommitter {
 
         let new_metadata = build_result.metadata;
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
@@ -553,11 +540,7 @@ impl TableCommitter {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)
@@ -629,7 +612,7 @@ impl TableCommitter {
 
         let new_metadata = build_result.metadata;
 
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
         let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
@@ -648,11 +631,7 @@ impl TableCommitter {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::storage::StorageBackend;
+use crate::core::storage::Storage;
 use crate::core::utils::{extract_version_from_path, find_latest_metadata};
 use crate::error::{Error, Result};
 
@@ -47,12 +47,12 @@ impl ConflictCheckResult {
 /// Conflict detector for Iceberg table operations
 pub struct ConflictDetector {
     table_path: String,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
 }
 
 impl ConflictDetector {
     /// Create a new conflict detector
-    pub fn new(table_path: String, storage: Arc<dyn StorageBackend>) -> Self {
+    pub fn new(table_path: String, storage: Storage) -> Self {
         Self {
             table_path,
             storage,
@@ -97,7 +97,7 @@ impl ConflictDetector {
 /// Helper function to check for conflicts and return error if found
 pub async fn check_and_fail_on_conflict(
     table_path: &str,
-    storage: &Arc<dyn StorageBackend>,
+    storage: &Storage,
     expected_version: i32,
 ) -> Result<()> {
     let detector = ConflictDetector::new(table_path.to_string(), Arc::clone(storage));

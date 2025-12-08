@@ -3,7 +3,7 @@
 use super::registry::PhysicalInspectorRegistry;
 use super::traits::PhysicalInspectOptions;
 use super::view_builder::{InspectionView, InspectionViewBuilder};
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::create_object_store;
 use crate::error::Result;
 use std::path::Path;
 
@@ -35,7 +35,7 @@ impl PhysicalInspectionService {
         let path_str = path.to_str().ok_or_else(|| {
             crate::error::Error::General("Invalid path: contains non-UTF8 characters".to_string())
         })?;
-        let storage = StorageBackendFactory::create_backend(path_str).await?;
+        let storage = create_object_store(path_str).await?;
 
         // 2. Detect format and create inspector
         let inspector = self.registry.create_inspector(path, storage).await?;

@@ -4,14 +4,13 @@
 //! Subcommands: list, create, expire, set, cherrypick
 
 use colored::Colorize;
-use std::sync::Arc;
 
 use super::common::{resolve_table, TableResolution};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::storage::{Storage, create_object_store};
 use crate::core::utils::detect_table_format_with_storage;
 use crate::core::{CatalogConfig, TableCommitter};
 use crate::core::TableFormat;
@@ -62,7 +61,7 @@ impl SnapshotCommand {
         let path = resolution.location();
 
         // Create storage backend
-        let storage = StorageBackendFactory::create_backend(&path).await?;
+        let storage = create_object_store(&path).await?;
 
         // Detect table format
         let format = detect_table_format_with_storage(&path, &storage).await;
@@ -85,7 +84,7 @@ impl SnapshotCommand {
     async fn execute_delta(
         _args: SnapshotArgs,
         _table_path: &str,
-        _storage: Arc<dyn StorageBackend>,
+        _storage: Storage,
     ) -> Result<()> {
         Err(Error::General(
             "Delta Lake snapshot management is not supported. Use 'icetable import delta' to convert Delta tables to Iceberg.".to_string(),
@@ -96,7 +95,7 @@ impl SnapshotCommand {
     async fn execute_delta(
         _args: SnapshotArgs,
         _table_path: &str,
-        _storage: Arc<dyn StorageBackend>,
+        _storage: Storage,
     ) -> Result<()> {
         Err(Error::UnsupportedFeature {
             feature: "Delta Lake support not enabled".to_string(),

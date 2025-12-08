@@ -1,10 +1,9 @@
 //! Registry for physical inspectors (Delta Lake, Iceberg)
 
 use super::traits::PhysicalInspector;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::Storage;
 use crate::error::{Error, Result};
 use std::path::Path;
-use std::sync::Arc;
 
 /// Factory trait for creating physical inspectors
 #[async_trait::async_trait]
@@ -13,12 +12,12 @@ pub trait PhysicalInspectorFactory: Send + Sync {
     fn create(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn PhysicalInspector>>;
 
     /// Check if this factory can handle the given path
     /// For remote storage (S3, etc.), this may need to check for directory existence
-    async fn can_handle(&self, path: &Path, storage: &Arc<dyn StorageBackend>) -> bool;
+    async fn can_handle(&self, path: &Path, storage: &Storage) -> bool;
 
     /// Get the priority of this factory (higher = checked first)
     fn priority(&self) -> i32 {
@@ -65,7 +64,7 @@ impl PhysicalInspectorRegistry {
     pub async fn create_inspector(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn PhysicalInspector>> {
         for factory in &self.factories {
             if factory.can_handle(path, &storage).await {
@@ -79,7 +78,7 @@ impl PhysicalInspectorRegistry {
     }
 
     /// Check if any factory can handle the given path
-    pub async fn can_handle(&self, path: &Path, storage: &Arc<dyn StorageBackend>) -> bool {
+    pub async fn can_handle(&self, path: &Path, storage: &Storage) -> bool {
         for factory in &self.factories {
             if factory.can_handle(path, storage).await {
                 return true;

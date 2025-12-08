@@ -9,8 +9,7 @@ use std::sync::Arc;
 use super::manifest::normalize_path;
 use crate::core::inspection::traits::{OrphanFileEntry, OrphanFilesInfo};
 use crate::core::metadata::{IcebergMetadataService, MetadataService};
-use crate::core::storage::traits::GetOptions;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::{Storage, ObjectStoreExt};
 use crate::error::Result;
 
 /// Detect orphan files - files in data/ not tracked in metadata
@@ -19,7 +18,7 @@ use crate::error::Result;
 /// - `deep_scan=false`: Check only current snapshot (fast but may have false positives)
 pub async fn detect_orphan_files(
     table_path: &str,
-    storage: &Arc<dyn StorageBackend>,
+    storage: &Storage,
     metadata: &serde_json::Value,
     deep_scan: bool,
 ) -> Result<OrphanFilesInfo> {
@@ -87,7 +86,7 @@ pub async fn detect_orphan_files(
 /// IcebergMetadataService::get_all_referenced_files() instead.
 /// This method is used for quick scans (current snapshot only).
 pub async fn get_tracked_files(
-    storage: &Arc<dyn StorageBackend>,
+    storage: &Storage,
     metadata: &serde_json::Value,
     table_location: &str,
 ) -> Result<HashSet<String>> {
@@ -118,13 +117,7 @@ pub async fn get_tracked_files(
     let manifest_list_path = normalize_path(manifest_list, table_location);
 
     // Read manifest list
-    let get_opts = GetOptions {
-        range: None,
-        if_modified_since: None,
-        if_none_match: None,
-    };
-
-    let manifest_list_bytes = match storage.get(&manifest_list_path, &get_opts).await {
+    let manifest_list_bytes = match storage.get_bytes_str(&manifest_list_path).await {
         Ok(bytes) => bytes,
         Err(_) => return Ok(HashSet::new()),
     };
@@ -171,12 +164,7 @@ pub async fn get_tracked_files(
             let storage = Arc::clone(storage);
             let pb = pb.clone();
             async move {
-                let get_opts = GetOptions {
-                    range: None,
-                    if_modified_since: None,
-                    if_none_match: None,
-                };
-                let result = if let Ok(bytes) = storage.get(&path, &get_opts).await {
+                let result = if let Ok(bytes) = storage.get_bytes_str(&path).await {
                     if let Ok(reader) = Reader::new(&bytes[..]) {
                         extract_file_paths(reader)
                     } else {

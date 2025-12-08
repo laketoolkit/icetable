@@ -5,10 +5,8 @@
 //! 2. Table integrity (metadata, manifests, data files)
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
-use crate::core::storage::traits::GetOptions;
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::storage::{Storage, create_object_store, detect_storage_type, ObjectStoreExt};
 use crate::error::Result;
 
 /// Check result status
@@ -238,7 +236,7 @@ impl DoctorService {
 
     /// Test storage connectivity
     pub async fn check_storage_connectivity() -> CheckResult {
-        match StorageBackendFactory::create_backend("file:///tmp").await {
+        match create_object_store("file:///tmp").await {
             Ok(_) => CheckResult::ok("Storage connectivity", "Local filesystem available"),
             Err(e) => CheckResult::error(
                 "Storage connectivity",
@@ -257,11 +255,11 @@ impl DoctorService {
         let mut checks = Vec::new();
 
         // Create storage backend
-        let storage: Arc<dyn StorageBackend> = match StorageBackendFactory::create_backend(table_path).await {
+        let storage: Storage = match create_object_store(table_path).await {
             Ok(s) => {
                 checks.push(CheckResult::ok(
                     "Storage Access",
-                    format!("Connected to {}", s.storage_type()),
+                    format!("Connected to {} storage", detect_storage_type(table_path)),
                 ));
                 s
             }
@@ -300,7 +298,7 @@ impl DoctorService {
     /// Check metadata format (standard Iceberg naming)
     async fn check_metadata_format(
         &self,
-        storage: &Arc<dyn StorageBackend>,
+        storage: &Storage,
         table_path: &str,
     ) -> (CheckResult, Option<i32>) {
         use crate::core::utils::{extract_version_from_path, find_latest_metadata};
@@ -353,7 +351,7 @@ impl DoctorService {
     /// Check metadata JSON is valid
     async fn check_metadata_json(
         &self,
-        storage: &Arc<dyn StorageBackend>,
+        storage: &Storage,
         table_path: &str,
         _version: Option<i32>,
     ) -> (CheckResult, Option<serde_json::Value>) {
@@ -373,8 +371,7 @@ impl DoctorService {
             }
         };
 
-        let get_opts = GetOptions::default();
-        match storage.get(&metadata_path, &get_opts).await {
+        match storage.get_bytes_str(&metadata_path).await {
             Ok(bytes) => {
                 let content = String::from_utf8_lossy(&bytes);
                 match serde_json::from_str::<serde_json::Value>(&content) {
@@ -504,7 +501,7 @@ impl DoctorService {
     /// Check that manifest files exist
     async fn check_manifests_exist(
         &self,
-        storage: &Arc<dyn StorageBackend>,
+        storage: &Storage,
         table_path: &str,
         metadata: &serde_json::Value,
     ) -> CheckResult {
@@ -545,8 +542,7 @@ impl DoctorService {
             }
         };
 
-        let get_opts = GetOptions::default();
-        let manifest_list_bytes = match storage.get(&manifest_list_path, &get_opts).await {
+        let manifest_list_bytes = match storage.get_bytes_str(&manifest_list_path).await {
             Ok(b) => b,
             Err(_) => {
                 return CheckResult::error(
@@ -588,7 +584,7 @@ impl DoctorService {
 
         let mut missing = 0;
         for path in &manifest_paths {
-            if !storage.exists(path).await.unwrap_or(false) {
+            if !storage.exists_str(path).await.unwrap_or(false) {
                 missing += 1;
             }
         }
@@ -607,7 +603,7 @@ impl DoctorService {
     /// Check that data files exist (slow operation)
     async fn check_data_files_exist(
         &self,
-        storage: &Arc<dyn StorageBackend>,
+        storage: &Storage,
         table_path: &str,
         metadata: &serde_json::Value,
     ) -> CheckResult {
@@ -642,8 +638,7 @@ impl DoctorService {
             None => return CheckResult::warning("Data Files", "No manifest-list to check", ""),
         };
 
-        let get_opts = GetOptions::default();
-        let manifest_list_bytes = match storage.get(&manifest_list_path, &get_opts).await {
+        let manifest_list_bytes = match storage.get_bytes_str(&manifest_list_path).await {
             Ok(b) => b,
             Err(_) => return CheckResult::error("Data Files", "Cannot read manifest list", ""),
         };
@@ -674,7 +669,7 @@ impl DoctorService {
         // Collect data files from manifests
         let mut data_files = Vec::new();
         for manifest_path in &manifest_paths {
-            let manifest_bytes = match storage.get(manifest_path, &get_opts).await {
+            let manifest_bytes = match storage.get_bytes_str(manifest_path).await {
                 Ok(b) => b,
                 Err(_) => continue,
             };
@@ -719,7 +714,7 @@ impl DoctorService {
         let total_files = data_files.len();
         let mut missing = 0;
         for file_path in &data_files {
-            if !storage.exists(file_path).await.unwrap_or(false) {
+            if !storage.exists_str(file_path).await.unwrap_or(false) {
                 missing += 1;
             }
         }

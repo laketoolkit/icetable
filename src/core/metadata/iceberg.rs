@@ -20,7 +20,7 @@ use object_store::ObjectStore;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
-use crate::core::storage::{ObjectStoreAdapter, StorageBackend, StorageBackendFactory, s3};
+use crate::core::storage::{Storage, create_object_store, ObjectStoreExt};
 use crate::core::utils::{
     extract_version_from_path, find_latest_metadata, iceberg_to_arrow_type,
 };
@@ -34,7 +34,7 @@ use super::iceberg_writer::IcebergSnapshotWriter;
 pub struct IcebergMetadataService {
     table_path: String,
     file_io: FileIO,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
     /// Target branch for operations (defaults to "main")
     target_branch: Option<String>,
     /// Optional committer for catalog-aware commits
@@ -45,7 +45,7 @@ impl IcebergMetadataService {
     /// Create a new Iceberg metadata service
     pub async fn new_async(table_path: String) -> Result<Self> {
         let file_io = Self::create_file_io(&table_path)?;
-        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+        let storage = create_object_store(&table_path).await?;
 
         Ok(Self {
             table_path,
@@ -59,7 +59,7 @@ impl IcebergMetadataService {
     /// Create a new Iceberg metadata service targeting a specific branch
     pub async fn new_with_branch(table_path: String, branch: Option<String>) -> Result<Self> {
         let file_io = Self::create_file_io(&table_path)?;
-        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+        let storage = create_object_store(&table_path).await?;
 
         Ok(Self {
             table_path,
@@ -77,7 +77,7 @@ impl IcebergMetadataService {
         committer: TableCommitter,
     ) -> Result<Self> {
         let file_io = Self::create_file_io(&table_path)?;
-        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+        let storage = create_object_store(&table_path).await?;
 
         Ok(Self {
             table_path,
@@ -167,7 +167,7 @@ impl IcebergMetadataService {
     }
 
     /// Get the storage backend
-    pub fn storage(&self) -> &Arc<dyn StorageBackend> {
+    pub fn storage(&self) -> &Storage {
         &self.storage
     }
 
@@ -179,9 +179,8 @@ impl IcebergMetadataService {
     /// List all references (branches and tags) from raw metadata JSON
     /// Returns a list of (name, snapshot_id, ref_type) tuples
     pub async fn list_refs(&self) -> Result<Vec<RefInfo>> {
-        use crate::core::storage::GetOptions;
         let metadata_path = self.current_metadata_path().await?;
-        let content = self.storage.get(&metadata_path, &GetOptions::default()).await?;
+        let content = self.storage.get_bytes_str(&metadata_path).await?;
         let json: serde_json::Value = serde_json::from_slice(&content)
             .map_err(|e| Error::General(format!("Failed to parse metadata JSON: {}", e)))?;
 
@@ -669,7 +668,6 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>> {
-        use crate::core::storage::traits::ListOptions;
         use indicatif::{ProgressBar, ProgressStyle};
 
         let data_prefix = format!("{}/data/", self.table_path.trim_end_matches('/'));
@@ -682,27 +680,19 @@ impl MetadataService for IcebergMetadataService {
         );
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        // Don't set max_results - let object_store handle pagination internally
-        let list_opts = ListOptions {
-            prefix: Some(data_prefix),
-            delimiter: None,
-            max_results: None,
-            continuation_token: None,
-        };
-
-        let result = self.storage.list(&list_opts).await?;
+        let all_objects = self.storage.list_prefix(&data_prefix).await?;
 
         pb.finish_and_clear();
 
-        let all_files: Vec<DataFileInfo> = result
-            .objects
+        let all_files: Vec<DataFileInfo> = all_objects
             .iter()
-            .filter(|obj| obj.path.ends_with(".parquet"))
+            .filter(|obj| obj.location.to_string().ends_with(".parquet"))
             .map(|obj| {
-                let partition = iceberg_partition::extract_partition_from_path_static(&obj.path);
+                let path_str = obj.location.to_string();
+                let partition = iceberg_partition::extract_partition_from_path_static(&path_str);
                 DataFileInfo {
-                    path: obj.path.clone(),
-                    size: obj.size,
+                    path: path_str,
+                    size: obj.size as u64,
                     record_count: 0,
                     partition,
                 }
@@ -825,21 +815,7 @@ impl MetadataService for IcebergMetadataService {
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {
-        // For S3/GCS/Azure, use native object_store to get multipart upload support
-        if self.table_path.starts_with("s3://") {
-            s3::create_s3_object_store(&self.table_path).unwrap_or_else(|_| {
-                // Fallback to adapter if native creation fails
-                Arc::new(ObjectStoreAdapter::new(
-                    self.storage.clone(),
-                    self.table_path.clone(),
-                ))
-            })
-        } else {
-            // For local filesystem, use our adapter
-            Arc::new(ObjectStoreAdapter::new(
-                self.storage.clone(),
-                self.table_path.clone(),
-            ))
-        }
+        // storage is already an Arc<dyn ObjectStore>, just clone it
+        self.storage.clone()
     }
 }

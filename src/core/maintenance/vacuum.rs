@@ -11,8 +11,7 @@ use futures::stream::{self, StreamExt};
 use iceberg::spec::ManifestList;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
-use crate::core::storage::traits::ListOptions;
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::core::utils::{format_bytes, sizes};
 use crate::error::{Error, Result};
 
@@ -130,18 +129,11 @@ impl VacuumService {
             .collect();
 
         // Step 3: List all files in data directory
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let base_path = table_path.trim_end_matches('/');
         let data_prefix = format!("{}/data/", base_path);
 
-        let list_opts = ListOptions {
-            prefix: Some(data_prefix),
-            delimiter: None,
-            max_results: None,
-            continuation_token: None,
-        };
-
-        let all_files = storage.list(&list_opts).await?;
+        let all_files = storage.list_prefix(&data_prefix).await?;
 
         // Step 4: Calculate cutoff time and find orphan files
         let cutoff_time =
@@ -151,19 +143,20 @@ impl VacuumService {
         let mut orphan_files: Vec<OrphanFile> = Vec::new();
         let mut orphan_bytes: u64 = 0;
 
-        for obj in &all_files.objects {
-            let filename = obj.path.rsplit('/').next().unwrap_or(&obj.path);
+        for obj in &all_files {
+            let path_str = obj.location.to_string();
+            let filename = path_str.rsplit('/').next().unwrap_or(&path_str);
             let is_referenced = referenced_filenames.contains(filename);
 
             if !is_referenced {
                 let file_time_ms = obj.last_modified.timestamp_millis();
                 if file_time_ms < cutoff_ms {
                     orphan_files.push(OrphanFile {
-                        path: obj.path.clone(),
-                        size: obj.size,
+                        path: path_str.clone(),
+                        size: obj.size as u64,
                         mtime_ms: file_time_ms,
                     });
-                    orphan_bytes += obj.size;
+                    orphan_bytes += obj.size as u64;
                 }
             }
         }
@@ -201,13 +194,13 @@ impl VacuumService {
         }
 
         // Actually delete the files
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
         let mut deleted_count = 0;
         let mut deleted_bytes = 0u64;
         let mut errors = Vec::new();
 
         for file in &analysis.orphan_files {
-            match storage.delete(&file.path).await {
+            match storage.delete_str(&file.path).await {
                 Ok(_) => {
                     deleted_count += 1;
                     deleted_bytes += file.size;

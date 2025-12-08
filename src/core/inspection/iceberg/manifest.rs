@@ -3,10 +3,8 @@
 use apache_avro::Reader;
 use std::collections::HashMap;
 
-use crate::core::storage::traits::GetOptions;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::{Storage, ObjectStoreExt};
 use crate::error::{Error, Result};
-use std::sync::Arc;
 
 /// Statistics collected from manifest files
 #[derive(Debug, Default)]
@@ -29,20 +27,14 @@ pub struct PartitionInfo {
 
 /// Read manifest statistics from a manifest list
 pub async fn read_manifest_stats(
-    storage: &Arc<dyn StorageBackend>,
+    storage: &Storage,
     table_location: &str,
     manifest_list_path: &str,
 ) -> Result<ManifestStats> {
     let mut stats = ManifestStats::default();
 
-    let get_opts = GetOptions {
-        range: None,
-        if_modified_since: None,
-        if_none_match: None,
-    };
-
     let manifest_list_bytes = storage
-        .get(manifest_list_path, &get_opts)
+        .get_bytes_str(manifest_list_path)
         .await
         .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
 
@@ -68,7 +60,7 @@ pub async fn read_manifest_stats(
             if let Some(path) = manifest_path {
                 let full_manifest_path = normalize_path(&path, table_location);
 
-                if let Ok(manifest_bytes) = storage.get(&full_manifest_path, &get_opts).await
+                if let Ok(manifest_bytes) = storage.get_bytes_str(&full_manifest_path).await
                     && let Ok(manifest_reader) = Reader::new(&manifest_bytes[..])
                 {
                     process_manifest_entries(manifest_reader, &mut stats)?;

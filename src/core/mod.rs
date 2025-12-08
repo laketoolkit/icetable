@@ -21,7 +21,7 @@ pub use catalog::{CatalogClient, CatalogConfig, CatalogType, RestCatalogClient, 
 pub use context::{TableContext, TableContextBuilder};
 pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
-pub use storage::{StorageBackend, StorageBackendFactory};
+pub use storage::{create_object_store, ObjectStoreExt, Storage};
 pub use utils::{
     TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
 };

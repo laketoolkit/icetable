@@ -13,7 +13,7 @@ use iceberg::spec::{
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{PutOptions, StorageBackendFactory};
+use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::core::utils::{
     extract_version_from_path, metadata_location_filename, new_metadata_location,
     next_metadata_location,
@@ -569,7 +569,7 @@ impl ManifestService {
         metadata_file_path: &str,
         new_metadata: &TableMetadata,
     ) -> Result<u32> {
-        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let storage = create_object_store(table_path).await?;
 
         let next_location = next_metadata_location(metadata_file_path)
             .unwrap_or_else(|_| new_metadata_location(table_path));
@@ -583,11 +583,7 @@ impl ManifestService {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         storage
-            .put(
-                &new_metadata_path,
-                bytes::Bytes::from(new_metadata_bytes),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
             .await?;
 
         Ok(new_version)

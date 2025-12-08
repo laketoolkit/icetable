@@ -1,41 +1,38 @@
-//! Storage backend implementations
+//! Storage backends and object store utilities
 //!
-//! This module contains implementations of the StorageBackend trait for various
-//! storage systems including local filesystem, S3, GCS, and Azure Blob Storage.
+//! This module provides a unified interface for accessing storage systems
+//! using Apache Arrow's [`object_store`] crate directly for maximum
+//! compatibility with the Arrow/Parquet ecosystem.
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! use icetable::core::storage::{create_object_store, ObjectStoreExt, to_path};
+//!
+//! // Create a store from a URL
+//! let store = create_object_store("s3://my-bucket/tables").await?;
+//!
+//! // Use extension methods for convenience
+//! let exists = store.exists(&to_path("metadata/v1.metadata.json")).await?;
+//! let data = store.get_bytes(&to_path("data/file.parquet")).await?;
+//! ```
+//!
+//! # Supported Storage Systems
+//!
+//! - Local filesystem: `/path/to/table` or `file:///path/to/table`
+//! - Amazon S3: `s3://bucket/prefix`
+//! - Google Cloud Storage: `gs://bucket/prefix`
+//! - Azure Blob Storage: `az://container/prefix`
 
-pub mod traits;
+pub mod ext;
+pub mod factory;
 
-// Core infrastructure for cloud storage backends
-pub mod base;
-pub mod path_parser;
-pub mod retry;
+// Re-export API
+pub use ext::{from_path, to_path, ObjectStoreExt};
+pub use factory::{create_object_store, detect_storage_type, parse_storage_url, Storage};
 
-// Storage implementations - these will be implemented by Rust-Developer
-pub mod azure;
-pub mod gcs;
-pub mod local;
-pub mod s3;
-
-// ObjectStore adapter for DataFusion integration
-pub mod object_store_adapter;
-
-/// Seekable reader for efficient remote file access
-pub mod seekable_reader;
-
-// Re-export core types
-pub use traits::{
-    GetOptions, ListOptions, ListResult, ObjectMetadata, PutOptions, StorageBackend,
-    StorageBackendFactory,
+// Re-export object_store types for convenience
+pub use object_store::{
+    path::Path as StoragePath, GetOptions as ObjGetOptions, ObjectMeta, ObjectStore,
+    PutOptions as ObjPutOptions, PutPayload,
 };
-
-// Re-export storage backends
-pub use azure::AzureBackend;
-pub use gcs::GcsBackend;
-pub use local::LocalBackend;
-pub use s3::S3Backend;
-
-// Re-export adapter
-pub use object_store_adapter::ObjectStoreAdapter;
-
-// Re-export seekable reader
-pub use seekable_reader::SeekableReader;

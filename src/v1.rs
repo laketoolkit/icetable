@@ -14,26 +14,18 @@
 //! # Usage
 //!
 //! ```ignore
-//! use icetable::v1::formats::{FormatHandlerRegistry, ReadOptions, WriteOptions};
-//! use icetable::v1::storage::StorageBackendFactory;
+//! use icetable::v1::storage::{create_object_store, ObjectStoreExt};
 //! use icetable::v1::Result;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Create storage backend
-//!     let storage = StorageBackendFactory::create_backend("data.parquet").await?;
+//!     // Create object store from URL or path
+//!     let store = create_object_store("/path/to/table").await?;
 //!
-//!     // Get format handler using registry
-//!     let handler = FormatHandlerRegistry::global()
-//!         .create_handler(Path::new("data.parquet"), storage)
-//!         .await?;
+//!     // Use extension methods for convenient access
+//!     let exists = store.exists_str("metadata/v1.metadata.json").await?;
+//!     println!("Table exists: {}", exists);
 //!
-//!     // Read with options
-//!     let options = ReadOptions::builder()
-//!         .limit(100)
-//!         .build();
-//!
-//!     let batches = handler.read_batches(&options).await?;
 //!     Ok(())
 //! }
 //! ```
@@ -61,14 +53,14 @@ pub mod storage {
     //!
     //! # Core Types
     //!
-    //! - [`StorageBackend`] - Trait for implementing storage backends
-    //! - [`StorageBackendFactory`] - Factory for creating storage backends
-    //! - [`ObjectMetadata`] - Metadata about stored objects
+    //! - [`Storage`] - Type alias for `Arc<dyn ObjectStore>`
+    //! - [`ObjectStoreExt`] - Extension trait with convenience methods
+    //! - [`ObjectMeta`] - Metadata about stored objects
+    //! - [`create_object_store`] - Create storage from URL or path
 
-    pub use crate::core::storage::{ObjectMetadata, StorageBackend, StorageBackendFactory};
-
-    /// Options for storage operations (stable)
-    pub use crate::core::storage::{GetOptions, ListOptions, PutOptions};
+    pub use crate::core::storage::{
+        create_object_store, detect_storage_type, ObjectMeta, ObjectStoreExt, Storage,
+    };
 }
 
 pub mod transform {

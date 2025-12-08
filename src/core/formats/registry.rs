@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::core::storage::StorageBackend;
+use crate::core::storage::Storage;
 use crate::error::Result;
 
 use super::FormatHandler;
@@ -14,7 +14,7 @@ use super::traits::TimeTravelOptions;
 
 /// Factory function type for creating format handlers
 pub type FormatHandlerFactoryFn =
-    Arc<dyn Fn(&Path, Arc<dyn StorageBackend>) -> Result<Box<dyn FormatHandler>> + Send + Sync>;
+    Arc<dyn Fn(&Path, Storage) -> Result<Box<dyn FormatHandler>> + Send + Sync>;
 
 /// Registry for table format handlers (Delta Lake, Iceberg)
 ///
@@ -48,7 +48,7 @@ impl FormatHandlerRegistry {
     /// Higher priority handlers are checked first.
     pub fn register<F>(&self, name: &str, priority: i32, factory: F)
     where
-        F: Fn(&Path, Arc<dyn StorageBackend>) -> Result<Box<dyn FormatHandler>>
+        F: Fn(&Path, Storage) -> Result<Box<dyn FormatHandler>>
             + Send
             + Sync
             + 'static,
@@ -63,7 +63,7 @@ impl FormatHandlerRegistry {
     pub async fn create_handler(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn FormatHandler>> {
         self.create_handler_with_options(path, storage, TimeTravelOptions::default())
             .await
@@ -73,7 +73,7 @@ impl FormatHandlerRegistry {
     pub async fn create_handler_with_options(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
         time_travel: TimeTravelOptions,
     ) -> Result<Box<dyn FormatHandler>> {
         // If time-travel options are set, create handlers directly with options
@@ -108,7 +108,7 @@ impl FormatHandlerRegistry {
     async fn create_time_travel_handler(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
         time_travel: TimeTravelOptions,
     ) -> Result<Box<dyn FormatHandler>> {
         // Try Delta Lake first

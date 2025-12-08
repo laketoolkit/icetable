@@ -7,7 +7,7 @@ use colored::Colorize;
 #[cfg(feature = "delta")]
 use crate::cli::parser::ImportDeltaArgs;
 use crate::cli::parser::ImportParquetArgs;
-use crate::core::storage::traits::{GetOptions, ObjectMetadata};
+use crate::core::storage::{ObjectMeta, ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
 use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
@@ -194,8 +194,7 @@ impl ImportCommand {
     }
     
     async fn parquet_inner(args: ImportParquetArgs) -> Result<()> {
-        use crate::core::storage::StorageBackendFactory;
-        use crate::core::storage::traits::ListOptions;
+        use crate::core::storage::create_object_store;
 
         println!(
             "{} Parquet files from {} to Iceberg at {}",
@@ -210,25 +209,19 @@ impl ImportCommand {
         );
 
         // Create storage backend for source
-        let storage = StorageBackendFactory::create_backend(&args.source).await?;
+        let storage = create_object_store(&args.source).await?;
 
         // Simple pattern matching for file names
         let pattern = args.pattern.clone();
 
-        let list_opts = ListOptions {
-            prefix: Some(args.source.clone()),
-            delimiter: None,
-            max_results: None,
-            continuation_token: None,
-        };
+        // List all files in the source directory
+        let all_objects = storage.list_all(None).await?;
 
-        let result = storage.list(&list_opts).await?;
-
-        let parquet_files: Vec<_> = result
-            .objects
+        let parquet_files: Vec<_> = all_objects
             .iter()
             .filter(|obj| {
-                let name = obj.path.rsplit('/').next().unwrap_or(&obj.path);
+                let path_str = obj.location.to_string();
+                let name = path_str.rsplit('/').next().unwrap_or(&path_str);
                 if name.ends_with(".parquet") {
                     // Simple glob matching: *.parquet matches all, **/*.parquet matches all
                     if pattern == "*.parquet" || pattern == "**/*.parquet" {
@@ -250,7 +243,7 @@ impl ImportCommand {
         }
 
         let total_files = parquet_files.len();
-        let total_bytes: u64 = parquet_files.iter().map(|f| f.size).sum();
+        let total_bytes: u64 = parquet_files.iter().map(|f| f.size as u64).sum();
 
         println!();
         println!("Parquet Files Summary:");
@@ -263,12 +256,13 @@ impl ImportCommand {
             println!();
             println!("Files to import:");
             for (i, file) in parquet_files.iter().take(10).enumerate() {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                let path_str = file.location.to_string();
+                let name = path_str.rsplit('/').next().unwrap_or(&path_str);
                 println!(
                     "  {}. {} ({})",
                     i + 1,
                     name,
-                    crate::core::format_bytes(file.size)
+                    crate::core::format_bytes(file.size as u64)
                 );
             }
             if total_files > 10 {
@@ -294,8 +288,8 @@ impl ImportCommand {
     /// Helper to import parquet files into Iceberg table
     async fn import_parquet_to_iceberg(
         target_path: &str,
-        files: &[&ObjectMetadata],
-        storage: &std::sync::Arc<dyn crate::core::storage::StorageBackend>,
+        files: &[&ObjectMeta],
+        storage: &Storage,
     ) -> Result<()> {
         use crate::core::metadata::IcebergMetadataService;
         use parquet::file::reader::FileReader;
@@ -319,16 +313,16 @@ impl ImportCommand {
 
         for file in files {
             // Read parquet file to get row count
-            let get_opts = GetOptions::default();
-            let data = storage.get(&file.path, &get_opts).await?;
+            let file_path = file.location.to_string();
+            let data = storage.get_bytes_str(&file_path).await?;
             let reader = parquet::file::reader::SerializedFileReader::new(data)
                 .map_err(|e| Error::General(format!("Failed to read parquet: {}", e)))?;
             let metadata = reader.metadata();
             let row_count: i64 = metadata.row_groups().iter().map(|rg| rg.num_rows()).sum();
 
             changes.added.push(crate::core::metadata::DataFileInfo {
-                path: file.path.clone(),
-                size: file.size,
+                path: file_path,
+                size: file.size as u64,
                 record_count: row_count as u64,
                 partition: HashMap::new(),
             });

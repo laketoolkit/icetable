@@ -13,7 +13,7 @@ use crate::core::format_bytes;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::inspection::formatters::format_number;
 use crate::core::maintenance::PartitionFilter;
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::create_object_store;
 use crate::core::CatalogConfig;
 use crate::error::Result;
 
@@ -44,7 +44,7 @@ impl StatsCommand {
         let path = Path::new(&table_path);
 
         // Create storage backend
-        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+        let storage = create_object_store(&table_path).await?;
 
         // Get format handler
         let handler = if let Some(format) = &args.format {

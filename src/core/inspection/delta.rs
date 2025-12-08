@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::core::storage::{GetOptions, StorageBackend};
+use crate::core::storage::{Storage, ObjectStoreExt, to_path};
 use crate::error::{Error, Result};
 
 use super::formatters::{format_bytes, format_number};
@@ -23,12 +23,12 @@ use serde_json::Value as JsonValue;
 /// Delta Lake physical inspector
 pub struct DeltaInspector {
     path: PathBuf,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
 }
 
 impl DeltaInspector {
     /// Create a new Delta Lake inspector
-    pub fn new(path: PathBuf, storage: Arc<dyn StorageBackend>) -> Self {
+    pub fn new(path: PathBuf, storage: Storage) -> Self {
         Self { path, storage }
     }
 
@@ -273,12 +273,12 @@ impl PhysicalInspectorFactory for DeltaInspectorFactory {
     fn create(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn PhysicalInspector>> {
         Ok(Box::new(DeltaInspector::new(path.to_path_buf(), storage)))
     }
 
-    async fn can_handle(&self, path: &Path, storage: &Arc<dyn StorageBackend>) -> bool {
+    async fn can_handle(&self, path: &Path, storage: &Storage) -> bool {
         // Check for _delta_log directory by trying to list files in it
         let path_str = path.to_str().unwrap_or("");
 
@@ -337,7 +337,7 @@ struct FileStats {
 #[cfg(feature = "delta")]
 /// Read file statistics from Delta transaction log
 async fn read_file_stats(
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
     table_path: &str,
     version: i64,
 ) -> Result<FileStats> {
@@ -410,7 +410,7 @@ async fn read_file_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::storage::LocalBackend;
+    use object_store::local::LocalFileSystem;
 
     #[test]
     fn test_can_inspect_delta_table() {
@@ -422,10 +422,8 @@ mod tests {
         let delta_log = table_path.join("_delta_log");
         fs::create_dir(&delta_log).unwrap();
 
-        let inspector = DeltaInspector::new(
-            table_path.to_path_buf(),
-            Arc::new(LocalBackend::new().unwrap()),
-        );
+        let storage: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
+        let inspector = DeltaInspector::new(table_path.to_path_buf(), storage);
         assert!(inspector.can_inspect(table_path));
     }
 
@@ -436,10 +434,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let table_path = temp_dir.path();
 
-        let inspector = DeltaInspector::new(
-            table_path.to_path_buf(),
-            Arc::new(LocalBackend::new().unwrap()),
-        );
+        let storage: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
+        let inspector = DeltaInspector::new(table_path.to_path_buf(), storage);
         assert!(!inspector.can_inspect(table_path));
     }
 
@@ -456,10 +452,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let table_path = temp_dir.path();
 
-        let inspector = DeltaInspector::new(
-            table_path.to_path_buf(),
-            Arc::new(LocalBackend::new().unwrap()),
-        );
+        let storage: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
+        let inspector = DeltaInspector::new(table_path.to_path_buf(), storage);
         assert_eq!(inspector.format_name(), "Delta Lake");
     }
 

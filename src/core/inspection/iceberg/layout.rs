@@ -7,9 +7,8 @@ use super::parse_summary_value;
 use crate::core::inspection::traits::{
     FileBasedLayout, LayoutInfo, PhysicalInspectOptions, StatisticsInfo, VerbosityLevel,
 };
-use crate::core::storage::StorageBackend;
+use crate::core::storage::Storage;
 use crate::error::{Error, Result};
-use std::sync::Arc;
 
 /// Extract layout information from Iceberg metadata
 pub fn extract_layout_info(
@@ -173,7 +172,7 @@ pub fn extract_layout_info(
 
 /// Extract statistics from Iceberg metadata
 pub async fn extract_statistics(
-    storage: &Arc<dyn StorageBackend>,
+    storage: &Storage,
     table_path: &str,
     metadata: &serde_json::Value,
     options: &PhysicalInspectOptions,

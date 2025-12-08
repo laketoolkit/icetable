@@ -2,12 +2,11 @@
 
 use async_trait::async_trait;
 use std::path::Path;
-use std::sync::Arc;
 
 use super::IcebergInspector;
 use crate::core::inspection::PhysicalInspectorFactory;
 use crate::core::inspection::traits::PhysicalInspector;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::Storage;
 use crate::error::Result;
 
 /// Factory for creating Iceberg inspectors
@@ -18,12 +17,12 @@ impl PhysicalInspectorFactory for IcebergInspectorFactory {
     fn create(
         &self,
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn PhysicalInspector>> {
         Ok(Box::new(IcebergInspector::new(path.to_path_buf(), storage)))
     }
 
-    async fn can_handle(&self, path: &Path, storage: &Arc<dyn StorageBackend>) -> bool {
+    async fn can_handle(&self, path: &Path, storage: &Storage) -> bool {
         // Check for metadata directory by trying to list files in it
         let path_str = path.to_str().unwrap_or("");
 
@@ -47,16 +46,15 @@ impl PhysicalInspectorFactory for IcebergInspectorFactory {
             format!("{}/metadata/", clean_path)
         };
 
-        let list_opts = crate::core::storage::traits::ListOptions {
-            prefix: Some(metadata_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
+        use futures::TryStreamExt;
 
-        match storage.list(&list_opts).await {
-            Ok(result) => !result.objects.is_empty(),
-            Err(_) => false,
+        let prefix_path = crate::core::storage::to_path(&metadata_prefix);
+        let mut stream = storage.list(Some(&prefix_path));
+
+        // Check if we can get at least one item
+        match stream.try_next().await {
+            Ok(Some(_)) => true,
+            _ => false,
         }
     }
 

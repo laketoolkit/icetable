@@ -16,19 +16,19 @@ use iceberg::table::StaticTable;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::{Storage, detect_storage_type};
 use crate::error::{Error, Result};
 
 /// Handler for Apache Iceberg tables
 pub struct IcebergHandler {
     path: PathBuf,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
     time_travel: TimeTravelOptions,
 }
 
 impl IcebergHandler {
     /// Create a new Iceberg handler
-    pub fn new(path: &Path, storage: Arc<dyn StorageBackend>) -> Result<Self> {
+    pub fn new(path: &Path, storage: Storage) -> Result<Self> {
         Ok(Self {
             path: path.to_path_buf(),
             storage,
@@ -39,7 +39,7 @@ impl IcebergHandler {
     /// Create a new Iceberg handler with time-travel options
     pub fn with_time_travel(
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
         time_travel: TimeTravelOptions,
     ) -> Result<Self> {
         Ok(Self {
@@ -308,7 +308,8 @@ impl FormatHandler for IcebergHandler {
         };
 
         // For local storage, check if metadata directory exists
-        if self.storage.storage_type() == "local" {
+        let path_str = self.path.to_str().unwrap_or("");
+        if detect_storage_type(path_str) == "local" {
             let metadata_path = Path::new(&metadata_dir);
             if metadata_path.exists() && metadata_path.is_dir() {
                 return Ok(true);

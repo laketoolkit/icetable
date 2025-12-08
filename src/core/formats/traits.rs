@@ -5,6 +5,7 @@
 //! (Delta Lake, Iceberg).
 
 use arrow::datatypes::Schema;
+use crate::core::storage::{detect_storage_type, Storage};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use std::path::Path;
@@ -376,7 +377,7 @@ impl FormatHandlerFactory {
     pub async fn create_handler_for_format(
         format: &str,
         path: &Path,
-        storage: Arc<dyn crate::core::storage::StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn FormatHandler>> {
         match format.to_lowercase().as_str() {
             "delta" => {
@@ -405,13 +406,13 @@ impl FormatHandlerFactory {
     /// Detect the table format and create an appropriate handler
     pub async fn create_handler(
         path: &Path,
-        storage: Arc<dyn crate::core::storage::StorageBackend>,
+        storage: Storage,
     ) -> Result<Box<dyn FormatHandler>> {
         // Use storage-based detection that works with cloud storage
         let path_str = path.to_str().unwrap_or("");
 
         // For cloud storage, use listing-based detection
-        if storage.storage_type() != "local" {
+        if detect_storage_type(path_str) != "local" {
             // Check for Delta Lake (_delta_log directory)
             if Self::check_delta_exists(path_str, &storage).await {
                 #[cfg(feature = "delta")]
@@ -460,7 +461,7 @@ impl FormatHandlerFactory {
     /// Check if Delta Lake table exists using storage backend
     async fn check_delta_exists(
         path_str: &str,
-        storage: &Arc<dyn crate::core::storage::StorageBackend>,
+        storage: &Storage,
     ) -> bool {
         // Extract the path without scheme for listing
         let clean_path = Self::extract_storage_path(path_str);
@@ -471,24 +472,28 @@ impl FormatHandlerFactory {
             format!("{}/_delta_log/", clean_path)
         };
 
-        let list_opts = crate::core::storage::traits::ListOptions {
-            prefix: Some(delta_log_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
+        use crate::core::storage::to_path;
+        use futures::TryStreamExt;
 
-        match storage.list(&list_opts).await {
-            Ok(result) => !result.objects.is_empty(),
-            Err(_) => false,
+        // Try to list the _delta_log directory
+        let prefix_path = to_path(&delta_log_prefix);
+        let mut stream = storage.list(Some(&prefix_path));
+
+        // Check if we can get at least one item
+        match stream.try_next().await {
+            Ok(Some(_)) => true,
+            _ => false,
         }
     }
 
     /// Check if Iceberg table exists using storage backend
     async fn check_iceberg_exists(
         path_str: &str,
-        storage: &Arc<dyn crate::core::storage::StorageBackend>,
+        storage: &Storage,
     ) -> bool {
+        use crate::core::storage::to_path;
+        use futures::TryStreamExt;
+
         // Extract the path without scheme for listing
         let clean_path = Self::extract_storage_path(path_str);
 
@@ -498,21 +503,15 @@ impl FormatHandlerFactory {
             format!("{}/metadata/", clean_path)
         };
 
-        let list_opts = crate::core::storage::traits::ListOptions {
-            prefix: Some(metadata_prefix),
-            delimiter: None,
-            max_results: Some(5),
-            continuation_token: None,
-        };
+        let prefix_path = to_path(&metadata_prefix);
+        let stream = storage.list(Some(&prefix_path));
 
-        match storage.list(&list_opts).await {
-            Ok(result) => {
-                // Look for .metadata.json files
-                result
-                    .objects
-                    .iter()
-                    .any(|obj| obj.path.contains(".metadata.json"))
-            }
+        // Collect up to 5 items and look for .metadata.json
+        match stream.try_collect::<Vec<_>>().await {
+            Ok(items) => items
+                .iter()
+                .take(5)
+                .any(|obj| obj.location.to_string().contains(".metadata.json")),
             Err(_) => false,
         }
     }

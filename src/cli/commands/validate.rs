@@ -8,7 +8,7 @@ use super::common::resolve_table_path;
 use crate::cli::parser::ValidateArgs;
 use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::validate::ValidateOperation;
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::create_object_store;
 use crate::core::validation::{Severity, ValidationEngine};
 use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
@@ -23,7 +23,7 @@ impl ValidateCommand {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // 1. Create storage backend based on path
-        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+        let storage = create_object_store(&table_path).await?;
 
         // 2. Only Iceberg is supported
         if let Some(format) = &args.format
@@ -73,7 +73,7 @@ impl ValidateCommand {
                 None
             };
 
-            let storage2 = StorageBackendFactory::create_backend(&table_path).await?;
+            let storage2 = create_object_store(&table_path).await?;
             let handler2 = FormatHandlerRegistry::global()
                 .create_handler(Path::new(&table_path), storage2)
                 .await?;

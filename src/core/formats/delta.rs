@@ -17,19 +17,19 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
-use crate::core::storage::{GetOptions, StorageBackend};
+use crate::core::storage::{Storage, ObjectStoreExt, to_path};
 use crate::error::{Error, Result};
 
 /// Handler for Delta Lake tables
 pub struct DeltaHandler {
     path: PathBuf,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
     time_travel: TimeTravelOptions,
 }
 
 impl DeltaHandler {
     /// Create a new Delta Lake handler
-    pub fn new(path: &Path, storage: Arc<dyn StorageBackend>) -> Result<Self> {
+    pub fn new(path: &Path, storage: Storage) -> Result<Self> {
         Ok(Self {
             path: path.to_path_buf(),
             storage,
@@ -40,7 +40,7 @@ impl DeltaHandler {
     /// Create a new Delta Lake handler with time-travel options
     pub fn with_time_travel(
         path: &Path,
-        storage: Arc<dyn StorageBackend>,
+        storage: Storage,
         time_travel: TimeTravelOptions,
     ) -> Result<Self> {
         Ok(Self {
@@ -372,7 +372,7 @@ impl FormatHandler for DeltaHandler {
             // Read parquet file content using storage backend
             let data: Bytes = self
                 .storage
-                .get(&file_uri, &GetOptions::default())
+                .get_bytes_str(&file_uri)
                 .await
                 .map_err(|e| Error::General(format!("Failed to read parquet file: {}", e)))?;
 

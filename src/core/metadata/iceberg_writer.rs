@@ -3,11 +3,10 @@
 //! Encapsulates the logic for writing Iceberg snapshots, manifests, and metadata files.
 //! This module is used by `IcebergMetadataService` to perform transactional writes.
 
-use std::sync::Arc;
 
 use super::traits::DataFileInfo;
 use crate::core::metadata::iceberg_partition;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::{Storage, ObjectStoreExt};
 use crate::error::{Error, Result};
 use bytes;
 
@@ -21,12 +20,12 @@ use iceberg::spec::{
 pub struct IcebergSnapshotWriter {
     table_path: String,
     file_io: FileIO,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
 }
 
 impl IcebergSnapshotWriter {
     /// Create a new snapshot writer
-    pub fn new(table_path: String, file_io: FileIO, storage: Arc<dyn StorageBackend>) -> Self {
+    pub fn new(table_path: String, file_io: FileIO, storage: Storage) -> Self {
         Self {
             table_path,
             file_io,
@@ -185,7 +184,6 @@ impl IcebergSnapshotWriter {
         metadata: &TableMetadata,
         current_metadata_path: &str,
     ) -> Result<String> {
-        use crate::core::storage::traits::PutOptions;
         use crate::core::utils::{extract_version_from_path, metadata_location_filename, next_metadata_location};
 
         // Validate metadata before writing
@@ -209,16 +207,9 @@ impl IcebergSnapshotWriter {
         let metadata_json = serde_json::to_string_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
-        let put_opts = PutOptions {
-            content_type: Some("application/json".to_string()),
-            metadata: std::collections::HashMap::new(),
-            if_none_match: None,
-        };
-
         self.storage
-            .put(&metadata_path, bytes::Bytes::from(metadata_json), &put_opts)
-            .await
-            .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
+            .put_bytes_str(&metadata_path, bytes::Bytes::from(metadata_json))
+            .await?;
 
         Ok(metadata_path)
     }

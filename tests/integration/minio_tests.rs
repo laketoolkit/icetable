@@ -18,7 +18,7 @@ use std::env;
 use std::sync::Arc;
 
 use icetable::core::operations::generate::{GenerateConfig, GenerateOperation, SchemaTemplate};
-use icetable::core::storage::{GetOptions, ListOptions, PutOptions, StorageBackendFactory};
+use icetable::core::storage::{create_object_store, ObjectStoreExt, Storage};
 
 /// Get test bucket from environment or default
 fn test_bucket() -> String {
@@ -95,7 +95,7 @@ async fn test_minio_connectivity() {
     let path = format!("s3://{}/test-connectivity", bucket);
 
     // Try to create storage backend (reads env vars internally)
-    let result = StorageBackendFactory::create_backend(&path).await;
+    let result = create_object_store(&path).await;
 
     assert!(
         result.is_ok(),
@@ -119,24 +119,20 @@ async fn test_minio_write_read() {
     );
     let path = format!("s3://{}/{}", bucket, test_key);
 
-    let storage = StorageBackendFactory::create_backend(&path)
+    let storage = create_object_store(&path)
         .await
         .expect("Failed to create storage");
 
     // Write test data
     let test_data = b"Hello from icetable integration test!";
     storage
-        .put(
-            &path,
-            bytes::Bytes::from_static(test_data),
-            &PutOptions::default(),
-        )
+        .put_bytes_str(&path, bytes::Bytes::from_static(test_data))
         .await
         .expect("Failed to write data");
 
     // Read it back
     let read_data = storage
-        .get(&path, &GetOptions::default())
+        .get_bytes_str(&path)
         .await
         .expect("Failed to read data");
 
@@ -144,7 +140,7 @@ async fn test_minio_write_read() {
 
     // Cleanup
     storage
-        .delete(&path)
+        .delete_str(&path)
         .await
         .expect("Failed to delete test file");
 }
@@ -164,7 +160,7 @@ async fn test_minio_list_objects() {
     );
     let base_path = format!("s3://{}/{}", bucket, prefix);
 
-    let storage = StorageBackendFactory::create_backend(&base_path)
+    let storage = create_object_store(&base_path)
         .await
         .expect("Failed to create storage");
 
@@ -172,29 +168,21 @@ async fn test_minio_list_objects() {
     for i in 0..3 {
         let path = format!("{}/file{}.txt", base_path, i);
         storage
-            .put(
-                &path,
-                bytes::Bytes::from(format!("content {}", i)),
-                &PutOptions::default(),
-            )
+            .put_bytes_str(&path, bytes::Bytes::from(format!("content {}", i)))
             .await
             .expect("Failed to write file");
     }
 
     // List objects
-    let options = ListOptions {
-        prefix: Some(base_path.clone()),
-        ..Default::default()
-    };
-    let result = storage.list(&options).await.expect("Failed to list");
-    let paths: Vec<_> = result.objects.iter().map(|o| o.path.clone()).collect();
+    let result = storage.list_prefix(&base_path).await.expect("Failed to list");
+    let paths: Vec<_> = result.iter().map(|o| o.location.to_string()).collect();
 
     assert_eq!(paths.len(), 3, "Expected 3 objects, got: {:?}", paths);
 
     // Cleanup
     for i in 0..3 {
         let path = format!("{}/file{}.txt", base_path, i);
-        storage.delete(&path).await.ok();
+        storage.delete_str(&path).await.ok();
     }
 }
 
@@ -234,46 +222,41 @@ async fn test_minio_generate_synthetic_table() {
     assert!(result.snapshot_id > 0, "Snapshot ID should be positive");
 
     // Verify files exist in MinIO
-    let storage = StorageBackendFactory::create_backend(&table_path)
+    let storage = create_object_store(&table_path)
         .await
         .expect("Failed to create storage");
 
     // Check data files
-    let list_options = ListOptions {
-        prefix: Some(format!("{}/data", table_path)),
-        ..Default::default()
-    };
-    let list_result = storage.list(&list_options).await.expect("Failed to list");
+    let data_prefix = format!("{}/data", table_path);
+    let list_result = storage.list_prefix(&data_prefix).await.expect("Failed to list");
     assert_eq!(
-        list_result.objects.len(),
+        list_result.len(),
         2,
         "Expected 2 parquet files, found: {:?}",
-        list_result.objects
+        list_result
     );
 
     // Verify each parquet file can be read
     for file in &result.data_files {
         let data = storage
-            .get(&file.path, &GetOptions::default())
+            .get_bytes_str(&file.path)
             .await
             .expect(&format!("Failed to read {}", file.path));
         assert!(data.len() > 0, "File {} is empty", file.path);
     }
 
     // Check metadata files (should have metadata.json, manifest, manifest list)
+    let metadata_prefix = format!("{}/metadata", table_path);
     let metadata_list = storage
-        .list(&ListOptions {
-            prefix: Some(format!("{}/metadata", table_path)),
-            ..Default::default()
-        })
+        .list_prefix(&metadata_prefix)
         .await
         .expect("Failed to list metadata");
 
     // Should have: metadata.json, version-hint.text, manifest avro, manifest list avro
     assert!(
-        metadata_list.objects.len() >= 3,
+        metadata_list.len() >= 3,
         "Expected at least 3 metadata files, found: {:?}",
-        metadata_list.objects.iter().map(|o| &o.path).collect::<Vec<_>>()
+        metadata_list.iter().map(|o| o.location.to_string()).collect::<Vec<_>>()
     );
 
     println!("Generated table successfully:");
@@ -331,12 +314,8 @@ async fn test_minio_generate_with_seed_reproducibility() {
     );
 
     // Cleanup
-    let storage1 = StorageBackendFactory::create_backend(&table1_path)
-        .await
-        .unwrap();
-    let storage2 = StorageBackendFactory::create_backend(&table2_path)
-        .await
-        .unwrap();
+    let storage1 = create_object_store(&table1_path).await.unwrap();
+    let storage2 = create_object_store(&table2_path).await.unwrap();
 
     cleanup_table(&storage1, &table1_path).await;
     cleanup_table(&storage2, &table2_path).await;
@@ -381,9 +360,7 @@ async fn test_minio_generate_all_templates() {
         println!("  Generated {} template: {} rows, {} bytes", name, result.total_rows, result.total_bytes);
 
         // Cleanup
-        let storage = StorageBackendFactory::create_backend(&table_path)
-            .await
-            .unwrap();
+        let storage = create_object_store(&table_path).await.unwrap();
         cleanup_table(&storage, &table_path).await;
     }
 }
@@ -415,13 +392,13 @@ async fn test_minio_inspect_generated_table() {
         .expect("Failed to generate table");
 
     // Load and inspect the table metadata
-    let storage = StorageBackendFactory::create_backend(&table_path)
+    let storage = create_object_store(&table_path)
         .await
         .expect("Failed to create storage");
 
     // Read metadata JSON
     let metadata_bytes = storage
-        .get(&gen_result.metadata_path, &GetOptions::default())
+        .get_bytes_str(&gen_result.metadata_path)
         .await
         .expect("Failed to read metadata");
 
@@ -498,8 +475,8 @@ async fn test_minio_multiple_appends() {
     );
 
     // Cleanup
-    let storage1 = StorageBackendFactory::create_backend(&table_path).await.unwrap();
-    let storage2 = StorageBackendFactory::create_backend(&table_path2).await.unwrap();
+    let storage1 = create_object_store(&table_path).await.unwrap();
+    let storage2 = create_object_store(&table_path2).await.unwrap();
     cleanup_table(&storage1, &table_path).await;
     cleanup_table(&storage2, &table_path2).await;
 }
@@ -508,18 +485,13 @@ async fn test_minio_multiple_appends() {
 // Helper Functions
 // =============================================================================
 
-async fn cleanup_table(storage: &Arc<dyn icetable::core::storage::StorageBackend>, table_path: &str) {
+async fn cleanup_table(storage: &Storage, table_path: &str) {
     // List all objects under the table path
-    let list_result = storage
-        .list(&ListOptions {
-            prefix: Some(table_path.to_string()),
-            ..Default::default()
-        })
-        .await;
+    let list_result = storage.list_prefix(table_path).await;
 
-    if let Ok(result) = list_result {
-        for obj in result.objects {
-            storage.delete(&obj.path).await.ok();
+    if let Ok(objects) = list_result {
+        for obj in objects {
+            storage.delete_str(&obj.location.to_string()).await.ok();
         }
     }
 }

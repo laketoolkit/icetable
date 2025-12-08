@@ -20,7 +20,6 @@ pub use factory::IcebergInspectorFactory;
 
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::core::inspection::iceberg_metadata_extractor::extract_file_info;
 use crate::core::inspection::traits::{
@@ -28,8 +27,7 @@ use crate::core::inspection::traits::{
     VerbosityLevel,
 };
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::traits::GetOptions;
-use crate::core::storage::StorageBackend;
+use crate::core::storage::{ObjectStoreExt, Storage};
 use crate::core::utils::find_latest_metadata;
 use crate::error::{Error, Result};
 
@@ -73,12 +71,12 @@ where
 /// Iceberg table inspector
 pub struct IcebergInspector {
     path: PathBuf,
-    storage: Arc<dyn StorageBackend>,
+    storage: Storage,
 }
 
 impl IcebergInspector {
     /// Create a new Iceberg inspector
-    pub fn new(path: PathBuf, storage: Arc<dyn StorageBackend>) -> Self {
+    pub fn new(path: PathBuf, storage: Storage) -> Self {
         Self { path, storage }
     }
 
@@ -88,13 +86,7 @@ impl IcebergInspector {
     }
 
     async fn read_metadata(&self, metadata_path: &str) -> Result<serde_json::Value> {
-        let get_opts = GetOptions {
-            range: None,
-            if_modified_since: None,
-            if_none_match: None,
-        };
-
-        let metadata_bytes = self.storage.get(metadata_path, &get_opts).await?;
+        let metadata_bytes = self.storage.get_bytes_str(metadata_path).await?;
         let metadata_str = String::from_utf8(metadata_bytes.to_vec())
             .map_err(|e| Error::General(format!("Invalid UTF-8 in metadata file: {}", e)))?;
 
@@ -216,17 +208,19 @@ impl PhysicalInspector for IcebergInspector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::local::LocalFileSystem;
+    use std::sync::Arc;
 
     #[test]
     fn test_iceberg_inspector_format_name() {
-        let storage = Arc::new(crate::core::storage::LocalBackend::new().unwrap());
+        let storage: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
         let inspector = IcebergInspector::new(PathBuf::from("/test"), storage);
         assert_eq!(inspector.format_name(), "Apache Iceberg");
     }
 
     #[test]
     fn test_iceberg_inspector_can_inspect() {
-        let storage = Arc::new(crate::core::storage::LocalBackend::new().unwrap());
+        let storage: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
         let inspector = IcebergInspector::new(PathBuf::from("/test"), storage);
 
         assert!(inspector.can_inspect(Path::new("/path/to/table/metadata")));

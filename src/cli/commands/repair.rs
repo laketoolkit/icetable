@@ -8,7 +8,7 @@ use super::common::resolve_table_path;
 use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::create_object_store;
 use crate::core::utils::detect_table_format_with_storage;
 use crate::core::{CatalogConfig, TableFormat, format_bytes};
 use crate::error::{Error, Result};
@@ -54,7 +54,7 @@ impl RepairCommand {
         }
 
         // Create storage backend (supports local and cloud)
-        let storage = StorageBackendFactory::create_backend(&table_path).await?;
+        let storage = create_object_store(&table_path).await?;
 
         // Detect table format (use explicit format if provided, otherwise auto-detect)
         let format = if let Some(format_str) = &args.format {

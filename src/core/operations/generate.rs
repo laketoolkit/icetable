@@ -19,7 +19,7 @@ use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
 use crate::core::metadata::IcebergSnapshotWriter;
-use crate::core::storage::{PutOptions, StorageBackend, StorageBackendFactory};
+use crate::core::storage::{Storage, create_object_store, ObjectStoreExt, to_path};
 use crate::error::{Error, Result};
 use crate::utils::track_memory_usage;
 
@@ -81,7 +81,7 @@ pub struct GenerateOperation;
 impl GenerateOperation {
     /// Execute the generate operation - creates a complete valid Iceberg table
     pub async fn execute(config: GenerateConfig) -> Result<GenerateResult> {
-        let storage = StorageBackendFactory::create_backend(&config.path).await?;
+        let storage = create_object_store(&config.path).await?;
         let base_path = config.path.trim_end_matches('/').to_string();
 
         let metadata_path = format!("{}/metadata", base_path);
@@ -114,7 +114,7 @@ impl GenerateOperation {
             total_bytes += file_size;
 
             storage
-                .put(&file_path, Bytes::from(parquet_bytes), &PutOptions::default())
+                .put_bytes(&to_path(&file_path), Bytes::from(parquet_bytes))
                 .await?;
 
             data_files.push(DataFileInfo {
@@ -148,7 +148,7 @@ impl GenerateOperation {
 
     /// Create a complete Iceberg table with manifest, manifest list, snapshot, and metadata
     async fn create_complete_iceberg_table(
-        storage: &Arc<dyn StorageBackend>,
+        storage: &Storage,
         base_path: &str,
         metadata_path: &str,
         arrow_schema: &Schema,
@@ -314,21 +314,13 @@ impl GenerateOperation {
         let metadata_file_path = format!("{}/{}", metadata_path, metadata_filename);
 
         storage
-            .put(
-                &metadata_file_path,
-                Bytes::from(metadata_json),
-                &PutOptions::default(),
-            )
+            .put_bytes(&to_path(&metadata_file_path), Bytes::from(metadata_json))
             .await?;
 
         // Write version-hint.text
         let version_hint_path = format!("{}/version-hint.text", metadata_path);
         storage
-            .put(
-                &version_hint_path,
-                Bytes::from("0"),
-                &PutOptions::default(),
-            )
+            .put_bytes(&to_path(&version_hint_path), Bytes::from("0"))
             .await?;
 
         Ok((metadata_file_path, snapshot_id))

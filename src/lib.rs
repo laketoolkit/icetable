@@ -16,28 +16,17 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use icetable::v1::formats::{FormatHandlerRegistry, ReadOptions};
-//! use icetable::v1::storage::StorageBackendFactory;
-//! use icetable::v1::Result;
-//! use std::path::Path;
+//! use icetable::{create_object_store, ObjectStoreExt};
+//! use icetable::Result;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Create storage backend
-//!     let storage = StorageBackendFactory::create_backend("data.parquet").await?;
+//!     // Create object store from URL or path
+//!     let store = create_object_store("/path/to/table").await?;
 //!
-//!     // Get format handler using registry (supports plugin formats)
-//!     let handler = FormatHandlerRegistry::global()
-//!         .create_handler(Path::new("data.parquet"), storage)
-//!         .await?;
-//!
-//!     // Read with options using builder pattern
-//!     let options = ReadOptions::builder()
-//!         .limit(100)
-//!         .build();
-//!
-//!     let batches = handler.read_batches(&options).await?;
-//!     println!("Read {} batches", batches.len());
+//!     // Use extension methods for convenient access
+//!     let exists = store.exists_str("metadata/v1.metadata.json").await?;
+//!     println!("Table exists: {}", exists);
 //!
 //!     Ok(())
 //! }
@@ -84,5 +73,5 @@ pub mod v1;
 
 // Convenience re-exports for backward compatibility
 // Note: Prefer using v1::* for stable API
-pub use core::{FormatHandler, FormatHandlerFactory, StorageBackend, StorageBackendFactory};
+pub use core::{FormatHandler, FormatHandlerFactory, create_object_store, ObjectStoreExt, Storage};
 pub use error::{Error, Result};

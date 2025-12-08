@@ -9,7 +9,7 @@ use crate::cli::parser::InspectArgs;
 use crate::config::{ResolveTableRef, ResolvedTable};
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
-use crate::core::storage::StorageBackendFactory;
+use crate::core::storage::{create_object_store, Storage};
 use crate::core::{CatalogConfig, TableRef};
 use crate::error::Result;
 use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
@@ -109,7 +109,7 @@ impl InspectCommand {
     /// Execute physical layout inspection (new mode)
     async fn execute_physical_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
-        let storage = StorageBackendFactory::create_backend(path_str).await?;
+        let storage = create_object_store(path_str).await?;
 
         // 2. Build physical inspect options
         let verbosity = if args.verbose {
@@ -138,7 +138,7 @@ impl InspectCommand {
     /// Execute legacy inspect (old mode, for backwards compatibility)
     async fn execute_legacy_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
         // 1. Create storage backend based on path
-        let storage = StorageBackendFactory::create_backend(path_str).await?;
+        let storage = create_object_store(path_str).await?;
 
         // 2. Build time-travel options from CLI args
         let time_travel = TimeTravelOptions {
@@ -297,7 +297,7 @@ impl InspectCommand {
 /// Inspect physical layout of a file
 async fn inspect_physical_layout(
     path: &Path,
-    _storage: std::sync::Arc<dyn crate::core::storage::StorageBackend>,
+    _storage: Storage,
     options: &PhysicalInspectOptions,
 ) -> Result<String> {
     // Use the new PhysicalInspectionService with dynamic inspector registry

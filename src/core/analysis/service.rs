@@ -18,7 +18,7 @@ use super::types::{
 };
 use crate::core::maintenance::group_files_by_partition;
 use crate::core::metadata::{DataFileInfo, IcebergMetadataService};
-use crate::core::storage::traits::ListOptions;
+use crate::core::storage::ObjectStoreExt;
 use crate::error::{Error, Result};
 
 /// Default recommended maximum number of manifests
@@ -369,21 +369,14 @@ impl AnalyzeService {
         let data_prefix = format!("{}/data/", table_path.trim_end_matches('/'));
         let storage = service.storage();
 
-        let list_opts = ListOptions {
-            prefix: Some(data_prefix),
-            delimiter: None,
-            max_results: None,
-            continuation_token: None,
-        };
-        let result = storage.list(&list_opts).await?;
+        let all_objects = storage.list_prefix(&data_prefix).await?;
 
-        let on_storage: Vec<DataFileInfo> = result
-            .objects
+        let on_storage: Vec<DataFileInfo> = all_objects
             .iter()
-            .filter(|obj| obj.path.ends_with(".parquet"))
+            .filter(|obj| obj.location.to_string().ends_with(".parquet"))
             .map(|obj| DataFileInfo {
-                path: obj.path.clone(),
-                size: obj.size,
+                path: obj.location.to_string(),
+                size: obj.size as u64,
                 record_count: 0,
                 partition: HashMap::new(),
             })

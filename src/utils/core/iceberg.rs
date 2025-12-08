@@ -3,13 +3,11 @@
 //! Common utilities for working with Iceberg tables.
 
 use std::str::FromStr;
-use std::sync::Arc;
 
 use iceberg::MetadataLocation;
 use iceberg::spec::{PrimitiveType, Type};
 
-use crate::core::storage::StorageBackend;
-use crate::core::storage::traits::ListOptions;
+use crate::core::storage::{Storage, ObjectStoreExt};
 use crate::error::{Error, Result};
 
 /// Find the latest metadata file for an Iceberg table
@@ -18,30 +16,24 @@ use crate::error::{Error, Result};
 /// Supports the standard Iceberg format: `<version>-<uuid>.metadata.json`
 pub async fn find_latest_metadata(
     table_path: &str,
-    storage: &Arc<dyn StorageBackend>,
+    storage: &Storage,
 ) -> Result<String> {
     let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
-    let list_opts = ListOptions {
-        prefix: Some(format!("{}/", metadata_dir)),
-        delimiter: None,
-        max_results: Some(1000),
-        continuation_token: None,
-    };
-
-    let files = storage.list(&list_opts).await?;
+    let prefix = format!("{}/", metadata_dir);
+    let files = storage.list_prefix(&prefix).await?;
 
     // Find the latest metadata.json file by version number
     // Supports both formats:
     // - Standard: <version>-<uuid>.metadata.json (e.g., 00015-abc123.metadata.json)
     // - Legacy Hadoop: v<version>.metadata.json (e.g., v15.metadata.json)
     let metadata_file = files
-        .objects
         .iter()
-        .filter(|obj| obj.path.ends_with(".metadata.json"))
+        .filter(|obj| obj.location.to_string().ends_with(".metadata.json"))
         .filter_map(|obj| {
             // extract_version_from_path returns None if it can't parse, Some(version) otherwise
-            extract_version_from_path(&obj.path).map(|version| (obj, version))
+            let path_str = obj.location.to_string();
+            extract_version_from_path(&path_str).map(|version| (obj, version))
         })
         .max_by_key(|(_, version)| *version)
         .map(|(obj, _)| obj)
@@ -52,7 +44,7 @@ pub async fn find_latest_metadata(
             ))
         })?;
 
-    Ok(metadata_file.path.clone())
+    Ok(metadata_file.location.to_string())
 }
 
 /// Extract version number from a metadata file path
