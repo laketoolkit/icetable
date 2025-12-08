@@ -40,16 +40,16 @@ jobs:
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build release binary
-        run: cargo build --release
+      - name: Build
+        run: cargo build
 
-      - name: Start MinIO with docker-compose
+      - name: Start MinIO with docker compose
         run: |
-          docker-compose -f docker-compose.test.yml up -d minio minio-setup
+          docker compose -f docker compose.test.yml up -d minio minio-setup
           echo "Waiting for MinIO to be healthy..."
           sleep 5
           # Wait for minio-setup to complete (creates buckets)
-          timeout 60 bash -c 'until docker-compose -f docker-compose.test.yml ps minio-setup | grep -q "exited"; do sleep 2; done' || true
+          timeout 60 bash -c 'until docker compose -f docker compose.test.yml ps minio-setup | grep -q "exited"; do sleep 2; done' || true
           echo "MinIO is ready"
 
       - name: Verify MinIO connectivity
@@ -65,7 +65,7 @@ jobs:
       - name: "Test: Generate synthetic table"
         run: |
           echo "=== Generating synthetic Iceberg table ==="
-          ./target/release/icetable generate \
+          ./target/debug/icetable generate \
             -t $TEST_TABLE \
             --template events \
             --rows 5000 \
@@ -79,11 +79,11 @@ jobs:
       - name: "Test: Inspect table"
         run: |
           echo "=== Inspecting table ==="
-          ./target/release/icetable inspect -t $TEST_TABLE
+          ./target/debug/icetable inspect -t $TEST_TABLE
 
           echo ""
           echo "=== Inspect with JSON output ==="
-          ./target/release/icetable inspect -t $TEST_TABLE -o json | head -50
+          ./target/debug/icetable inspect -t $TEST_TABLE -o json | head -50
 
       # =======================================================================
       # Test: History
@@ -91,7 +91,7 @@ jobs:
       - name: "Test: History"
         run: |
           echo "=== Table history ==="
-          ./target/release/icetable history -t $TEST_TABLE
+          ./target/debug/icetable history -t $TEST_TABLE
 
       # =======================================================================
       # Test: Snapshot list
@@ -99,7 +99,7 @@ jobs:
       - name: "Test: Snapshot list"
         run: |
           echo "=== Snapshot list ==="
-          ./target/release/icetable snapshot list -t $TEST_TABLE
+          ./target/debug/icetable snapshot list -t $TEST_TABLE
 
       # =======================================================================
       # Test: Analyze table health
@@ -107,7 +107,7 @@ jobs:
       - name: "Test: Analyze table"
         run: |
           echo "=== Analyzing table health ==="
-          ./target/release/icetable analyze -t $TEST_TABLE
+          ./target/debug/icetable analyze -t $TEST_TABLE
 
       # =======================================================================
       # Test: Branch operations
@@ -115,15 +115,15 @@ jobs:
       - name: "Test: Branch operations"
         run: |
           echo "=== List branches ==="
-          ./target/release/icetable branch list -t $TEST_TABLE
+          ./target/debug/icetable branch list -t $TEST_TABLE
 
           echo ""
           echo "=== Create branch 'test-branch' ==="
-          ./target/release/icetable branch create -t $TEST_TABLE test-branch || echo "Branch creation may not be supported yet"
+          ./target/debug/icetable branch create -t $TEST_TABLE test-branch || echo "Branch creation may not be supported yet"
 
           echo ""
           echo "=== List branches after create ==="
-          ./target/release/icetable branch list -t $TEST_TABLE
+          ./target/debug/icetable branch list -t $TEST_TABLE
 
       # =======================================================================
       # Test: Tag operations
@@ -131,15 +131,15 @@ jobs:
       - name: "Test: Tag operations"
         run: |
           echo "=== List tags ==="
-          ./target/release/icetable tag list -t $TEST_TABLE
+          ./target/debug/icetable tag list -t $TEST_TABLE
 
           echo ""
           echo "=== Create tag 'v1.0' ==="
-          ./target/release/icetable tag create -t $TEST_TABLE v1.0 || echo "Tag creation may not be supported yet"
+          ./target/debug/icetable tag create -t $TEST_TABLE v1.0 || echo "Tag creation may not be supported yet"
 
           echo ""
           echo "=== List tags after create ==="
-          ./target/release/icetable tag list -t $TEST_TABLE
+          ./target/debug/icetable tag list -t $TEST_TABLE
 
       # =======================================================================
       # Test: Optimize dry-run
@@ -147,12 +147,12 @@ jobs:
       - name: "Test: Optimize data (dry-run)"
         run: |
           echo "=== Optimize data dry-run ==="
-          ./target/release/icetable optimize data -t $TEST_TABLE --all-partitions --dry-run
+          ./target/debug/icetable optimize data -t $TEST_TABLE --all-partitions --dry-run
 
       - name: "Test: Optimize manifests (dry-run)"
         run: |
           echo "=== Optimize manifests dry-run ==="
-          ./target/release/icetable optimize manifests -t $TEST_TABLE --dry-run
+          ./target/debug/icetable optimize manifests -t $TEST_TABLE --dry-run
 
       # =======================================================================
       # Test: Vacuum dry-run
@@ -160,7 +160,7 @@ jobs:
       - name: "Test: Vacuum (dry-run)"
         run: |
           echo "=== Vacuum dry-run ==="
-          ./target/release/icetable vacuum -t $TEST_TABLE --retention-hours 0 --dry-run --force
+          ./target/debug/icetable vacuum -t $TEST_TABLE --retention-hours 0 --dry-run --force
 
       # =======================================================================
       # Test: Snapshot expire dry-run
@@ -168,7 +168,7 @@ jobs:
       - name: "Test: Snapshot expire (dry-run)"
         run: |
           echo "=== Snapshot expire dry-run ==="
-          ./target/release/icetable snapshot expire -t $TEST_TABLE --retain-last 1 --dry-run
+          ./target/debug/icetable snapshot expire -t $TEST_TABLE --retain-last 1 --dry-run
 
       # =======================================================================
       # Test: Doctor (diagnostics)
@@ -176,7 +176,7 @@ jobs:
       - name: "Test: Doctor diagnostics"
         run: |
           echo "=== Running doctor diagnostics ==="
-          ./target/release/icetable doctor -t $TEST_TABLE || echo "Doctor command completed"
+          ./target/debug/icetable doctor -t $TEST_TABLE || echo "Doctor command completed"
 
       # =======================================================================
       # Test: Validate table
@@ -184,7 +184,7 @@ jobs:
       - name: "Test: Validate table"
         run: |
           echo "=== Validating table ==="
-          ./target/release/icetable validate -t $TEST_TABLE || echo "Validation completed"
+          ./target/debug/icetable validate -t $TEST_TABLE || echo "Validation completed"
 
       # =======================================================================
       # Test: Stats
@@ -192,7 +192,7 @@ jobs:
       - name: "Test: Stats"
         run: |
           echo "=== Table statistics ==="
-          ./target/release/icetable stats -t $TEST_TABLE || echo "Stats completed"
+          ./target/debug/icetable stats -t $TEST_TABLE || echo "Stats completed"
 
       # =======================================================================
       # Test: Generate with different templates
@@ -203,7 +203,7 @@ jobs:
 
           for template in events transactions sensors users web-logs; do
             echo "Generating $template template..."
-            ./target/release/icetable generate \
+            ./target/debug/icetable generate \
               -t s3://test-bucket/test-$template \
               --template $template \
               --rows 100 \
@@ -211,7 +211,7 @@ jobs:
               --seed 42
 
             echo "Inspecting $template table..."
-            ./target/release/icetable inspect -t s3://test-bucket/test-$template
+            ./target/debug/icetable inspect -t s3://test-bucket/test-$template
             echo ""
           done
 
@@ -221,13 +221,13 @@ jobs:
       - name: "Test: Generate with custom schema"
         run: |
           echo "=== Generate with custom schema ==="
-          ./target/release/icetable generate \
+          ./target/debug/icetable generate \
             -t s3://test-bucket/custom-schema-table \
             --schema "id:long,name:string,amount:double,active:bool,created:timestamp" \
             --rows 500 \
             --files 2
 
-          ./target/release/icetable inspect -t s3://test-bucket/custom-schema-table
+          ./target/debug/icetable inspect -t s3://test-bucket/custom-schema-table
 
       # =======================================================================
       # Run Rust integration tests
@@ -238,9 +238,9 @@ jobs:
       # =======================================================================
       # Cleanup
       # =======================================================================
-      - name: Stop docker-compose
+      - name: Stop docker compose
         if: always()
-        run: docker-compose -f docker-compose.test.yml down -v
+        run: docker compose -f docker compose.test.yml down -v
 
       # =======================================================================
       # Summary
@@ -294,13 +294,13 @@ jobs:
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build release binary with REST catalog feature
-        run: cargo build --release --features rest-catalog
+      - name: Build
+        run: cargo build
 
-      - name: Start MinIO and Nessie with docker-compose
+      - name: Start MinIO and Nessie with docker compose
         run: |
           # Start all services
-          docker-compose -f docker-compose.test.yml up -d
+          docker compose -f docker compose.test.yml up -d
           echo "Waiting for services to be healthy..."
           sleep 10
 
@@ -318,14 +318,14 @@ jobs:
       - name: "Test: Catalog info"
         run: |
           echo "=== Catalog info ==="
-          ./target/release/icetable catalog info \
+          ./target/debug/icetable catalog info \
             --catalog-uri http://localhost:19120/api/v1 \
             || echo "Catalog info test completed"
 
       - name: "Test: List namespaces"
         run: |
           echo "=== List namespaces ==="
-          ./target/release/icetable catalog namespaces \
+          ./target/debug/icetable catalog namespaces \
             --catalog-uri http://localhost:19120/api/v1 \
             || echo "Namespace listing completed"
 
@@ -333,6 +333,6 @@ jobs:
         run: cargo test --test integration_test catalog -- --ignored --nocapture
         continue-on-error: true
 
-      - name: Stop docker-compose
+      - name: Stop docker compose
         if: always()
-        run: docker-compose -f docker-compose.test.yml down -v
+        run: docker compose -f docker compose.test.yml down -v
