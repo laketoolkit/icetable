@@ -347,6 +347,15 @@ impl From<iceberg::Error> for Error {
     }
 }
 
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Error::Parse {
+            message: format!("JSON parsing error: {}", error),
+            source: Some(Box::new(error)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

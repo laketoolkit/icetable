@@ -213,7 +213,8 @@ impl TableLoader {
     }
 
     /// Find the latest metadata file for a table path
-    async fn find_latest_metadata(path: &str) -> Result<String> {
+    /// Find the latest metadata file in an Iceberg table directory
+    pub async fn find_latest_metadata(path: &str) -> Result<String> {
         // Create storage to list files
         let storage = create_object_store(path).await.map_err(|e| Error::General(format!("Failed to create storage: {}", e)))?;
         
