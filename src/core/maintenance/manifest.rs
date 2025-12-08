@@ -82,48 +82,79 @@ pub struct ManifestRewriteResult {
     pub metadata_version: u32,
 }
 
+/// Context for committing a snapshot
+struct CommitContext<'a> {
+    table_path: &'a str,
+    metadata_dir: &'a str,
+    metadata_file_path: &'a str,
+    metadata: &'a Arc<TableMetadata>,
+    new_snapshot: Snapshot,
+    target_branch: &'a str,
+    new_snapshot_id: i64,
+    committer: Option<TableCommitter>,
+}
+
 /// Builder for creating a new snapshot for manifest rewrite
 struct SnapshotBuilder<'a> {
     new_snapshot_id: i64,
     parent_snapshot_id: i64,
     sequence_number: i64,
-    manifest_list_path: &'a str,
-    new_manifest_files: &'a [ManifestFile],
-    data_manifests: &'a [ManifestFile],
+    manifest_list_path: Option<&'a str>,
+    new_manifest_files: Option<&'a [ManifestFile]>,
+    data_manifests: Option<&'a [ManifestFile]>,
     final_manifest_count: usize,
-    original_summary: &'a Summary,
+    original_summary: Option<&'a Summary>,
     schema_id: i32,
 }
 
 impl<'a> SnapshotBuilder<'a> {
-    fn new(
-        new_snapshot_id: i64,
-        parent_snapshot_id: i64,
-        sequence_number: i64,
-        manifest_list_path: &'a str,
-        new_manifest_files: &'a [ManifestFile],
-        data_manifests: &'a [ManifestFile],
-        final_manifest_count: usize,
-        original_summary: &'a Summary,
-        schema_id: i32,
-    ) -> Self {
+    fn new(new_snapshot_id: i64, parent_snapshot_id: i64, sequence_number: i64) -> Self {
         Self {
             new_snapshot_id,
             parent_snapshot_id,
             sequence_number,
-            manifest_list_path,
-            new_manifest_files,
-            data_manifests,
-            final_manifest_count,
-            original_summary,
-            schema_id,
+            manifest_list_path: None,
+            new_manifest_files: None,
+            data_manifests: None,
+            final_manifest_count: 0,
+            original_summary: None,
+            schema_id: 0,
         }
     }
 
-    fn build(&self) -> Snapshot {
+    fn manifest_list_path(mut self, path: &'a str) -> Self {
+        self.manifest_list_path = Some(path);
+        self
+    }
+
+    fn new_manifest_files(mut self, files: &'a [ManifestFile]) -> Self {
+        self.new_manifest_files = Some(files);
+        self.final_manifest_count = files.len();
+        self
+    }
+
+    fn data_manifests(mut self, manifests: &'a [ManifestFile]) -> Self {
+        self.data_manifests = Some(manifests);
+        self
+    }
+
+    fn original_summary(mut self, summary: &'a Summary) -> Self {
+        self.original_summary = Some(summary);
+        self
+    }
+
+    fn schema_id(mut self, id: i32) -> Self {
+        self.schema_id = id;
+        self
+    }
+
+    fn build(self) -> Snapshot {
+        let new_manifest_files = self.new_manifest_files.unwrap_or(&[]);
+        let data_manifests = self.data_manifests.unwrap_or(&[]);
+        let manifest_list_path = self.manifest_list_path.unwrap_or("");
+
         // Calculate statistics
-        let total_data_files: u64 = self
-            .new_manifest_files
+        let total_data_files: u64 = new_manifest_files
             .iter()
             .filter(|m| m.content == ManifestContentType::Data)
             .map(|m| {
@@ -132,8 +163,7 @@ impl<'a> SnapshotBuilder<'a> {
             })
             .sum();
 
-        let total_rows: u64 = self
-            .new_manifest_files
+        let total_rows: u64 = new_manifest_files
             .iter()
             .filter(|m| m.content == ManifestContentType::Data)
             .map(|m| m.added_rows_count.unwrap_or(0) + m.existing_rows_count.unwrap_or(0))
@@ -141,8 +171,7 @@ impl<'a> SnapshotBuilder<'a> {
 
         let total_files_size: u64 = self
             .original_summary
-            .additional_properties
-            .get("total-files-size")
+            .and_then(|s| s.additional_properties.get("total-files-size"))
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
@@ -151,7 +180,7 @@ impl<'a> SnapshotBuilder<'a> {
         summary_map.insert("spark.app.id".to_string(), "icetable".to_string());
         summary_map.insert(
             "manifests-rewritten".to_string(),
-            self.data_manifests.len().to_string(),
+            data_manifests.len().to_string(),
         );
         summary_map.insert(
             "manifests-created".to_string(),
@@ -178,7 +207,7 @@ impl<'a> SnapshotBuilder<'a> {
             .with_parent_snapshot_id(Some(self.parent_snapshot_id))
             .with_sequence_number(self.sequence_number + 1)
             .with_timestamp_ms(self.new_snapshot_id)
-            .with_manifest_list(self.manifest_list_path.to_string())
+            .with_manifest_list(manifest_list_path.to_string())
             .with_summary(summary)
             .with_schema_id(self.schema_id)
             .build()
@@ -455,34 +484,28 @@ impl ManifestService {
             .map_err(|e| Error::General(format!("Failed to close manifest list writer: {}", e)))?;
 
         // Create new snapshot using builder
-        let snapshot_builder = SnapshotBuilder::new(
-            new_snapshot_id,
-            snapshot_id,
-            sequence_number,
-            &manifest_list_path,
-            &new_manifest_files,
-            &data_manifests,
-            final_manifest_count,
-            current_snapshot.summary(),
-            metadata.current_schema_id(),
-        );
-        let new_snapshot = snapshot_builder.build();
+        let new_snapshot = SnapshotBuilder::new(new_snapshot_id, snapshot_id, sequence_number)
+            .manifest_list_path(&manifest_list_path)
+            .new_manifest_files(&new_manifest_files)
+            .data_manifests(&data_manifests)
+            .original_summary(current_snapshot.summary())
+            .schema_id(metadata.current_schema_id())
+            .build();
 
         // Commit the snapshot
         let metadata_file_path = service.current_metadata_path().await?;
 
-        let new_version = self
-            .commit_snapshot(
-                table_path,
-                &metadata_dir,
-                &metadata_file_path,
-                &metadata,
-                new_snapshot,
-                target_branch,
-                new_snapshot_id,
-                committer,
-            )
-            .await?;
+        let ctx = CommitContext {
+            table_path,
+            metadata_dir: &metadata_dir,
+            metadata_file_path: &metadata_file_path,
+            metadata: &metadata,
+            new_snapshot,
+            target_branch,
+            new_snapshot_id,
+            committer,
+        };
+        let new_version = self.commit_snapshot(ctx).await?;
 
         Ok(ManifestRewriteResult {
             previous_manifests: total_manifests,
@@ -496,37 +519,27 @@ impl ManifestService {
     }
 
     /// Commit the snapshot to storage or catalog
-    async fn commit_snapshot(
-        &self,
-        table_path: &str,
-        metadata_dir: &str,
-        metadata_file_path: &str,
-        metadata: &Arc<TableMetadata>,
-        new_snapshot: Snapshot,
-        target_branch: &str,
-        new_snapshot_id: i64,
-        committer: Option<TableCommitter>,
-    ) -> Result<u32> {
-        if let Some(ref c) = committer {
-            if c.uses_catalog() {
-                // Catalog mode: commit via REST API
-                return Ok(c
-                    .commit_add_snapshot(metadata, new_snapshot, target_branch)
-                    .await?
-                    .unwrap_or(1) as u32);
-            }
+    async fn commit_snapshot(&self, ctx: CommitContext<'_>) -> Result<u32> {
+        if let Some(ref c) = ctx.committer
+            && c.uses_catalog()
+        {
+            // Catalog mode: commit via REST API
+            return Ok(c
+                .commit_add_snapshot(ctx.metadata, ctx.new_snapshot, ctx.target_branch)
+                .await?
+                .unwrap_or(1) as u32);
         }
 
         // Direct mode: build metadata and write to storage
-        let metadata_clone = (**metadata).clone();
+        let metadata_clone = (**ctx.metadata).clone();
         let build_result = metadata_clone
-            .into_builder(Some(metadata_file_path.to_string()))
-            .add_snapshot(new_snapshot)
+            .into_builder(Some(ctx.metadata_file_path.to_string()))
+            .add_snapshot(ctx.new_snapshot)
             .map_err(|e| Error::General(format!("Failed to add snapshot: {}", e)))?
             .set_ref(
-                target_branch,
+                ctx.target_branch,
                 SnapshotReference {
-                    snapshot_id: new_snapshot_id,
+                    snapshot_id: ctx.new_snapshot_id,
                     retention: SnapshotRetention::Branch {
                         min_snapshots_to_keep: None,
                         max_snapshot_age_ms: None,
@@ -539,8 +552,13 @@ impl ManifestService {
             .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
         let new_metadata = build_result.metadata;
-        self.write_metadata_direct(table_path, metadata_dir, metadata_file_path, &new_metadata)
-            .await
+        self.write_metadata_direct(
+            ctx.table_path,
+            ctx.metadata_dir,
+            ctx.metadata_file_path,
+            &new_metadata,
+        )
+        .await
     }
 
     /// Write metadata directly to storage

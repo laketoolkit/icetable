@@ -15,7 +15,7 @@ mod vacuum;
 pub use manifest::{ManifestAnalysis, ManifestConfig, ManifestRewriteResult, ManifestService};
 pub use optimize::OptimizeService;
 pub use partition_filter::{matches_partition_filter, PartitionFilter};
-pub use refs::{RefConfig, RefResult, RefService};
+pub use refs::{BranchRetention, RefConfig, RefResult, RefService};
 pub use repair::{RepairAnalysis, RepairService};
 pub use snapshot::{
     CreateBackupResult, ExpireSnapshotsResult, ListSnapshotsResult, SetSnapshotResult,

@@ -163,8 +163,7 @@ impl SnapshotService {
         let total_count = snapshots.len();
 
         // Sort by timestamp descending (most recent first)
-        #[allow(clippy::unnecessary_sort_by)]
-        snapshots.sort_by(|a, b| b.timestamp_ms().cmp(&a.timestamp_ms()));
+        snapshots.sort_by_key(|s| std::cmp::Reverse(s.timestamp_ms()));
 
         let current_snapshot_id = metadata.current_snapshot_id();
 

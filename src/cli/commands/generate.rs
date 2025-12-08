@@ -10,6 +10,7 @@ use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate};
 use crate::core::operations::generate::{
     GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
 };
+use crate::core::utils::format_bytes;
 use crate::error::Result;
 use crate::utils::{with_timeout, track_memory_usage, with_cancellation, temp_dir_with_cleanup};
 
@@ -149,7 +150,7 @@ impl GenerateCommand {
             "v".green().bold(),
             result.total_rows,
             result.files_created,
-            Self::format_bytes(result.total_bytes)
+            format_bytes(result.total_bytes)
         );
 
         if output == "json" {
@@ -167,21 +168,7 @@ impl GenerateCommand {
         }
     }
 
-    fn format_bytes(bytes: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        const GB: u64 = MB * 1024;
 
-        if bytes >= GB {
-            format!("{:.2} GB", bytes as f64 / GB as f64)
-        } else if bytes >= MB {
-            format!("{:.2} MB", bytes as f64 / MB as f64)
-        } else if bytes >= KB {
-            format!("{:.2} KB", bytes as f64 / KB as f64)
-        } else {
-            format!("{} bytes", bytes)
-        }
-    }
 
     /// Estimate memory usage for generation
     fn estimate_memory_usage(config: &GenerateConfig) -> u64 {

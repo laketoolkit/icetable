@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use iceberg::spec::{Snapshot, SnapshotReference, SnapshotRetention, TableMetadata, MAIN_BRANCH};
 use iceberg::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::CatalogConfig;
 use crate::core::storage::traits::PutOptions;
@@ -42,15 +42,6 @@ struct CommitTableRequest {
 struct TableIdentifier {
     namespace: Vec<String>,
     name: String,
-}
-
-/// Response from commit table request
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
-struct CommitTableResponse {
-    #[serde(default)]
-    metadata_location: Option<String>,
 }
 
 /// Default number of retry attempts for conflict errors

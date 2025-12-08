@@ -7,7 +7,7 @@ use colored::Colorize;
 use super::common::{resolve_table, TableResolution};
 use crate::cli::parser::{BranchArgs, BranchCommands};
 use crate::core::catalog::TableCommitter;
-use crate::core::maintenance::{RefConfig, RefService};
+use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
 use crate::core::{CatalogConfig, TableContext};
 use crate::error::{Error, Result};
 
@@ -29,17 +29,12 @@ impl BranchCommand {
                 let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
                 let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
-                Self::create(
-                    &ctx,
-                    &a.name,
-                    a.from_snapshot,
-                    a.max_ref_age_ms,
-                    a.min_snapshots_to_keep,
-                    a.max_snapshot_age_ms,
-                    &a.output,
-                    committer,
-                )
-                .await
+                let retention = BranchRetention {
+                    min_snapshots_to_keep: a.min_snapshots_to_keep,
+                    max_snapshot_age_ms: a.max_snapshot_age_ms,
+                    max_ref_age_ms: a.max_ref_age_ms,
+                };
+                Self::create(&ctx, &a.name, a.from_snapshot, retention, &a.output, committer).await
             }
             BranchCommands::Delete(a) => {
                 let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
@@ -137,14 +132,11 @@ impl BranchCommand {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn create(
         ctx: &TableContext,
         name: &str,
         from_snapshot: Option<i64>,
-        max_ref_age_ms: Option<i64>,
-        min_snapshots_to_keep: Option<i32>,
-        max_snapshot_age_ms: Option<i64>,
+        retention: BranchRetention,
         output: &str,
         committer: Option<TableCommitter>,
     ) -> Result<()> {
@@ -155,15 +147,7 @@ impl BranchCommand {
         };
 
         let result = ref_service
-            .create_branch(
-                &service,
-                &ctx.path,
-                name,
-                from_snapshot,
-                min_snapshots_to_keep,
-                max_snapshot_age_ms,
-                max_ref_age_ms,
-            )
+            .create_branch(&service, &ctx.path, name, from_snapshot, retention)
             .await?;
 
         if output == "json" {

@@ -17,6 +17,30 @@ use crate::core::{CatalogConfig, TableCommitter};
 use crate::core::TableFormat;
 use crate::error::{Error, Result};
 
+/// Configuration for expire snapshots operation
+struct ExpireConfig<'a> {
+    path: &'a str,
+    older_than: Option<String>,
+    retain_last: Option<usize>,
+    ids: Option<Vec<i64>>,
+    dry_run: bool,
+    branch: Option<&'a str>,
+    output: &'a str,
+    committer: Option<TableCommitter>,
+}
+
+/// Configuration for set snapshot operation
+struct SetSnapshotConfig<'a> {
+    path: &'a str,
+    id: Option<i64>,
+    as_of: Option<String>,
+    branch: Option<String>,
+    tag: Option<String>,
+    dry_run: bool,
+    output: &'a str,
+    committer: Option<TableCommitter>,
+}
+
 /// Handler for snapshot command
 pub struct SnapshotCommand;
 
@@ -100,30 +124,30 @@ impl SnapshotCommand {
                 Self::iceberg_create(table_path, a.force, &a.output).await
             }
             SnapshotCommands::Expire(a) => {
-                Self::iceberg_expire(
-                    table_path,
-                    a.older_than,
-                    a.retain_last,
-                    a.ids,
-                    a.dry_run,
-                    a.branch.as_deref(),
-                    &a.output,
+                let config = ExpireConfig {
+                    path: table_path,
+                    older_than: a.older_than,
+                    retain_last: a.retain_last,
+                    ids: a.ids,
+                    dry_run: a.dry_run,
+                    branch: a.branch.as_deref(),
+                    output: &a.output,
                     committer,
-                )
-                .await
+                };
+                Self::iceberg_expire(config).await
             }
             SnapshotCommands::Set(a) => {
-                Self::iceberg_set(
-                    table_path,
-                    a.id,
-                    a.as_of,
-                    a.branch,
-                    a.tag,
-                    a.dry_run,
-                    &a.output,
+                let config = SetSnapshotConfig {
+                    path: table_path,
+                    id: a.id,
+                    as_of: a.as_of,
+                    branch: a.branch,
+                    tag: a.tag,
+                    dry_run: a.dry_run,
+                    output: &a.output,
                     committer,
-                )
-                .await
+                };
+                Self::iceberg_set(config).await
             }
             SnapshotCommands::Cherrypick(a) => {
                 Self::iceberg_cherrypick(table_path, a.snapshot_id, &a.output).await
@@ -226,40 +250,31 @@ impl SnapshotCommand {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn iceberg_expire(
-        path: &str,
-        older_than: Option<String>,
-        retain_last: Option<usize>,
-        ids: Option<Vec<i64>>,
-        dry_run: bool,
-        branch: Option<&str>,
-        output: &str,
-        committer: Option<TableCommitter>,
-    ) -> Result<()> {
+    async fn iceberg_expire(cfg: ExpireConfig<'_>) -> Result<()> {
         use std::collections::HashSet;
 
         let metadata_service = IcebergMetadataService::new_with_branch(
-            path.to_string(),
-            branch.map(|s| s.to_string()),
-        ).await?;
+            cfg.path.to_string(),
+            cfg.branch.map(|s| s.to_string()),
+        )
+        .await?;
 
-        if let Some(b) = branch {
+        if let Some(b) = cfg.branch {
             println!(
                 "{} snapshots for branch '{}'",
                 "Expiring".yellow(),
                 b.cyan()
             );
         }
-        let config = SnapshotConfig { dry_run };
-        let snapshot_service = if let Some(c) = committer {
+        let config = SnapshotConfig { dry_run: cfg.dry_run };
+        let snapshot_service = if let Some(c) = cfg.committer {
             SnapshotService::with_committer(config, c)
         } else {
             SnapshotService::with_config(config)
         };
 
         // Validate explicit IDs and show warnings
-        if let Some(ref explicit_ids) = ids {
+        if let Some(ref explicit_ids) = cfg.ids {
             let (metadata, _) = metadata_service.load_metadata().await?;
             let snapshots: Vec<_> = metadata.snapshots().collect();
             let current_id = metadata.current_snapshot_id();
@@ -274,11 +289,11 @@ impl SnapshotCommand {
         }
 
         let result = snapshot_service
-            .expire_snapshots(&metadata_service, path, older_than, retain_last, ids)
+            .expire_snapshots(&metadata_service, cfg.path, cfg.older_than, cfg.retain_last, cfg.ids)
             .await?;
 
         if result.expired_count == 0 {
-            if output == "json" {
+            if cfg.output == "json" {
                 let json_str = SnapshotFormatter::format_expire_json(
                     0,
                     result.cutoff_timestamp,
@@ -295,7 +310,7 @@ impl SnapshotCommand {
         }
 
         // Show snapshots to expire (for non-JSON output)
-        if output != "json" {
+        if cfg.output != "json" {
             let (metadata, _) = metadata_service.load_metadata().await?;
             let snapshots: Vec<_> = metadata.snapshots().collect();
             let expire_set: HashSet<i64> = result.expired_ids.iter().cloned().collect();
@@ -318,7 +333,7 @@ impl SnapshotCommand {
             println!("{}", "DRY RUN - No changes made".yellow().bold());
         }
 
-        if output == "json" {
+        if cfg.output == "json" {
             let json_str = SnapshotFormatter::format_expire_json(
                 result.expired_count,
                 result.cutoff_timestamp,
@@ -339,30 +354,20 @@ impl SnapshotCommand {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn iceberg_set(
-        path: &str,
-        id: Option<i64>,
-        as_of: Option<String>,
-        branch: Option<String>,
-        tag: Option<String>,
-        dry_run: bool,
-        output: &str,
-        committer: Option<TableCommitter>,
-    ) -> Result<()> {
-        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
-        let config = SnapshotConfig { dry_run };
-        let snapshot_service = if let Some(c) = committer {
+    async fn iceberg_set(cfg: SetSnapshotConfig<'_>) -> Result<()> {
+        let metadata_service = IcebergMetadataService::new_async(cfg.path.to_string()).await?;
+        let config = SnapshotConfig { dry_run: cfg.dry_run };
+        let snapshot_service = if let Some(c) = cfg.committer {
             SnapshotService::with_committer(config, c)
         } else {
             SnapshotService::with_config(config)
         };
 
         let result = snapshot_service
-            .set_current_snapshot(&metadata_service, path, id, as_of, branch, tag)
+            .set_current_snapshot(&metadata_service, cfg.path, cfg.id, cfg.as_of, cfg.branch, cfg.tag)
             .await?;
 
-        if output == "json" {
+        if cfg.output == "json" {
             let json_str = SnapshotFormatter::format_set_json(
                 result.previous_id,
                 result.current_id,

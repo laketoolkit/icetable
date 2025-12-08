@@ -6,14 +6,13 @@ use crate::error::{Error, Result};
 use iceberg::table::Table;
 
 /// Resolved table that can be either a direct path or a catalog table
-#[allow(clippy::large_enum_variant)]
 pub enum TableResolution {
     /// Direct path to table on storage
     Path(String),
     /// Table loaded from catalog
     CatalogTable {
-        /// The loaded iceberg Table
-        table: Table,
+        /// The loaded iceberg Table (boxed to reduce enum size)
+        table: Box<Table>,
         /// Namespace path
         namespace: Vec<String>,
         /// Table name
@@ -110,7 +109,7 @@ async fn resolve_from_catalog(table_input: &str, catalog: &CatalogConfig) -> Res
     let table = client.load_table(&table_ref).await?;
 
     Ok(TableResolution::CatalogTable {
-        table,
+        table: Box::new(table),
         namespace,
         name,
     })

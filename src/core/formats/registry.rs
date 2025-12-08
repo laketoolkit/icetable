@@ -105,7 +105,6 @@ impl FormatHandlerRegistry {
     }
 
     /// Create a handler with time-travel options (bypasses factory)
-    #[allow(unused_variables)]
     async fn create_time_travel_handler(
         &self,
         path: &Path,
@@ -124,6 +123,8 @@ impl FormatHandlerRegistry {
 
         // Try Iceberg
         {
+            #[cfg(not(feature = "delta"))]
+            let _ = &time_travel; // Used by Delta above when feature enabled
             let handler = super::IcebergHandler::with_time_travel(path, storage, time_travel)?;
             if handler.can_handle(path).await? {
                 return Ok(Box::new(handler));

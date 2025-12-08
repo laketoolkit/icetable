@@ -34,6 +34,17 @@ pub struct RefConfig {
     pub dry_run: bool,
 }
 
+/// Branch retention configuration
+#[derive(Debug, Clone, Default)]
+pub struct BranchRetention {
+    /// Minimum number of snapshots to keep
+    pub min_snapshots_to_keep: Option<i32>,
+    /// Maximum snapshot age in milliseconds
+    pub max_snapshot_age_ms: Option<i64>,
+    /// Maximum reference age in milliseconds
+    pub max_ref_age_ms: Option<i64>,
+}
+
 /// Service for managing branches and tags
 pub struct RefService {
     config: RefConfig,
@@ -72,16 +83,13 @@ impl RefService {
     }
 
     /// Create a new branch
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_branch(
         &self,
         service: &IcebergMetadataService,
         table_path: &str,
         name: &str,
         snapshot_id: Option<i64>,
-        min_snapshots_to_keep: Option<i32>,
-        max_snapshot_age_ms: Option<i64>,
-        max_ref_age_ms: Option<i64>,
+        retention: BranchRetention,
     ) -> Result<RefResult> {
         let (metadata, current_version) = service.load_metadata().await?;
 
@@ -117,9 +125,9 @@ impl RefService {
         let branch_ref = SnapshotReference {
             snapshot_id: target_id,
             retention: SnapshotRetention::Branch {
-                min_snapshots_to_keep,
-                max_snapshot_age_ms,
-                max_ref_age_ms,
+                min_snapshots_to_keep: retention.min_snapshots_to_keep,
+                max_snapshot_age_ms: retention.max_snapshot_age_ms,
+                max_ref_age_ms: retention.max_ref_age_ms,
             },
         };
 

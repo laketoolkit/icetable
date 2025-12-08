@@ -10,8 +10,11 @@ use tokio::sync::watch;
 /// Global cancellation flag
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
+/// Type alias for cleanup handler storage
+type CleanupHandlers = Mutex<Vec<Box<dyn Fn() + Send + Sync>>>;
+
 /// Global cleanup handlers
-static CLEANUP_HANDLERS: OnceLock<Mutex<Vec<Box<dyn Fn() + Send + Sync>>>> = OnceLock::new();
+static CLEANUP_HANDLERS: OnceLock<CleanupHandlers> = OnceLock::new();
 
 
 

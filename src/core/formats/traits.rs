@@ -373,7 +373,6 @@ pub struct FormatHandlerFactory;
 
 impl FormatHandlerFactory {
     /// Create a handler for a specific format (bypasses auto-detection)
-    #[allow(unused_variables)]
     pub async fn create_handler_for_format(
         format: &str,
         path: &Path,
@@ -387,9 +386,12 @@ impl FormatHandlerFactory {
                     return Ok(Box::new(handler));
                 }
                 #[cfg(not(feature = "delta"))]
-                return Err(crate::error::Error::General(
-                    "Delta Lake support not enabled".to_string(),
-                ));
+                {
+                    let _ = (path, storage); // Suppress unused warnings when delta feature disabled
+                    Err(crate::error::Error::General(
+                        "Delta Lake support not enabled".to_string(),
+                    ))
+                }
             }
             "iceberg" => {
                 let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
@@ -401,7 +403,6 @@ impl FormatHandlerFactory {
         }
     }
     /// Detect the table format and create an appropriate handler
-    #[allow(unused_variables)]
     pub async fn create_handler(
         path: &Path,
         storage: Arc<dyn crate::core::storage::StorageBackend>,
