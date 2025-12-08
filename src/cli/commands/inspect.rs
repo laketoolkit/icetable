@@ -295,10 +295,7 @@ impl InspectCommand {
 }
 
 /// Inspect physical layout of a table
-async fn inspect_physical_layout(
-    path: &str,
-    options: &PhysicalInspectOptions,
-) -> Result<String> {
+async fn inspect_physical_layout(path: &str, options: &PhysicalInspectOptions) -> Result<String> {
     // Use the new PhysicalInspectionService with dynamic inspector registry
     use crate::core::inspection::{PhysicalInspectionService, view_to_inspect_result};
 

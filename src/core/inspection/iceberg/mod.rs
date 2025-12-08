@@ -102,13 +102,7 @@ impl IcebergInspector {
         iceberg_metadata: Option<&iceberg::spec::TableMetadata>,
     ) -> FileInfo {
         let path_str = self.path.to_str().unwrap_or("");
-        extract_file_info(
-            path_str,
-            metadata,
-            metadata_path,
-            options,
-            iceberg_metadata,
-        )
+        extract_file_info(path_str, metadata, metadata_path, options, iceberg_metadata)
     }
 
     fn extract_schema(&self, metadata: &serde_json::Value) -> Result<SchemaInfo> {
@@ -202,9 +196,7 @@ impl PhysicalInspector for IcebergInspector {
         let local_path = std::path::Path::new(path);
         let metadata_path = local_path.join("metadata");
 
-        metadata_path.exists()
-            || path.ends_with("/metadata")
-            || path.contains("/metadata/")
+        metadata_path.exists() || path.ends_with("/metadata") || path.contains("/metadata/")
     }
 }
 
