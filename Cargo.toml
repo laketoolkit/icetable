@@ -43,7 +43,7 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 
 # Progress and UI
-indicatif = "0.17"
+indicatif = "0.18"
 
 # Error handling
 anyhow = "1.0"
