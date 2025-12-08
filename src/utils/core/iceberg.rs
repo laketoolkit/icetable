@@ -14,26 +14,26 @@ use crate::error::{Error, Result};
 ///
 /// Lists the metadata directory and finds the file with highest version number.
 /// Supports the standard Iceberg format: `<version>-<uuid>.metadata.json`
+///
+/// Returns the full path/URL to the metadata file.
 pub async fn find_latest_metadata(table_path: &str, storage: &Storage) -> Result<String> {
-    let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
+    let table_path = table_path.trim_end_matches('/');
+    let metadata_dir = format!("{}/metadata", table_path);
 
-    let prefix = format!("{}/", metadata_dir);
-    let files = storage.list_prefix(&prefix).await?;
+    // List files using relative path (storage is already prefixed)
+    let files = storage.list_prefix("metadata/").await?;
 
     // Find the latest metadata.json file by version number
-    // Supports both formats:
-    // - Standard: <version>-<uuid>.metadata.json (e.g., 00015-abc123.metadata.json)
-    // - Legacy Hadoop: v<version>.metadata.json (e.g., v15.metadata.json)
+    // Only supports standard Iceberg format: <version>-<uuid>.metadata.json
     let metadata_file = files
         .iter()
         .filter(|obj| obj.location.to_string().ends_with(".metadata.json"))
         .filter_map(|obj| {
-            // extract_version_from_path returns None if it can't parse, Some(version) otherwise
             let path_str = obj.location.to_string();
-            extract_version_from_path(&path_str).map(|version| (obj, version))
+            extract_version_from_path(&path_str).map(|version| (path_str, version))
         })
         .max_by_key(|(_, version)| *version)
-        .map(|(obj, _)| obj)
+        .map(|(path, _)| path)
         .ok_or_else(|| {
             Error::General(format!(
                 "No valid metadata.json file found in {}/",
@@ -41,7 +41,9 @@ pub async fn find_latest_metadata(table_path: &str, storage: &Storage) -> Result
             ))
         })?;
 
-    Ok(metadata_file.location.to_string())
+    // Construct full path: table_path + "/" + relative_path
+    // The metadata_file is relative (e.g., "metadata/00000-xxx.metadata.json")
+    Ok(format!("{}/{}", table_path, metadata_file))
 }
 
 /// Extract version number from a metadata file path

@@ -836,14 +836,12 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
         "metadata-log": []
     });
 
-    let metadata_path = format!("{}/metadata/v1.metadata.json", table_dir);
+    let metadata_path = format!("{}/metadata/00001-6a8c4b2a-7e4d-4f9a-b1c3-d5e6f7a8b9c0.metadata.json", table_dir);
     let mut metadata_file = File::create(&metadata_path)?;
     metadata_file.write_all(serde_json::to_string_pretty(&metadata)?.as_bytes())?;
 
-    // 5. Create version-hint.text
-    let version_hint_path = format!("{}/metadata/version-hint.text", table_dir);
-    let mut version_hint_file = File::create(&version_hint_path)?;
-    version_hint_file.write_all(b"1")?;
+    // 5. Iceberg estándar no usa version-hint.text (es legacy Hadoop)
+    // Eliminado: NO LEGACY
 
     println!("Created: {}", table_dir);
     println!(
@@ -852,8 +850,8 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("  - Manifest: metadata/snap-1-manifest.avro");
     println!("  - Manifest list: metadata/snap-1-manifest-list.avro");
-    println!("  - Metadata: metadata/v1.metadata.json");
-    println!("  - Version hint: metadata/version-hint.text");
+    println!("  - Metadata: metadata/00001-6a8c4b2a-7e4d-4f9a-b1c3-d5e6f7a8b9c0.metadata.json");
+    println!("  - Version hint: ELIMINADO (NO LEGACY)");
     println!("\nTo upload to S3:");
     println!("  aws s3 sync {} s3://tablectl/iceberg-table/", table_dir);
 

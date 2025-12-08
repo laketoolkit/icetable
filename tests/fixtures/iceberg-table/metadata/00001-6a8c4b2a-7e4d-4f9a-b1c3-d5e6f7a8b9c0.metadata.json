@@ -1,0 +1,151 @@
+{
+  "current-schema-id": 0,
+  "current-snapshot-id": 1,
+  "default-sort-order-id": 0,
+  "default-spec-id": 0,
+  "format-version": 1,
+  "last-column-id": 7,
+  "last-partition-id": 999,
+  "last-updated-ms": 1700000000000,
+  "location": "s3://tablectl/iceberg-table",
+  "metadata-log": [],
+  "partition-spec": [],
+  "partition-specs": [
+    {
+      "fields": [],
+      "spec-id": 0
+    }
+  ],
+  "properties": {
+    "write.parquet.compression-codec": "snappy"
+  },
+  "schema": {
+    "fields": [
+      {
+        "id": 1,
+        "name": "user_id",
+        "required": true,
+        "type": "long"
+      },
+      {
+        "id": 2,
+        "name": "username",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "id": 3,
+        "name": "email",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "id": 4,
+        "name": "age",
+        "required": false,
+        "type": "int"
+      },
+      {
+        "id": 5,
+        "name": "score",
+        "required": false,
+        "type": "double"
+      },
+      {
+        "id": 6,
+        "name": "active",
+        "required": true,
+        "type": "boolean"
+      },
+      {
+        "id": 7,
+        "name": "created_at",
+        "required": true,
+        "type": "timestamp"
+      }
+    ],
+    "schema-id": 0,
+    "type": "struct"
+  },
+  "schemas": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "name": "user_id",
+          "required": true,
+          "type": "long"
+        },
+        {
+          "id": 2,
+          "name": "username",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "id": 3,
+          "name": "email",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "id": 4,
+          "name": "age",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "id": 5,
+          "name": "score",
+          "required": false,
+          "type": "double"
+        },
+        {
+          "id": 6,
+          "name": "active",
+          "required": true,
+          "type": "boolean"
+        },
+        {
+          "id": 7,
+          "name": "created_at",
+          "required": true,
+          "type": "timestamp"
+        }
+      ],
+      "schema-id": 0,
+      "type": "struct"
+    }
+  ],
+  "snapshot-log": [
+    {
+      "snapshot-id": 1,
+      "timestamp-ms": 1700000000000
+    }
+  ],
+  "snapshots": [
+    {
+      "manifest-list": "s3://tablectl/iceberg-table/metadata/snap-1-manifest-list.avro",
+      "schema-id": 0,
+      "snapshot-id": 1,
+      "summary": {
+        "added-data-files": "1",
+        "added-files-size": "339727",
+        "added-records": "10000",
+        "operation": "append",
+        "total-data-files": "1",
+        "total-delete-files": "0",
+        "total-files-size": "339727",
+        "total-records": "10000"
+      },
+      "timestamp-ms": 1700000000000
+    }
+  ],
+  "sort-orders": [
+    {
+      "fields": [],
+      "order-id": 0
+    }
+  ],
+  "table-uuid": "12345678-1234-1234-1234-123456789abc"
+}

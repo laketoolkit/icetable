@@ -58,7 +58,9 @@ impl VacuumService {
     pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
         let service = IcebergMetadataService::new_async(table_path.to_string())
             .await
-            .map_err(|_| Error::table_not_found(table_path))?;
+            .map_err(|_| Error::TableNotFound {
+                path: table_path.to_string(),
+            })?;
 
         let (metadata, _) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
@@ -73,11 +75,13 @@ impl VacuumService {
 
             let manifest_list_content = match file_io
                 .new_input(manifest_list_path)
-                .map_err(|e| Error::manifest(format!("Failed to open manifest list: {}", e)))?
+                .map_err(|e| Error::Manifest {
+                    message: format!("Failed to open manifest list: {}", e),
+                })?
                 .read()
                 .await
             {
-                Ok(content) => content,
+                Ok(content) => content.to_vec(),
                 Err(_) => continue,
             };
 

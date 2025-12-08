@@ -13,6 +13,7 @@ pub mod maintenance;
 pub mod metadata;
 pub mod operations;
 pub mod storage;
+pub mod table_loader;
 pub mod utils;
 pub mod validation;
 
@@ -24,6 +25,7 @@ pub use context::{TableContext, TableContextBuilder};
 pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
 pub use storage::{ObjectStoreExt, Storage, create_object_store};
+pub use table_loader::{TableExt, TableLoader};
 pub use utils::{
     TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
 };

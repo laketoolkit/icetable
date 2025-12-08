@@ -5,9 +5,10 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use colored::Colorize;
+use std::sync::Arc;
 
 use crate::cli::parser::HistoryArgs;
-use crate::core::TableContext;
+use crate::core::{TableExt, TableLoader};
 use crate::error::{Error, Result};
 
 /// A single version/snapshot entry in history
@@ -31,10 +32,16 @@ pub struct HistoryCommand;
 impl HistoryCommand {
     /// Execute history command
     pub async fn execute(args: HistoryArgs) -> Result<()> {
-        // 1. Create table context (handles path resolution, storage, format detection)
-        let ctx = TableContext::from_path(args.path.clone()).await?;
+        // 1. Load table using unified TableLoader (uses iceberg::Table consistently)
+        let table_path = args.path.as_ref().ok_or_else(|| {
+            Error::MissingArgument {
+                argument: "path".to_string(),
+                description: "Table path is required".to_string(),
+            }
+        })?;
+        let table = TableLoader::load_table(table_path, None).await?;
 
-        // 2. Verify format
+        // 2. Verify format (implicitly verified by TableLoader)
         if let Some(ref fmt) = args.format
             && fmt.to_lowercase() != "iceberg"
         {
@@ -42,24 +49,23 @@ impl HistoryCommand {
                     feature: "Only Iceberg tables are supported. Use 'icetable import delta' to convert Delta tables.".to_string(),
                 });
         }
-        ctx.require_iceberg()?;
 
-        // 3. Get history from service
-        let entries = Self::get_history(&ctx, &args).await?;
+        // 3. Get history from table
+        let entries = Self::history(&table, &args).await?;
 
         // 4. Output
         Self::output(&entries, &args.output)
     }
 
     /// Get history entries from Iceberg table
-    async fn get_history(ctx: &TableContext, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
-        let (metadata, _) = ctx.iceberg_metadata().await?;
+    async fn history(table: &Arc<iceberg::table::Table>, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
+        let (metadata, _) = table.metadata_with_version();
 
         let current_snapshot_id = metadata.current_snapshot_id();
         let mut entries = Vec::new();
 
         // Collect ALL snapshots first, then sort, then apply limit
-        for snapshot in metadata.snapshots() {
+        for snapshot in table.snapshots() {
             let summary = snapshot.summary();
             let mut details = std::collections::HashMap::new();
 
