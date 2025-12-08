@@ -1,14 +1,20 @@
 //! Vacuum service for cleaning up old files
 //!
-//! This service handles vacuum operations for both Delta Lake and Iceberg tables
+//! This service handles vacuum operations for Iceberg tables
 //! by removing files that are no longer referenced by any snapshot.
+//!
+//! Supports both local and cloud storage (S3, GCS, Azure).
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::metadata::{MaintenanceResult, MetadataService};
-use crate::core::utils::fs::{ScanConfig, normalize_path, scan_parquet_files};
+use futures::stream::{self, StreamExt};
+use iceberg::spec::ManifestList;
+
+use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
+use crate::core::storage::traits::ListOptions;
+use crate::core::storage::StorageBackendFactory;
 use crate::core::utils::{format_bytes, sizes};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Service for vacuuming tables (removing unreferenced files)
 pub struct VacuumService {
@@ -22,8 +28,8 @@ pub struct VacuumConfig {
     pub retention_hours: u64,
     /// Whether to run in dry-run mode
     pub dry_run: bool,
-    /// Whether to delete metadata files as well
-    pub include_metadata: bool,
+    /// Maximum concurrent operations for scanning/deleting
+    pub parallelism: usize,
 }
 
 impl Default for VacuumConfig {
@@ -31,7 +37,7 @@ impl Default for VacuumConfig {
         Self {
             retention_hours: sizes::DEFAULT_RETENTION_HOURS,
             dry_run: false,
-            include_metadata: false,
+            parallelism: 32,
         }
     }
 }
@@ -49,105 +55,159 @@ impl VacuumService {
         Self { config }
     }
 
-    /// Analyze files that would be deleted
-    ///
-    /// IMPORTANT: Uses `get_all_referenced_files()` to check ALL snapshots,
-    /// not just the current one. This prevents deleting files needed for
-    /// time-travel to older snapshots.
-    pub async fn analyze<M: MetadataService>(
-        &self,
-        metadata_service: &M,
-    ) -> Result<VacuumAnalysis> {
-        let data_dir = metadata_service.data_directory();
+    /// Analyze files that would be deleted (works with any storage backend)
+    pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
+        let service = IcebergMetadataService::new_async(table_path.to_string())
+            .await
+            .map_err(|_| Error::table_not_found(table_path))?;
 
-        // Get ALL files referenced by ANY snapshot (not just current)
-        // This is critical for time-travel support - we must not delete
-        // files that older snapshots still reference
-        let referenced_paths: HashSet<String> = metadata_service
-            .get_all_referenced_files()
-            .await?
-            .into_iter()
-            .map(|p| normalize_path(&p))
-            .collect();
+        let (metadata, _) = service.load_metadata().await?;
+        let file_io = service.file_io().clone();
 
-        // Calculate cutoff time
-        let cutoff_time =
-            chrono::Utc::now() - chrono::Duration::hours(self.config.retention_hours as i64);
-        let cutoff_timestamp = cutoff_time.timestamp();
+        // Step 1: Collect all referenced files from ALL snapshots
+        let snapshots: Vec<_> = metadata.snapshots().collect();
+        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
+        let mut manifest_entries: Vec<iceberg::spec::ManifestFile> = Vec::new();
 
-        // Configure scan
-        let mut scan_config = ScanConfig::parquet().with_cutoff(cutoff_timestamp);
-        if self.config.include_metadata {
-            scan_config.skip_dirs.clear();
+        for snapshot in &snapshots {
+            let manifest_list_path = snapshot.manifest_list();
+
+            let manifest_list_content = match file_io
+                .new_input(manifest_list_path)
+                .map_err(|e| Error::manifest(format!("Failed to open manifest list: {}", e)))?
+                .read()
+                .await
+            {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+
+            let manifest_list = match ManifestList::parse_with_version(
+                &manifest_list_content,
+                metadata.format_version(),
+            ) {
+                Ok(ml) => ml,
+                Err(_) => continue,
+            };
+
+            for entry in manifest_list.entries() {
+                if !seen_manifest_paths.contains(&entry.manifest_path) {
+                    seen_manifest_paths.insert(entry.manifest_path.clone());
+                    manifest_entries.push(entry.clone());
+                }
+            }
         }
 
-        // Scan filesystem for all parquet files
-        let scanned_files = scan_parquet_files(&data_dir, &scan_config)?;
-
-        // Filter to orphan files (not referenced)
-        let orphan_files: Vec<OrphanFile> = scanned_files
-            .into_iter()
-            .filter(|f| !referenced_paths.contains(&f.path))
-            .map(|f| OrphanFile {
-                path: f.path,
-                size: f.size,
-                mtime_seconds: f.mtime_seconds,
+        // Step 2: Load all manifests in parallel to get referenced data files
+        let manifest_results: Vec<Vec<String>> = stream::iter(manifest_entries.into_iter())
+            .map(|manifest_entry| {
+                let file_io = file_io.clone();
+                async move {
+                    if let Ok(manifest) = manifest_entry.load_manifest(&file_io).await {
+                        manifest
+                            .entries()
+                            .iter()
+                            .map(|e| e.file_path().to_string())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
             })
+            .buffer_unordered(self.config.parallelism)
+            .collect()
+            .await;
+
+        let mut referenced_files: HashSet<String> = HashSet::new();
+        for paths in manifest_results {
+            referenced_files.extend(paths);
+        }
+
+        // Build filename lookup set for O(1) matching
+        let referenced_filenames: HashSet<String> = referenced_files
+            .iter()
+            .filter_map(|r| r.rsplit('/').next().map(|s| s.to_string()))
             .collect();
 
-        let orphan_bytes = orphan_files.iter().map(|f| f.size).sum();
+        // Step 3: List all files in data directory
+        let storage = StorageBackendFactory::create_backend(table_path).await?;
+        let base_path = table_path.trim_end_matches('/');
+        let data_prefix = format!("{}/data/", base_path);
+
+        let list_opts = ListOptions {
+            prefix: Some(data_prefix),
+            delimiter: None,
+            max_results: None,
+            continuation_token: None,
+        };
+
+        let all_files = storage.list(&list_opts).await?;
+
+        // Step 4: Calculate cutoff time and find orphan files
+        let cutoff_time =
+            chrono::Utc::now() - chrono::Duration::hours(self.config.retention_hours as i64);
+        let cutoff_ms = cutoff_time.timestamp_millis();
+
+        let mut orphan_files: Vec<OrphanFile> = Vec::new();
+        let mut orphan_bytes: u64 = 0;
+
+        for obj in &all_files.objects {
+            let filename = obj.path.rsplit('/').next().unwrap_or(&obj.path);
+            let is_referenced = referenced_filenames.contains(filename);
+
+            if !is_referenced {
+                let file_time_ms = obj.last_modified.timestamp_millis();
+                if file_time_ms < cutoff_ms {
+                    orphan_files.push(OrphanFile {
+                        path: obj.path.clone(),
+                        size: obj.size,
+                        mtime_ms: file_time_ms,
+                    });
+                    orphan_bytes += obj.size;
+                }
+            }
+        }
 
         Ok(VacuumAnalysis {
             orphan_files,
             orphan_bytes,
-            referenced_count: referenced_paths.len(),
+            referenced_count: referenced_files.len(),
             retention_hours: self.config.retention_hours,
         })
     }
 
-    /// Run the vacuum operation
-    pub async fn execute<M: MetadataService>(
-        &self,
-        metadata_service: &M,
-    ) -> Result<MaintenanceResult> {
-        let analysis = self.analyze(metadata_service).await?;
+    /// Execute vacuum operation - deletes orphan files
+    pub async fn execute(&self, table_path: &str) -> Result<VacuumResult> {
+        let analysis = self.analyze(table_path).await?;
 
         if analysis.orphan_files.is_empty() {
-            return Ok(MaintenanceResult::no_changes(
-                "No unreferenced files to delete",
-            ));
+            return Ok(VacuumResult {
+                deleted_count: 0,
+                deleted_bytes: 0,
+                errors: Vec::new(),
+                dry_run: self.config.dry_run,
+                analysis,
+            });
         }
 
         if self.config.dry_run {
-            let mut details = HashMap::new();
-            details.insert("mode".to_string(), "dry-run".to_string());
-            details.insert(
-                "files_to_delete".to_string(),
-                analysis.orphan_files.len().to_string(),
-            );
-            details.insert(
-                "bytes_to_free".to_string(),
-                format_bytes(analysis.orphan_bytes),
-            );
-
-            return Ok(MaintenanceResult {
-                files_added: 0,
-                files_removed: analysis.orphan_files.len(),
-                bytes_added: 0,
-                bytes_removed: analysis.orphan_bytes,
-                records_affected: 0,
-                operation: "vacuum (dry-run)".to_string(),
-                details,
+            return Ok(VacuumResult {
+                deleted_count: 0,
+                deleted_bytes: 0,
+                errors: Vec::new(),
+                dry_run: true,
+                analysis,
             });
         }
 
         // Actually delete the files
+        let storage = StorageBackendFactory::create_backend(table_path).await?;
         let mut deleted_count = 0;
         let mut deleted_bytes = 0u64;
         let mut errors = Vec::new();
 
         for file in &analysis.orphan_files {
-            match std::fs::remove_file(&file.path) {
+            match storage.delete(&file.path).await {
                 Ok(_) => {
                     deleted_count += 1;
                     deleted_bytes += file.size;
@@ -158,23 +218,58 @@ impl VacuumService {
             }
         }
 
-        let mut details = HashMap::new();
-        details.insert("deleted_files".to_string(), deleted_count.to_string());
-        details.insert("freed_bytes".to_string(), format_bytes(deleted_bytes));
+        Ok(VacuumResult {
+            deleted_count,
+            deleted_bytes,
+            errors,
+            dry_run: false,
+            analysis,
+        })
+    }
 
-        if !errors.is_empty() {
-            details.insert("errors".to_string(), errors.len().to_string());
+    /// Convert vacuum result to MaintenanceResult for consistent output
+    pub fn to_maintenance_result(&self, result: &VacuumResult) -> MaintenanceResult {
+        let mut details = HashMap::new();
+
+        if result.dry_run {
+            details.insert("mode".to_string(), "dry-run".to_string());
+            details.insert(
+                "files_to_delete".to_string(),
+                result.analysis.orphan_files.len().to_string(),
+            );
+            details.insert(
+                "bytes_to_free".to_string(),
+                format_bytes(result.analysis.orphan_bytes),
+            );
+        } else {
+            details.insert("deleted_files".to_string(), result.deleted_count.to_string());
+            details.insert("freed_bytes".to_string(), format_bytes(result.deleted_bytes));
+            if !result.errors.is_empty() {
+                details.insert("errors".to_string(), result.errors.len().to_string());
+            }
         }
 
-        Ok(MaintenanceResult {
+        MaintenanceResult {
             files_added: 0,
-            files_removed: deleted_count,
+            files_removed: if result.dry_run {
+                result.analysis.orphan_files.len()
+            } else {
+                result.deleted_count
+            },
             bytes_added: 0,
-            bytes_removed: deleted_bytes,
+            bytes_removed: if result.dry_run {
+                result.analysis.orphan_bytes
+            } else {
+                result.deleted_bytes
+            },
             records_affected: 0,
-            operation: "vacuum".to_string(),
+            operation: if result.dry_run {
+                "vacuum (dry-run)".to_string()
+            } else {
+                "vacuum".to_string()
+            },
             details,
-        })
+        }
     }
 }
 
@@ -191,8 +286,8 @@ pub struct OrphanFile {
     pub path: String,
     /// File size in bytes
     pub size: u64,
-    /// Modification time as unix timestamp
-    pub mtime_seconds: i64,
+    /// Modification time as unix timestamp in milliseconds
+    pub mtime_ms: i64,
 }
 
 /// Analysis result from vacuum service
@@ -213,4 +308,19 @@ impl VacuumAnalysis {
     pub fn has_files_to_delete(&self) -> bool {
         !self.orphan_files.is_empty()
     }
+}
+
+/// Result of vacuum operation
+#[derive(Debug, Clone)]
+pub struct VacuumResult {
+    /// Number of files deleted
+    pub deleted_count: usize,
+    /// Total bytes freed
+    pub deleted_bytes: u64,
+    /// Errors encountered during deletion
+    pub errors: Vec<String>,
+    /// Whether this was a dry run
+    pub dry_run: bool,
+    /// The analysis that was performed
+    pub analysis: VacuumAnalysis,
 }

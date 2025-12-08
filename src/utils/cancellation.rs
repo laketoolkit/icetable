@@ -2,12 +2,14 @@
 //!
 //! Provides a global cancellation flag that can be set by signal handlers
 //! and checked by operations to enable clean shutdown.
+//!
+//! Uses `tokio::sync::watch` for efficient async notification without polling.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::watch;
 
-/// Global cancellation flag
+/// Global cancellation flag (for sync checks)
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Type alias for cleanup handler storage
@@ -15,6 +17,18 @@ type CleanupHandlers = Mutex<Vec<Box<dyn Fn() + Send + Sync>>>;
 
 /// Global cleanup handlers
 static CLEANUP_HANDLERS: OnceLock<CleanupHandlers> = OnceLock::new();
+
+/// Global watch channel for async cancellation notification
+static CANCELLATION_CHANNEL: OnceLock<(watch::Sender<bool>, Mutex<watch::Receiver<bool>>)> =
+    OnceLock::new();
+
+/// Initialize or get the global cancellation channel
+fn get_cancellation_channel() -> &'static (watch::Sender<bool>, Mutex<watch::Receiver<bool>>) {
+    CANCELLATION_CHANNEL.get_or_init(|| {
+        let (tx, rx) = watch::channel(false);
+        (tx, Mutex::new(rx))
+    })
+}
 
 
 
@@ -26,14 +40,19 @@ pub fn is_cancelled() -> bool {
 /// Request cancellation and run cleanup handlers
 pub fn request_cancellation() {
     CANCELLED.store(true, Ordering::SeqCst);
-    
+
+    // Notify async waiters via watch channel
+    let (sender, _) = get_cancellation_channel();
+    let _ = sender.send(true);
+
     // Run all cleanup handlers
     if let Some(handlers) = CLEANUP_HANDLERS.get()
-        && let Ok(mut handlers_lock) = handlers.lock() {
-            for handler in handlers_lock.drain(..) {
-                handler();
-            }
+        && let Ok(mut handlers_lock) = handlers.lock()
+    {
+        for handler in handlers_lock.drain(..) {
+            handler();
         }
+    }
 }
 
 /// Register a cleanup handler to be called on cancellation
@@ -69,6 +88,9 @@ pub fn run_cleanup_handlers() {
 #[cfg(test)]
 pub fn reset_cancellation() {
     CANCELLED.store(false, Ordering::SeqCst);
+    // Also reset the watch channel
+    let (sender, _) = get_cancellation_channel();
+    let _ = sender.send(false);
 }
 
 /// Cancellation token for async operations
@@ -191,13 +213,33 @@ where
     }
 }
 
-/// Wait for cancellation signal
+/// Wait for cancellation signal (no polling - uses watch channel)
 async fn wait_for_cancellation() {
+    // Fast path: already cancelled
+    if is_cancelled() {
+        return;
+    }
+
+    // Get a receiver clone for this wait
+    let (_, receiver_lock) = get_cancellation_channel();
+    let mut receiver = receiver_lock
+        .lock()
+        .map(|r| r.clone())
+        .unwrap_or_else(|_| watch::channel(false).1);
+
+    // Wait for the channel to signal cancellation
     loop {
-        if is_cancelled() {
+        if *receiver.borrow() || is_cancelled() {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if receiver.changed().await.is_err() {
+            // Channel closed, fall back to flag check
+            if is_cancelled() {
+                return;
+            }
+            // Channel closed without cancellation - wait indefinitely
+            std::future::pending::<()>().await;
+        }
     }
 }
 

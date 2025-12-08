@@ -150,7 +150,49 @@ pub enum Error {
         http_status: Option<u16>,
     },
 
-    /// General errors with context
+    /// Metadata-related errors (loading, parsing, writing)
+    #[error("Metadata error: {message}")]
+    Metadata {
+        /// The error message describing what failed
+        message: String,
+    },
+
+    /// Manifest-related errors (loading, parsing manifests)
+    #[error("Manifest error: {message}")]
+    Manifest {
+        /// The error message describing what failed
+        message: String,
+    },
+
+    /// Serialization/deserialization errors
+    #[error("Serialization error: {message}")]
+    Serialization {
+        /// The error message describing what failed
+        message: String,
+    },
+
+    /// Column not found in schema
+    #[error("Column not found: {column}")]
+    ColumnNotFound {
+        /// The column name that was not found
+        column: String,
+    },
+
+    /// Snapshot not found
+    #[error("Snapshot not found: {snapshot_id}")]
+    SnapshotNotFound {
+        /// The snapshot ID that was not found
+        snapshot_id: i64,
+    },
+
+    /// Table not found or not valid
+    #[error("Table not found or invalid: {path}")]
+    TableNotFound {
+        /// The path to the table
+        path: String,
+    },
+
+    /// General errors with context (use sparingly - prefer specific variants)
     #[error("{0}")]
     General(String),
 
@@ -349,6 +391,44 @@ impl Error {
             path: path.into(),
             reason: reason.into(),
         }
+    }
+
+    /// Create a metadata error
+    pub fn metadata<S: Into<String>>(message: S) -> Self {
+        Error::Metadata {
+            message: message.into(),
+        }
+    }
+
+    /// Create a manifest error
+    pub fn manifest<S: Into<String>>(message: S) -> Self {
+        Error::Manifest {
+            message: message.into(),
+        }
+    }
+
+    /// Create a serialization error
+    pub fn serialization<S: Into<String>>(message: S) -> Self {
+        Error::Serialization {
+            message: message.into(),
+        }
+    }
+
+    /// Create a column not found error
+    pub fn column_not_found<S: Into<String>>(column: S) -> Self {
+        Error::ColumnNotFound {
+            column: column.into(),
+        }
+    }
+
+    /// Create a snapshot not found error
+    pub fn snapshot_not_found(snapshot_id: i64) -> Self {
+        Error::SnapshotNotFound { snapshot_id }
+    }
+
+    /// Create a table not found error
+    pub fn table_not_found<S: Into<String>>(path: S) -> Self {
+        Error::TableNotFound { path: path.into() }
     }
 
     fn file_not_found_suggestion(path: &Path) -> String {

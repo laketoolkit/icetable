@@ -1,53 +1,17 @@
 //! Doctor command implementation
 //!
-//! Diagnoses environment health and table integrity.
+//! Thin wrapper that delegates to DoctorService in core.
 //!
 //! Two modes:
 //! 1. Environment check (no table path): Checks credentials, config, connectivity
 //! 2. Table integrity check (with --table): Validates Iceberg table structure
-//!    similar to `git fsck`
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
-use std::sync::Arc;
+use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
 use crate::cli::parser::DoctorArgs;
-use crate::core::storage::{StorageBackend, StorageBackendFactory};
+use crate::core::maintenance::{CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService};
 use crate::error::Result;
-
-/// Check result status
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum CheckStatus {
-    Ok,
-    Warning,
-    Error,
-}
-
-impl CheckStatus {
-    fn symbol(&self) -> String {
-        match self {
-            CheckStatus::Ok => "✓".green().to_string(),
-            CheckStatus::Warning => "⚠".yellow().to_string(),
-            CheckStatus::Error => "✗".red().to_string(),
-        }
-    }
-
-    fn color(&self) -> Color {
-        match self {
-            CheckStatus::Ok => Color::Rgb { r: 80, g: 200, b: 120 },       // Medium green
-            CheckStatus::Warning => Color::Rgb { r: 220, g: 180, b: 60 },  // Gold/amber
-            CheckStatus::Error => Color::Rgb { r: 220, g: 90, b: 90 },     // Medium red
-        }
-    }
-}
-
-/// Result of a single diagnostic check
-struct CheckResult {
-    name: String,
-    status: CheckStatus,
-    message: String,
-    suggestion: Option<String>,
-}
 
 /// Handler for doctor command
 pub struct DoctorCommand;
@@ -57,22 +21,14 @@ impl DoctorCommand {
     pub async fn execute(args: DoctorArgs) -> Result<()> {
         use crate::config::ResolvePath;
 
-        // Try to resolve the table path (from -t or from config)
         match args.path.resolve() {
-            Ok(path) => {
-                // Table path available, run table integrity checks
-                Self::execute_table_check(&args, &path).await
-            }
-            Err(_) => {
-                // No table path, run environment health checks
-                Self::execute_environment_check(&args).await
-            }
+            Ok(path) => Self::execute_table_check(&args, &path).await,
+            Err(_) => Self::execute_environment_check(&args).await,
         }
     }
 
-    /// Run environment health checks (credentials, config, etc.)
+    /// Run environment health checks
     async fn execute_environment_check(args: &DoctorArgs) -> Result<()> {
-        // Warn if --check-files is used without a table
         if args.check_files {
             println!(
                 "{}: --check-files requires a table path (-t or configured via 'icetable config use'). Ignoring.",
@@ -81,83 +37,90 @@ impl DoctorCommand {
             println!();
         }
 
-        println!(
-            "{}",
-            "icetable doctor - Environment Health Check".bold().cyan()
-        );
+        println!("{}", "icetable doctor - Environment Health Check".bold().cyan());
         println!();
 
         let mut checks = Vec::new();
 
         // Run all diagnostic checks
-        checks.push(Self::check_rust_version().await);
-        checks.push(Self::check_config_file().await);
-
-        // Configuration validation checks (context, aliases, catalogs)
+        checks.push(DoctorService::check_version());
+        checks.push(Self::check_config_file());
         checks.extend(Self::check_configuration(args).await);
+        checks.push(DoctorService::check_aws_credentials());
+        checks.push(DoctorService::check_aws_endpoint());
+        checks.push(DoctorService::check_gcs_credentials());
+        checks.push(DoctorService::check_azure_credentials());
 
-        // Cloud credentials checks
-        checks.push(Self::check_aws_credentials().await);
-        checks.push(Self::check_aws_endpoint().await);
-        checks.push(Self::check_gcs_credentials().await);
-        checks.push(Self::check_azure_credentials().await);
-
-        // Storage connectivity test if requested
         if args.storage {
-            match Self::test_storage_connectivity().await {
-                Ok(_) => {
-                    checks.push(CheckResult {
-                        name: "Storage connectivity".to_string(),
-                        status: CheckStatus::Ok,
-                        message: "Local filesystem available".to_string(),
-                        suggestion: None,
-                    });
-                }
-                Err(e) => {
-                    checks.push(CheckResult {
-                        name: "Storage connectivity".to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("Failed: {}", e),
-                        suggestion: Some("Check storage backend configuration".to_string()),
-                    });
-                }
+            checks.push(DoctorService::check_storage_connectivity().await);
+        }
+
+        Self::output_results(&checks, &args.output);
+        Ok(())
+    }
+
+    /// Run table integrity checks
+    async fn execute_table_check(args: &DoctorArgs, table_path: &str) -> Result<()> {
+        let is_json = args.output == "json";
+
+        if !is_json {
+            println!("{}", "icetable doctor - Table Integrity Check".bold().cyan());
+            println!("Table: {}", table_path.cyan());
+            println!();
+        }
+
+        let config = DoctorConfig {
+            check_files: args.check_files,
+            test_storage: args.storage,
+            catalog: args.catalog.clone(),
+        };
+
+        let service = DoctorService::with_config(config);
+        let checks = service.check_table_integrity(table_path).await?;
+
+        Self::output_results(&checks, &args.output);
+
+        // Additional summary for table checks
+        if !is_json {
+            let summary = CheckSummary::from_checks(&checks);
+            println!();
+            if summary.has_errors() {
+                println!("{}", "Table integrity issues found. Review the errors above.".red());
+            } else if summary.has_warnings() {
+                println!("{}", "Table appears healthy but has warnings worth reviewing.".yellow());
+            } else {
+                println!("{}", "Table integrity verified. No issues found.".green());
             }
         }
 
-        // Display results
-        if args.output == "json" {
-            Self::display_json(&checks);
-        } else {
-            Self::display_table(&checks);
-        }
-
-        // Summary
-        let errors = checks.iter().filter(|c| c.status == CheckStatus::Error).count();
-        let warnings = checks
-            .iter()
-            .filter(|c| c.status == CheckStatus::Warning)
-            .count();
-        let ok = checks.iter().filter(|c| c.status == CheckStatus::Ok).count();
-
-        println!();
-        println!(
-            "{}: {} passed, {} warnings, {} errors",
-            "Summary".bold(),
-            ok.to_string().green(),
-            warnings.to_string().yellow(),
-            errors.to_string().red()
-        );
-
-        if errors > 0 {
-            println!();
-            println!(
-                "{}",
-                "Some checks failed. Review the suggestions above to fix issues."
-                    .yellow()
-            );
-        }
-
         Ok(())
+    }
+
+    /// Check config file
+    fn check_config_file() -> CheckResult {
+        use crate::config::Config;
+
+        match Config::config_path() {
+            Ok(path) => {
+                if path.exists() {
+                    match Config::load() {
+                        Ok(_) => CheckResult::ok("Config file", path.display().to_string()),
+                        Err(e) => CheckResult::warning(
+                            "Config file",
+                            format!("Parse error: {}", e),
+                            "Check config file syntax",
+                        ),
+                    }
+                } else {
+                    CheckResult::ok("Config file", "Not created yet (will use defaults)")
+                }
+            }
+            Err(e) => CheckResult::warning(
+                "Config file",
+                format!("Cannot determine path: {}", e),
+                "Check HOME environment variable",
+            ),
+        }
     }
 
     /// Check configuration (context, aliases, catalogs)
@@ -167,7 +130,7 @@ impl DoctorCommand {
         let mut checks = Vec::new();
         let config = match Config::load() {
             Ok(cfg) => cfg,
-            Err(_) => return checks, // Config file check already handles this
+            Err(_) => return checks,
         };
 
         // Check current context
@@ -175,87 +138,57 @@ impl DoctorCommand {
             match config.resolve_table(context) {
                 Ok(resolved) => {
                     let msg = match resolved {
-                        crate::config::ResolvedTable::Path(path) => {
-                            format!("{} → {}", context, path)
-                        }
+                        crate::config::ResolvedTable::Path(path) => format!("{} -> {}", context, path),
                         crate::config::ResolvedTable::Catalog { catalog_name, table_name, .. } => {
-                            format!("{} → {}.{}", context, catalog_name, table_name)
+                            format!("{} -> {}.{}", context, catalog_name, table_name)
                         }
                     };
-                    checks.push(CheckResult {
-                        name: "Current context".to_string(),
-                        status: CheckStatus::Ok,
-                        message: msg,
-                        suggestion: None,
-                    });
+                    checks.push(CheckResult::ok("Current context", msg));
                 }
                 Err(e) => {
-                    checks.push(CheckResult {
-                        name: "Current context".to_string(),
-                        status: CheckStatus::Warning,
-                        message: format!("Invalid: {}", e),
-                        suggestion: Some("Run 'icetable config use <table>' to set a valid context".to_string()),
-                    });
+                    checks.push(CheckResult::warning(
+                        "Current context",
+                        format!("Invalid: {}", e),
+                        "Run 'icetable config use <table>' to set a valid context",
+                    ));
                 }
             }
         }
 
-        // Check table aliases
         if !config.tables.is_empty() {
-            checks.push(CheckResult {
-                name: "Table aliases".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("{} configured", config.tables.len()),
-                suggestion: None,
-            });
+            checks.push(CheckResult::ok("Table aliases", format!("{} configured", config.tables.len())));
         }
 
-        // Check catalogs
         if !config.catalogs.is_empty() {
-            checks.push(CheckResult {
-                name: "Catalogs".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("{} configured", config.catalogs.len()),
-                suggestion: None,
-            });
+            checks.push(CheckResult::ok("Catalogs", format!("{} configured", config.catalogs.len())));
         }
 
         // Validate specific catalog if requested
         if let Some(catalog_name) = &args.catalog {
             if let Some(catalog) = config.catalogs.get(catalog_name) {
-                checks.push(CheckResult {
-                    name: format!("Catalog '{}'", catalog_name),
-                    status: CheckStatus::Ok,
-                    message: "Found in config".to_string(),
-                    suggestion: None,
-                });
+                checks.push(CheckResult::ok(format!("Catalog '{}'", catalog_name), "Found in config"));
 
-                // Test connectivity
                 match Self::test_catalog_connectivity(catalog_name, catalog).await {
                     Ok(_) => {
-                        checks.push(CheckResult {
-                            name: format!("Catalog '{}' connectivity", catalog_name),
-                            status: CheckStatus::Ok,
-                            message: "Connected successfully".to_string(),
-                            suggestion: None,
-                        });
+                        checks.push(CheckResult::ok(
+                            format!("Catalog '{}' connectivity", catalog_name),
+                            "Connected successfully",
+                        ));
                     }
                     Err(e) => {
-                        checks.push(CheckResult {
-                            name: format!("Catalog '{}' connectivity", catalog_name),
-                            status: CheckStatus::Error,
-                            message: format!("Connection failed: {}", e),
-                            suggestion: Some("Check catalog URI and credentials".to_string()),
-                        });
+                        checks.push(CheckResult::error(
+                            format!("Catalog '{}' connectivity", catalog_name),
+                            format!("Connection failed: {}", e),
+                            "Check catalog URI and credentials",
+                        ));
                     }
                 }
             } else {
-                checks.push(CheckResult {
-                    name: format!("Catalog '{}'", catalog_name),
-                    status: CheckStatus::Error,
-                    message: "Not found in config".to_string(),
-                    suggestion: Some("Run 'icetable config add-catalog' to add it".to_string()),
-                });
+                checks.push(CheckResult::error(
+                    format!("Catalog '{}'", catalog_name),
+                    "Not found in config",
+                    "Run 'icetable config add-catalog' to add it",
+                ));
             }
         }
 
@@ -265,23 +198,21 @@ impl DoctorCommand {
     /// Test catalog connectivity
     async fn test_catalog_connectivity(name: &str, catalog: &crate::config::CatalogConfig) -> Result<()> {
         use crate::core::CatalogType;
+        use crate::error::Error;
 
         log::debug!("Testing connectivity to catalog: {}", name);
 
-        // For REST catalogs, validate configuration
         if catalog.catalog_type == CatalogType::Rest {
             if catalog.uri.is_empty() {
-                return Err(crate::error::Error::General("REST catalog URI is empty".to_string()));
+                return Err(Error::Configuration { message: "REST catalog URI is empty".to_string() });
             }
 
             if !catalog.uri.starts_with("http://") && !catalog.uri.starts_with("https://") {
-                return Err(crate::error::Error::General(format!(
-                    "REST catalog URI should start with http:// or https://: {}",
-                    catalog.uri
-                )));
+                return Err(Error::Configuration {
+                    message: format!("REST catalog URI should start with http:// or https://: {}", catalog.uri),
+                });
             }
 
-            // Try to fetch config endpoint
             let client = reqwest::Client::new();
             let config_url = format!("{}/v1/config", catalog.uri.trim_end_matches('/'));
             match client
@@ -294,16 +225,14 @@ impl DoctorCommand {
                     log::debug!("REST catalog {} is reachable", catalog.uri);
                     Ok(())
                 }
-                Ok(resp) => {
-                    Err(crate::error::Error::General(format!(
-                        "REST catalog returned status {}", resp.status()
-                    )))
-                }
-                Err(e) => {
-                    Err(crate::error::Error::General(format!(
-                        "Cannot connect to REST catalog: {}", e
-                    )))
-                }
+                Ok(resp) => Err(Error::Network {
+                    message: format!("REST catalog returned status {}", resp.status()),
+                    source: None,
+                }),
+                Err(e) => Err(Error::Network {
+                    message: format!("Cannot connect to REST catalog: {}", e),
+                    source: None,
+                }),
             }
         } else {
             log::debug!("Catalog type {} configuration validated", catalog.catalog_type);
@@ -311,228 +240,34 @@ impl DoctorCommand {
         }
     }
 
-    /// Test storage connectivity
-    async fn test_storage_connectivity() -> Result<()> {
-        use crate::core::storage::StorageBackendFactory;
-
-        log::debug!("Testing storage connectivity");
-
-        // Test local filesystem
-        match StorageBackendFactory::create_backend("file:///tmp").await {
-            Ok(_) => log::debug!("Local filesystem backend available"),
-            Err(e) => return Err(crate::error::Error::General(format!("Local filesystem backend unavailable: {}", e))),
+    /// Output results in appropriate format
+    fn output_results(checks: &[CheckResult], output_format: &str) {
+        if output_format == "json" {
+            Self::display_json(checks);
+        } else {
+            Self::display_table(checks);
         }
 
-        log::debug!("Storage backends available");
-        Ok(())
-    }
+        let summary = CheckSummary::from_checks(checks);
+        if output_format != "json" {
+            println!();
+            println!(
+                "{}: {} passed, {} warnings, {} errors",
+                "Summary".bold(),
+                summary.ok_count.to_string().green(),
+                summary.warning_count.to_string().yellow(),
+                summary.error_count.to_string().red()
+            );
 
-    /// Check Rust toolchain version
-    async fn check_rust_version() -> CheckResult {
-        let version = env!("CARGO_PKG_VERSION");
-        CheckResult {
-            name: "icetable version".to_string(),
-            status: CheckStatus::Ok,
-            message: format!("v{}", version),
-            suggestion: None,
-        }
-    }
-
-    /// Check config file exists and is readable
-    async fn check_config_file() -> CheckResult {
-        use crate::config::Config;
-
-        match Config::config_path() {
-            Ok(path) => {
-                if path.exists() {
-                    match Config::load() {
-                        Ok(_) => CheckResult {
-                            name: "Config file".to_string(),
-                            status: CheckStatus::Ok,
-                            message: path.display().to_string(),
-                            suggestion: None,
-                        },
-                        Err(e) => CheckResult {
-                            name: "Config file".to_string(),
-                            status: CheckStatus::Warning,
-                            message: format!("Parse error: {}", e),
-                            suggestion: Some("Check config file syntax".to_string()),
-                        },
-                    }
-                } else {
-                    CheckResult {
-                        name: "Config file".to_string(),
-                        status: CheckStatus::Ok,
-                        message: "Not created yet (will use defaults)".to_string(),
-                        suggestion: None,
-                    }
-                }
+            if summary.has_errors() {
+                println!();
+                println!("{}", "Some checks failed. Review the suggestions above to fix issues.".yellow());
             }
-            Err(e) => CheckResult {
-                name: "Config file".to_string(),
-                status: CheckStatus::Warning,
-                message: format!("Cannot determine path: {}", e),
-                suggestion: Some("Check HOME environment variable".to_string()),
-            },
-        }
-    }
-
-    /// Check AWS credentials
-    async fn check_aws_credentials() -> CheckResult {
-        let access_key = std::env::var("AWS_ACCESS_KEY_ID").ok();
-        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
-        let profile = std::env::var("AWS_PROFILE").ok();
-
-        match (access_key, secret_key, profile) {
-            (Some(ak), Some(_), _) => {
-                // Mask the key for display
-                let masked = if ak.len() > 4 {
-                    format!("{}...{}", &ak[..4], &ak[ak.len() - 4..])
-                } else {
-                    "****".to_string()
-                };
-                CheckResult {
-                    name: "AWS credentials".to_string(),
-                    status: CheckStatus::Ok,
-                    message: format!("Access key: {}", masked),
-                    suggestion: None,
-                }
-            }
-            (_, _, Some(profile)) => CheckResult {
-                name: "AWS credentials".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("Using profile: {}", profile),
-                suggestion: None,
-            },
-            _ => {
-                // Check if ~/.aws/credentials exists
-                let home = std::env::var("HOME").unwrap_or_default();
-                let creds_path = std::path::Path::new(&home).join(".aws/credentials");
-
-                if creds_path.exists() {
-                    CheckResult {
-                        name: "AWS credentials".to_string(),
-                        status: CheckStatus::Ok,
-                        message: "Using credentials file".to_string(),
-                        suggestion: None,
-                    }
-                } else {
-                    CheckResult {
-                        name: "AWS credentials".to_string(),
-                        status: CheckStatus::Warning,
-                        message: "Not configured".to_string(),
-                        suggestion: Some(
-                            "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or run 'aws configure'"
-                                .to_string(),
-                        ),
-                    }
-                }
-            }
-        }
-    }
-
-    /// Check AWS endpoint (for MinIO/LocalStack)
-    async fn check_aws_endpoint() -> CheckResult {
-        match std::env::var("AWS_ENDPOINT_URL") {
-            Ok(endpoint) => CheckResult {
-                name: "AWS endpoint".to_string(),
-                status: CheckStatus::Ok,
-                message: endpoint,
-                suggestion: None,
-            },
-            Err(_) => CheckResult {
-                name: "AWS endpoint".to_string(),
-                status: CheckStatus::Ok,
-                message: "Default (AWS S3)".to_string(),
-                suggestion: None,
-            },
-        }
-    }
-
-    /// Check GCS credentials
-    async fn check_gcs_credentials() -> CheckResult {
-        let app_creds = std::env::var("GOOGLE_APPLICATION_CREDENTIALS").ok();
-
-        match app_creds {
-            Some(path) => {
-                if std::path::Path::new(&path).exists() {
-                    CheckResult {
-                        name: "GCS credentials".to_string(),
-                        status: CheckStatus::Ok,
-                        message: format!("Service account: {}", path),
-                        suggestion: None,
-                    }
-                } else {
-                    CheckResult {
-                        name: "GCS credentials".to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("File not found: {}", path),
-                        suggestion: Some("Check GOOGLE_APPLICATION_CREDENTIALS path".to_string()),
-                    }
-                }
-            }
-            None => {
-                // Check for default credentials location
-                let home = std::env::var("HOME").unwrap_or_default();
-                let default_path =
-                    std::path::Path::new(&home).join(".config/gcloud/application_default_credentials.json");
-
-                if default_path.exists() {
-                    CheckResult {
-                        name: "GCS credentials".to_string(),
-                        status: CheckStatus::Ok,
-                        message: "Using application default credentials".to_string(),
-                        suggestion: None,
-                    }
-                } else {
-                    CheckResult {
-                        name: "GCS credentials".to_string(),
-                        status: CheckStatus::Warning,
-                        message: "Not configured".to_string(),
-                        suggestion: Some(
-                            "Run 'gcloud auth application-default login' or set GOOGLE_APPLICATION_CREDENTIALS"
-                                .to_string(),
-                        ),
-                    }
-                }
-            }
-        }
-    }
-
-    /// Check Azure credentials
-    async fn check_azure_credentials() -> CheckResult {
-        let storage_account = std::env::var("AZURE_STORAGE_ACCOUNT").ok();
-        let storage_key = std::env::var("AZURE_STORAGE_KEY").ok();
-        let connection_string = std::env::var("AZURE_STORAGE_CONNECTION_STRING").ok();
-
-        match (storage_account, storage_key, connection_string) {
-            (Some(account), Some(_), _) => CheckResult {
-                name: "Azure credentials".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("Account: {}", account),
-                suggestion: None,
-            },
-            (_, _, Some(_)) => CheckResult {
-                name: "Azure credentials".to_string(),
-                status: CheckStatus::Ok,
-                message: "Using connection string".to_string(),
-                suggestion: None,
-            },
-            _ => CheckResult {
-                name: "Azure credentials".to_string(),
-                status: CheckStatus::Warning,
-                message: "Not configured".to_string(),
-                suggestion: Some(
-                    "Set AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY, or run 'az login'".to_string(),
-                ),
-            },
         }
     }
 
     /// Display results as a table
     fn display_table(checks: &[CheckResult]) {
-        use comfy_table::ContentArrangement;
-
         let mut table = Table::new();
         table.load_preset(UTF8_FULL);
         table.set_content_arrangement(ContentArrangement::Dynamic);
@@ -544,13 +279,17 @@ impl DoctorCommand {
         ]);
 
         for check in checks {
-            let row = vec![
-                Cell::new(check.status.symbol()).set_alignment(comfy_table::CellAlignment::Center),
-                Cell::new(&check.name),
-                Cell::new(&check.message).fg(check.status.color()),
-            ];
+            let (symbol, color) = match check.status {
+                CheckStatus::Ok => ("✓".green().to_string(), Color::Rgb { r: 80, g: 200, b: 120 }),
+                CheckStatus::Warning => ("⚠".yellow().to_string(), Color::Rgb { r: 220, g: 180, b: 60 }),
+                CheckStatus::Error => ("✗".red().to_string(), Color::Rgb { r: 220, g: 90, b: 90 }),
+            };
 
-            table.add_row(row);
+            table.add_row(vec![
+                Cell::new(symbol).set_alignment(comfy_table::CellAlignment::Center),
+                Cell::new(&check.name),
+                Cell::new(&check.message).fg(color),
+            ]);
         }
 
         println!("{}", table);
@@ -566,12 +305,7 @@ impl DoctorCommand {
             println!("{}", "Suggestions:".bold());
             for check in issues {
                 if let Some(ref suggestion) = check.suggestion {
-                    println!(
-                        "  {} {}: {}",
-                        "→".dimmed(),
-                        check.name.cyan(),
-                        suggestion
-                    );
+                    println!("  {} {}: {}", "->".dimmed(), check.name.cyan(), suggestion);
                 }
             }
         }
@@ -595,796 +329,16 @@ impl DoctorCommand {
             })
             .collect();
 
+        let summary = CheckSummary::from_checks(checks);
         let json = serde_json::json!({
             "checks": json_checks,
             "summary": {
-                "ok": checks.iter().filter(|c| c.status == CheckStatus::Ok).count(),
-                "warnings": checks.iter().filter(|c| c.status == CheckStatus::Warning).count(),
-                "errors": checks.iter().filter(|c| c.status == CheckStatus::Error).count(),
+                "ok": summary.ok_count,
+                "warnings": summary.warning_count,
+                "errors": summary.error_count,
             }
         });
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json).unwrap_or_default()
-        );
-    }
-
-    // ========================================================================
-    // Table Integrity Check (like git fsck)
-    // ========================================================================
-
-    /// Run table integrity checks (metadata, manifests, data files)
-    async fn execute_table_check(args: &DoctorArgs, table_path: &str) -> Result<()> {
-        let is_json = args.output == "json";
-
-        if !is_json {
-            println!(
-                "{}",
-                "icetable doctor - Table Integrity Check".bold().cyan()
-            );
-            println!("Table: {}", table_path.cyan());
-            println!();
-        }
-
-        let mut checks = Vec::new();
-
-        // Create storage backend
-        let storage: Arc<dyn StorageBackend> =
-            match StorageBackendFactory::create_backend(table_path).await {
-                Ok(s) => s,
-                Err(e) => {
-                    checks.push(CheckResult {
-                        name: "Storage Access".to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("Failed to connect: {}", e),
-                        suggestion: Some(
-                            "Check storage URL format and credentials".to_string(),
-                        ),
-                    });
-
-                    if args.output == "json" {
-                        Self::display_json(&checks);
-                    } else {
-                        Self::display_table(&checks);
-                    }
-                    return Ok(());
-                }
-            };
-
-        checks.push(CheckResult {
-            name: "Storage Access".to_string(),
-            status: CheckStatus::Ok,
-            message: format!("Connected to {}", storage.storage_type()),
-            suggestion: None,
-        });
-
-        // Check 1: Metadata format (standard Iceberg format)
-        let metadata_format_check =
-            Self::check_metadata_format(&storage, table_path).await;
-        let current_version = match &metadata_format_check {
-            CheckResult {
-                status: CheckStatus::Ok,
-                message,
-                ..
-            } => {
-                // Extract version from message like "v15 (00015-uuid.metadata.json)"
-                message.strip_prefix('v')
-                    .and_then(|s| s.split_whitespace().next())
-                    .and_then(|v| v.parse::<i32>().ok())
-            },
-            _ => None,
-        };
-        checks.push(metadata_format_check);
-
-        // Check 2: Metadata JSON is valid and parseable
-        let (metadata_check, metadata) =
-            Self::check_metadata_json(&storage, table_path, current_version).await;
-        checks.push(metadata_check);
-
-        // If metadata is valid, run additional checks
-        if let Some(ref meta) = metadata {
-            // Check 3: Snapshot graph validity
-            checks.push(Self::check_snapshot_graph(meta));
-
-            // Check 4: Current snapshot reference
-            checks.push(Self::check_current_snapshot(meta));
-
-            // Check 5: Manifest files exist
-            let manifest_check =
-                Self::check_manifests_exist(&storage, table_path, meta).await;
-            checks.push(manifest_check);
-
-            // Check 6 (optional): Data files exist
-            if args.check_files {
-                let data_files_check =
-                    Self::check_data_files_exist(&storage, table_path, meta).await;
-                checks.push(data_files_check);
-            }
-        }
-
-        // Display results
-        if is_json {
-            Self::display_json(&checks);
-        } else {
-            Self::display_table(&checks);
-
-            // Summary (only in human mode)
-            let errors = checks.iter().filter(|c| c.status == CheckStatus::Error).count();
-            let warnings = checks
-                .iter()
-                .filter(|c| c.status == CheckStatus::Warning)
-                .count();
-            let ok = checks.iter().filter(|c| c.status == CheckStatus::Ok).count();
-
-            println!();
-            println!(
-                "{}: {} passed, {} warnings, {} errors",
-                "Summary".bold(),
-                ok.to_string().green(),
-                warnings.to_string().yellow(),
-                errors.to_string().red()
-            );
-
-            if errors > 0 {
-                println!();
-                println!(
-                    "{}",
-                    "Table integrity issues found. Review the errors above.".red()
-                );
-            } else if warnings > 0 {
-                println!();
-                println!(
-                    "{}",
-                    "Table appears healthy but has warnings worth reviewing.".yellow()
-                );
-            } else {
-                println!();
-                println!("{}", "Table integrity verified. No issues found.".green());
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Check metadata format (standard Iceberg naming)
-    ///
-    /// Verifies that the table uses standard Iceberg metadata format:
-    /// `<version>-<uuid>.metadata.json` (e.g., 00015-abc123.metadata.json)
-    async fn check_metadata_format(
-        storage: &Arc<dyn StorageBackend>,
-        table_path: &str,
-    ) -> CheckResult {
-        use crate::core::utils::{extract_version_from_path, find_latest_metadata};
-        use iceberg::MetadataLocation;
-        use std::str::FromStr;
-
-        match find_latest_metadata(table_path, storage).await {
-            Ok(metadata_path) => {
-                let filename = metadata_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&metadata_path);
-
-                let version = extract_version_from_path(&metadata_path);
-
-                // Verify it's a valid standard Iceberg format
-                if let Some(v) = version {
-                    if MetadataLocation::from_str(&metadata_path).is_ok() {
-                        CheckResult {
-                            name: "Metadata Format".to_string(),
-                            status: CheckStatus::Ok,
-                            message: format!("v{} ({})", v, filename),
-                            suggestion: None,
-                        }
-                    } else {
-                        CheckResult {
-                            name: "Metadata Format".to_string(),
-                            status: CheckStatus::Error,
-                            message: format!("Invalid format: {}", filename),
-                            suggestion: Some(
-                                "Expected standard Iceberg format: <version>-<uuid>.metadata.json".to_string(),
-                            ),
-                        }
-                    }
-                } else {
-                    CheckResult {
-                        name: "Metadata Format".to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("Invalid format: {}", filename),
-                        suggestion: Some(
-                            "Expected standard Iceberg format: <version>-<uuid>.metadata.json".to_string(),
-                        ),
-                    }
-                }
-            }
-            Err(e) => CheckResult {
-                name: "Metadata Format".to_string(),
-                status: CheckStatus::Error,
-                message: format!("Cannot find metadata: {}", e),
-                suggestion: Some(
-                    "No valid metadata.json files found in metadata/ directory".to_string(),
-                ),
-            },
-        }
-    }
-
-    /// Check metadata JSON is valid
-    async fn check_metadata_json(
-        storage: &Arc<dyn StorageBackend>,
-        table_path: &str,
-        _version: Option<i32>, // Version is now derived from metadata format check
-    ) -> (CheckResult, Option<serde_json::Value>) {
-        use crate::core::storage::traits::GetOptions;
-        use crate::core::utils::find_latest_metadata;
-
-        // Find latest metadata using standard utility
-        let metadata_path = match find_latest_metadata(table_path, storage).await {
-            Ok(path) => path,
-            Err(e) => {
-                return (
-                    CheckResult {
-                        name: "Metadata JSON".to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("Cannot find metadata: {}", e),
-                        suggestion: Some(
-                            "Table metadata/ directory is empty or corrupted".to_string(),
-                        ),
-                    },
-                    None,
-                );
-            }
-        };
-
-        // Read and parse metadata
-        let get_opts = GetOptions::default();
-        match storage.get(&metadata_path, &get_opts).await {
-            Ok(bytes) => {
-                let content = String::from_utf8_lossy(&bytes);
-                match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(meta) => {
-                        // Validate required fields
-                        let has_format_version = meta.get("format-version").is_some();
-                        let has_table_uuid = meta.get("table-uuid").is_some();
-                        let has_location = meta.get("location").is_some();
-
-                        if has_format_version && has_table_uuid && has_location {
-                            let format_version = meta
-                                .get("format-version")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                            let filename = metadata_path
-                                .split('/')
-                                .next_back()
-                                .unwrap_or(&metadata_path);
-                            (
-                                CheckResult {
-                                    name: "Metadata JSON".to_string(),
-                                    status: CheckStatus::Ok,
-                                    message: format!(
-                                        "{} (format v{})",
-                                        filename, format_version
-                                    ),
-                                    suggestion: None,
-                                },
-                                Some(meta),
-                            )
-                        } else {
-                            let missing: Vec<&str> = [
-                                (!has_format_version, "format-version"),
-                                (!has_table_uuid, "table-uuid"),
-                                (!has_location, "location"),
-                            ]
-                            .iter()
-                            .filter(|(missing, _)| *missing)
-                            .map(|(_, name)| *name)
-                            .collect();
-
-                            (
-                                CheckResult {
-                                    name: "Metadata JSON".to_string(),
-                                    status: CheckStatus::Error,
-                                    message: format!("Missing fields: {}", missing.join(", ")),
-                                    suggestion: Some(
-                                        "Metadata file is incomplete or corrupted".to_string(),
-                                    ),
-                                },
-                                None,
-                            )
-                        }
-                    }
-                    Err(e) => (
-                        CheckResult {
-                            name: "Metadata JSON".to_string(),
-                            status: CheckStatus::Error,
-                            message: format!("Parse error: {}", e),
-                            suggestion: Some("Metadata file contains invalid JSON".to_string()),
-                        },
-                        None,
-                    ),
-                }
-            }
-            Err(e) => (
-                CheckResult {
-                    name: "Metadata JSON".to_string(),
-                    status: CheckStatus::Error,
-                    message: format!("Cannot read: {}", e),
-                    suggestion: Some("Metadata file is missing or inaccessible".to_string()),
-                },
-                None,
-            ),
-        }
-    }
-
-    /// Check snapshot graph for cycles
-    fn check_snapshot_graph(metadata: &serde_json::Value) -> CheckResult {
-        let snapshots = match metadata.get("snapshots").and_then(|s| s.as_array()) {
-            Some(s) => s,
-            None => {
-                return CheckResult {
-                    name: "Snapshot Graph".to_string(),
-                    status: CheckStatus::Ok,
-                    message: "No snapshots (empty table)".to_string(),
-                    suggestion: None,
-                };
-            }
-        };
-
-        if snapshots.is_empty() {
-            return CheckResult {
-                name: "Snapshot Graph".to_string(),
-                status: CheckStatus::Ok,
-                message: "No snapshots (empty table)".to_string(),
-                suggestion: None,
-            };
-        }
-
-        // Build snapshot ID set
-        let snapshot_ids: std::collections::HashSet<i64> = snapshots
-            .iter()
-            .filter_map(|s| s.get("snapshot-id").and_then(|id| id.as_i64()))
-            .collect();
-
-        // Check for cycles (simple: ensure parent exists or is 0/-1)
-        let mut orphan_count = 0;
-        for snapshot in snapshots {
-            if let Some(parent_id) = snapshot.get("parent-snapshot-id").and_then(|id| id.as_i64())
-                && parent_id > 0 && !snapshot_ids.contains(&parent_id) {
-                    orphan_count += 1;
-                }
-        }
-
-        if orphan_count > 0 {
-            CheckResult {
-                name: "Snapshot Graph".to_string(),
-                status: CheckStatus::Warning,
-                message: format!(
-                    "{} snapshots, {} orphan references",
-                    snapshots.len(),
-                    orphan_count
-                ),
-                suggestion: Some(
-                    "Some snapshots reference expired parents (normal after expire)".to_string(),
-                ),
-            }
-        } else {
-            CheckResult {
-                name: "Snapshot Graph".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("{} snapshots, no cycles", snapshots.len()),
-                suggestion: None,
-            }
-        }
-    }
-
-    /// Check current snapshot reference is valid
-    fn check_current_snapshot(metadata: &serde_json::Value) -> CheckResult {
-        let current_id = metadata
-            .get("current-snapshot-id")
-            .and_then(|id| id.as_i64());
-
-        match current_id {
-            Some(-1) | None => CheckResult {
-                name: "Current Snapshot".to_string(),
-                status: CheckStatus::Ok,
-                message: "No current snapshot (empty table)".to_string(),
-                suggestion: None,
-            },
-            Some(id) => {
-                let snapshots = metadata
-                    .get("snapshots")
-                    .and_then(|s| s.as_array())
-                    .map(|arr| arr.iter().collect::<Vec<_>>())
-                    .unwrap_or_default();
-
-                let exists = snapshots
-                    .iter()
-                    .any(|s| s.get("snapshot-id").and_then(|sid| sid.as_i64()) == Some(id));
-
-                if exists {
-                    CheckResult {
-                        name: "Current Snapshot".to_string(),
-                        status: CheckStatus::Ok,
-                        message: format!("ID {} exists", id),
-                        suggestion: None,
-                    }
-                } else {
-                    CheckResult {
-                        name: "Current Snapshot".to_string(),
-                        status: CheckStatus::Error,
-                        message: format!("ID {} not found in snapshots", id),
-                        suggestion: Some(
-                            "Current snapshot reference is invalid. Table may be corrupted."
-                                .to_string(),
-                        ),
-                    }
-                }
-            }
-        }
-    }
-
-    /// Check that manifest files exist
-    async fn check_manifests_exist(
-        storage: &Arc<dyn StorageBackend>,
-        table_path: &str,
-        metadata: &serde_json::Value,
-    ) -> CheckResult {
-        use crate::core::storage::traits::GetOptions;
-
-        let current_id = metadata
-            .get("current-snapshot-id")
-            .and_then(|id| id.as_i64())
-            .unwrap_or(-1);
-
-        if current_id == -1 {
-            return CheckResult {
-                name: "Manifest Files".to_string(),
-                status: CheckStatus::Ok,
-                message: "No manifests (empty table)".to_string(),
-                suggestion: None,
-            };
-        }
-
-        let snapshots = match metadata.get("snapshots").and_then(|s| s.as_array()) {
-            Some(s) => s,
-            None => {
-                return CheckResult {
-                    name: "Manifest Files".to_string(),
-                    status: CheckStatus::Ok,
-                    message: "No snapshots".to_string(),
-                    suggestion: None,
-                };
-            }
-        };
-
-        // Find current snapshot
-        let current_snapshot = snapshots.iter().find(|s| {
-            s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id)
-        });
-
-        let manifest_list_path = match current_snapshot
-            .and_then(|s| s.get("manifest-list"))
-            .and_then(|m| m.as_str())
-        {
-            Some(p) => {
-                let table_location = metadata
-                    .get("location")
-                    .and_then(|l| l.as_str())
-                    .unwrap_or(table_path);
-
-                Self::resolve_path(table_location, p)
-            }
-            None => {
-                return CheckResult {
-                    name: "Manifest Files".to_string(),
-                    status: CheckStatus::Error,
-                    message: "No manifest-list in current snapshot".to_string(),
-                    suggestion: Some("Snapshot metadata is incomplete".to_string()),
-                };
-            }
-        };
-
-        // Check manifest-list exists
-        let get_opts = GetOptions::default();
-        let manifest_list_bytes = match storage.get(&manifest_list_path, &get_opts).await {
-            Ok(b) => b,
-            Err(_) => {
-                return CheckResult {
-                    name: "Manifest Files".to_string(),
-                    status: CheckStatus::Error,
-                    message: "Manifest list file not found".to_string(),
-                    suggestion: Some(format!("Missing: {}", manifest_list_path)),
-                };
-            }
-        };
-
-        // Parse manifest list to get manifest paths
-        let manifest_reader = match apache_avro::Reader::new(&manifest_list_bytes[..]) {
-            Ok(r) => r,
-            Err(e) => {
-                return CheckResult {
-                    name: "Manifest Files".to_string(),
-                    status: CheckStatus::Error,
-                    message: format!("Cannot parse manifest list: {}", e),
-                    suggestion: Some("Manifest list file is corrupted".to_string()),
-                };
-            }
-        };
-
-        let table_location = metadata
-            .get("location")
-            .and_then(|l| l.as_str())
-            .unwrap_or(table_path);
-
-        let mut manifest_paths = Vec::new();
-        for value_result in manifest_reader {
-            if let Ok(apache_avro::types::Value::Record(fields)) = value_result
-                && let Some(path) = fields
-                    .iter()
-                    .find(|(name, _)| name == "manifest-path" || name == "manifest_path")
-                    .and_then(|(_, v)| {
-                        if let apache_avro::types::Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-                {
-                    manifest_paths.push(Self::resolve_path(table_location, &path));
-                }
-        }
-
-        // Check each manifest exists
-        let mut missing = 0;
-        for path in &manifest_paths {
-            if !storage.exists(path).await.unwrap_or(false) {
-                missing += 1;
-            }
-        }
-
-        if missing > 0 {
-            CheckResult {
-                name: "Manifest Files".to_string(),
-                status: CheckStatus::Error,
-                message: format!(
-                    "{}/{} manifests missing",
-                    missing,
-                    manifest_paths.len()
-                ),
-                suggestion: Some("Some manifest files are missing. Table may be corrupted.".to_string()),
-            }
-        } else {
-            CheckResult {
-                name: "Manifest Files".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("{} manifests verified", manifest_paths.len()),
-                suggestion: None,
-            }
-        }
-    }
-
-    /// Check that data files exist (slow operation)
-    async fn check_data_files_exist(
-        storage: &Arc<dyn StorageBackend>,
-        table_path: &str,
-        metadata: &serde_json::Value,
-    ) -> CheckResult {
-        use crate::core::storage::traits::GetOptions;
-        use indicatif::{ProgressBar, ProgressStyle};
-
-        let current_id = metadata
-            .get("current-snapshot-id")
-            .and_then(|id| id.as_i64())
-            .unwrap_or(-1);
-
-        if current_id == -1 {
-            return CheckResult {
-                name: "Data Files".to_string(),
-                status: CheckStatus::Ok,
-                message: "No data files (empty table)".to_string(),
-                suggestion: None,
-            };
-        }
-
-        // Get manifest list path
-        let snapshots = match metadata.get("snapshots").and_then(|s| s.as_array()) {
-            Some(s) => s,
-            None => {
-                return CheckResult {
-                    name: "Data Files".to_string(),
-                    status: CheckStatus::Ok,
-                    message: "No snapshots".to_string(),
-                    suggestion: None,
-                };
-            }
-        };
-
-        let current_snapshot = snapshots.iter().find(|s| {
-            s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id)
-        });
-
-        let table_location = metadata
-            .get("location")
-            .and_then(|l| l.as_str())
-            .unwrap_or(table_path);
-
-        let manifest_list_path = match current_snapshot
-            .and_then(|s| s.get("manifest-list"))
-            .and_then(|m| m.as_str())
-        {
-            Some(p) => Self::resolve_path(table_location, p),
-            None => {
-                return CheckResult {
-                    name: "Data Files".to_string(),
-                    status: CheckStatus::Warning,
-                    message: "No manifest-list to check".to_string(),
-                    suggestion: None,
-                };
-            }
-        };
-
-        // Read manifest list
-        let get_opts = GetOptions::default();
-        let manifest_list_bytes = match storage.get(&manifest_list_path, &get_opts).await {
-            Ok(b) => b,
-            Err(_) => {
-                return CheckResult {
-                    name: "Data Files".to_string(),
-                    status: CheckStatus::Error,
-                    message: "Cannot read manifest list".to_string(),
-                    suggestion: None,
-                };
-            }
-        };
-
-        let manifest_reader = match apache_avro::Reader::new(&manifest_list_bytes[..]) {
-            Ok(r) => r,
-            Err(_) => {
-                return CheckResult {
-                    name: "Data Files".to_string(),
-                    status: CheckStatus::Error,
-                    message: "Cannot parse manifest list".to_string(),
-                    suggestion: None,
-                };
-            }
-        };
-
-        // Collect manifest paths
-        let mut manifest_paths = Vec::new();
-        for value_result in manifest_reader {
-            if let Ok(apache_avro::types::Value::Record(fields)) = value_result
-                && let Some(path) = fields
-                    .iter()
-                    .find(|(name, _)| name == "manifest-path" || name == "manifest_path")
-                    .and_then(|(_, v)| {
-                        if let apache_avro::types::Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-                {
-                    manifest_paths.push(Self::resolve_path(table_location, &path));
-                }
-        }
-
-        // Collect all data file paths from manifests
-        let mut data_files = Vec::new();
-        let pb = ProgressBar::new(manifest_paths.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} Reading manifests [{bar:40.cyan/blue}] {pos}/{len}")
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
-                .progress_chars("━━╺"),
-        );
-
-        for manifest_path in &manifest_paths {
-            pb.inc(1);
-
-            let manifest_bytes = match storage.get(manifest_path, &get_opts).await {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-
-            let manifest_reader = match apache_avro::Reader::new(&manifest_bytes[..]) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-
-            for value_result in manifest_reader {
-                if let Ok(apache_avro::types::Value::Record(fields)) = value_result {
-                    // Look for data_file.file_path in the manifest entry
-                    if let Some(data_file) = fields
-                        .iter()
-                        .find(|(name, _)| name == "data_file")
-                        .and_then(|(_, v)| {
-                            if let apache_avro::types::Value::Record(df_fields) = v {
-                                Some(df_fields)
-                            } else {
-                                None
-                            }
-                        })
-                        && let Some(file_path) = data_file
-                            .iter()
-                            .find(|(name, _)| name == "file_path")
-                            .and_then(|(_, v)| {
-                                if let apache_avro::types::Value::String(s) = v {
-                                    Some(s.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                        {
-                            data_files.push(Self::resolve_path(table_location, &file_path));
-                        }
-                }
-            }
-        }
-        pb.finish_and_clear();
-
-        if data_files.is_empty() {
-            return CheckResult {
-                name: "Data Files".to_string(),
-                status: CheckStatus::Ok,
-                message: "No data files in current snapshot".to_string(),
-                suggestion: None,
-            };
-        }
-
-        // Check data files exist (with progress)
-        let total_files = data_files.len();
-        let pb = ProgressBar::new(total_files as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} Checking data files [{bar:40.cyan/blue}] {pos}/{len}")
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
-                .progress_chars("━━╺"),
-        );
-
-        let mut missing = 0;
-        for file_path in &data_files {
-            pb.inc(1);
-            if !storage.exists(file_path).await.unwrap_or(false) {
-                missing += 1;
-            }
-        }
-        pb.finish_and_clear();
-
-        if missing > 0 {
-            CheckResult {
-                name: "Data Files".to_string(),
-                status: CheckStatus::Error,
-                message: format!("{}/{} files missing", missing, total_files),
-                suggestion: Some(
-                    "Some data files are missing. Data may have been deleted externally."
-                        .to_string(),
-                ),
-            }
-        } else {
-            CheckResult {
-                name: "Data Files".to_string(),
-                status: CheckStatus::Ok,
-                message: format!("{} files verified", total_files),
-                suggestion: None,
-            }
-        }
-    }
-
-    /// Resolve a path that may be relative or absolute
-    fn resolve_path(table_location: &str, path: &str) -> String {
-        if path.starts_with("s3://")
-            || path.starts_with("gs://")
-            || path.starts_with("abfs://")
-            || path.starts_with("file://")
-            || path.starts_with('/')
-        {
-            path.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                table_location.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            )
-        }
+        println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
     }
 }

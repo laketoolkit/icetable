@@ -4,6 +4,7 @@
 //! These services use the MetadataService trait to work with both
 //! Delta Lake and Iceberg tables through a unified interface.
 
+mod doctor;
 mod manifest;
 mod optimize;
 mod partition_filter;
@@ -12,6 +13,7 @@ mod repair;
 mod snapshot;
 mod vacuum;
 
+pub use doctor::{CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService};
 pub use manifest::{ManifestAnalysis, ManifestConfig, ManifestRewriteResult, ManifestService};
 pub use optimize::OptimizeService;
 pub use partition_filter::{matches_partition_filter, PartitionFilter};
@@ -21,7 +23,7 @@ pub use snapshot::{
     CreateBackupResult, ExpireSnapshotsResult, ListSnapshotsResult, SetSnapshotResult,
     SnapshotConfig, SnapshotDetails, SnapshotService,
 };
-pub use vacuum::{VacuumAnalysis, VacuumConfig, VacuumService};
+pub use vacuum::{OrphanFile, VacuumAnalysis, VacuumConfig, VacuumResult, VacuumService};
 
 use std::collections::HashMap;
 
