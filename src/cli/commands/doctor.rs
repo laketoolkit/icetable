@@ -72,8 +72,6 @@ impl DoctorCommand {
 
     /// Run environment health checks (credentials, config, etc.)
     async fn execute_environment_check(args: &DoctorArgs) -> Result<()> {
-        use crate::config::Config;
-
         // Warn if --check-files is used without a table
         if args.check_files {
             println!(
@@ -95,100 +93,8 @@ impl DoctorCommand {
         checks.push(Self::check_rust_version().await);
         checks.push(Self::check_config_file().await);
 
-        // Config validation checks
-        let config = Config::load().ok();
-        if let Some(ref cfg) = config {
-            // Check current context
-            if let Some(context) = cfg.get_current_context() {
-                match cfg.resolve_table(context) {
-                    Ok(resolved) => {
-                        let msg = match resolved {
-                            crate::config::ResolvedTable::Path(path) => {
-                                format!("{} → {}", context, path)
-                            }
-                            crate::config::ResolvedTable::Catalog { catalog_name, table_name, .. } => {
-                                format!("{} → {}.{}", context, catalog_name, table_name)
-                            }
-                        };
-                        checks.push(CheckResult {
-                            name: "Current context".to_string(),
-                            status: CheckStatus::Ok,
-                            message: msg,
-                            suggestion: None,
-                        });
-                    }
-                    Err(e) => {
-                        checks.push(CheckResult {
-                            name: "Current context".to_string(),
-                            status: CheckStatus::Warning,
-                            message: format!("Invalid: {}", e),
-                            suggestion: Some("Run 'icetable config use <table>' to set a valid context".to_string()),
-                        });
-                    }
-                }
-            }
-
-            // Check table aliases
-            if !cfg.tables.is_empty() {
-                checks.push(CheckResult {
-                    name: "Table aliases".to_string(),
-                    status: CheckStatus::Ok,
-                    message: format!("{} configured", cfg.tables.len()),
-                    suggestion: None,
-                });
-            }
-
-            // Check catalogs
-            if !cfg.catalogs.is_empty() {
-                checks.push(CheckResult {
-                    name: "Catalogs".to_string(),
-                    status: CheckStatus::Ok,
-                    message: format!("{} configured", cfg.catalogs.len()),
-                    suggestion: None,
-                });
-            }
-        }
-
-        // Validate specific catalog if requested
-        if let Some(catalog_name) = &args.catalog {
-            if let Some(ref cfg) = config {
-                if let Some(catalog) = cfg.catalogs.get(catalog_name) {
-                    checks.push(CheckResult {
-                        name: format!("Catalog '{}'", catalog_name),
-                        status: CheckStatus::Ok,
-                        message: "Found in config".to_string(),
-                        suggestion: None,
-                    });
-
-                    // Test connectivity
-                    match Self::test_catalog_connectivity(catalog_name, catalog).await {
-                        Ok(_) => {
-                            checks.push(CheckResult {
-                                name: format!("Catalog '{}' connectivity", catalog_name),
-                                status: CheckStatus::Ok,
-                                message: "Connected successfully".to_string(),
-                                suggestion: None,
-                            });
-                        }
-                        Err(e) => {
-                            checks.push(CheckResult {
-                                name: format!("Catalog '{}' connectivity", catalog_name),
-                                status: CheckStatus::Error,
-                                message: format!("Connection failed: {}", e),
-                                suggestion: Some("Check catalog URI and credentials".to_string()),
-                            });
-                        }
-                    }
-                } else {
-                    checks.push(CheckResult {
-                        name: format!("Catalog '{}'", catalog_name),
-                        status: CheckStatus::Error,
-                        message: "Not found in config".to_string(),
-                        suggestion: Some("Run 'icetable config add-catalog' to add it".to_string()),
-                    });
-                }
-            }
-        }
+        // Configuration validation checks (context, aliases, catalogs)
+        checks.extend(Self::check_configuration(args).await);
 
         // Cloud credentials checks
         checks.push(Self::check_aws_credentials().await);
@@ -252,6 +158,108 @@ impl DoctorCommand {
         }
 
         Ok(())
+    }
+
+    /// Check configuration (context, aliases, catalogs)
+    async fn check_configuration(args: &DoctorArgs) -> Vec<CheckResult> {
+        use crate::config::Config;
+
+        let mut checks = Vec::new();
+        let config = match Config::load() {
+            Ok(cfg) => cfg,
+            Err(_) => return checks, // Config file check already handles this
+        };
+
+        // Check current context
+        if let Some(context) = config.get_current_context() {
+            match config.resolve_table(context) {
+                Ok(resolved) => {
+                    let msg = match resolved {
+                        crate::config::ResolvedTable::Path(path) => {
+                            format!("{} → {}", context, path)
+                        }
+                        crate::config::ResolvedTable::Catalog { catalog_name, table_name, .. } => {
+                            format!("{} → {}.{}", context, catalog_name, table_name)
+                        }
+                    };
+                    checks.push(CheckResult {
+                        name: "Current context".to_string(),
+                        status: CheckStatus::Ok,
+                        message: msg,
+                        suggestion: None,
+                    });
+                }
+                Err(e) => {
+                    checks.push(CheckResult {
+                        name: "Current context".to_string(),
+                        status: CheckStatus::Warning,
+                        message: format!("Invalid: {}", e),
+                        suggestion: Some("Run 'icetable config use <table>' to set a valid context".to_string()),
+                    });
+                }
+            }
+        }
+
+        // Check table aliases
+        if !config.tables.is_empty() {
+            checks.push(CheckResult {
+                name: "Table aliases".to_string(),
+                status: CheckStatus::Ok,
+                message: format!("{} configured", config.tables.len()),
+                suggestion: None,
+            });
+        }
+
+        // Check catalogs
+        if !config.catalogs.is_empty() {
+            checks.push(CheckResult {
+                name: "Catalogs".to_string(),
+                status: CheckStatus::Ok,
+                message: format!("{} configured", config.catalogs.len()),
+                suggestion: None,
+            });
+        }
+
+        // Validate specific catalog if requested
+        if let Some(catalog_name) = &args.catalog {
+            if let Some(catalog) = config.catalogs.get(catalog_name) {
+                checks.push(CheckResult {
+                    name: format!("Catalog '{}'", catalog_name),
+                    status: CheckStatus::Ok,
+                    message: "Found in config".to_string(),
+                    suggestion: None,
+                });
+
+                // Test connectivity
+                match Self::test_catalog_connectivity(catalog_name, catalog).await {
+                    Ok(_) => {
+                        checks.push(CheckResult {
+                            name: format!("Catalog '{}' connectivity", catalog_name),
+                            status: CheckStatus::Ok,
+                            message: "Connected successfully".to_string(),
+                            suggestion: None,
+                        });
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult {
+                            name: format!("Catalog '{}' connectivity", catalog_name),
+                            status: CheckStatus::Error,
+                            message: format!("Connection failed: {}", e),
+                            suggestion: Some("Check catalog URI and credentials".to_string()),
+                        });
+                    }
+                }
+            } else {
+                checks.push(CheckResult {
+                    name: format!("Catalog '{}'", catalog_name),
+                    status: CheckStatus::Error,
+                    message: "Not found in config".to_string(),
+                    suggestion: Some("Run 'icetable config add-catalog' to add it".to_string()),
+                });
+            }
+        }
+
+        checks
     }
 
     /// Test catalog connectivity
