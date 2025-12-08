@@ -705,7 +705,7 @@ impl IcebergInspector {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.cyan} Scanning manifests {bar:30.dim.white/dim} {pos}/{len}")
-                .unwrap()
+                .expect("hardcoded progress template is valid")
                 .progress_chars("━━╺"),
         );
         pb.enable_steady_tick(std::time::Duration::from_millis(100));

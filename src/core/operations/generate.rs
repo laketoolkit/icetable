@@ -216,7 +216,7 @@ impl GenerateOperation {
         let sequence_number = 1i64;
         let timestamp_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time is after UNIX epoch")
             .as_nanos();
 
         // Create FileIO for writing manifests

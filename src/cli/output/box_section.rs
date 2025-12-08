@@ -74,27 +74,29 @@ impl BoxSection {
     }
 
     /// Agrega un item a la sección (solo para modo eager)
+    ///
+    /// Si la sección es lazy, se convierte a eager primero.
     pub fn item(mut self, item: BoxItem) -> Self {
-        match &mut self.source {
-            ItemSource::Eager(items) => {
-                items.push(item);
-            }
-            ItemSource::Lazy(_) => {
-                panic!("Cannot add individual items to a lazy section");
-            }
+        // Convert lazy to eager if needed
+        if let ItemSource::Lazy(iter) = std::mem::replace(&mut self.source, ItemSource::Eager(Vec::new())) {
+            self.source = ItemSource::Eager(iter.collect());
+        }
+        if let ItemSource::Eager(items) = &mut self.source {
+            items.push(item);
         }
         self
     }
 
     /// Agrega múltiples items eagerly
+    ///
+    /// Si la sección es lazy, se convierte a eager primero.
     pub fn items(mut self, new_items: impl IntoIterator<Item = BoxItem>) -> Self {
-        match &mut self.source {
-            ItemSource::Eager(items) => {
-                items.extend(new_items);
-            }
-            ItemSource::Lazy(_) => {
-                panic!("Cannot add items to a lazy section");
-            }
+        // Convert lazy to eager if needed
+        if let ItemSource::Lazy(iter) = std::mem::replace(&mut self.source, ItemSource::Eager(Vec::new())) {
+            self.source = ItemSource::Eager(iter.collect());
+        }
+        if let ItemSource::Eager(items) = &mut self.source {
+            items.extend(new_items);
         }
         self
     }

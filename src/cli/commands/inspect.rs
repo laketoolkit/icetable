@@ -72,7 +72,8 @@ impl InspectCommand {
                 // Parse table_name which may be "namespace.table" or "ns1.ns2.table"
                 let parts: Vec<&str> = table_name.split('.').collect();
                 let (namespace, name) = if parts.len() >= 2 {
-                    let name = parts.last().unwrap().to_string();
+                    // Safe: we checked len >= 2, so last() always exists
+                    let name = parts.last().expect("checked len >= 2").to_string();
                     let namespace: Vec<String> = parts[..parts.len() - 1]
                         .iter()
                         .map(|s| s.to_string())

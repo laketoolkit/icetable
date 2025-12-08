@@ -78,7 +78,9 @@ impl ValidateCommand {
                 .create_handler(Path::new(&table_path), storage2)
                 .await?;
 
-            let rules = ValidationEngine::load_rules(rules_path.to_str().unwrap()).await?;
+            let rules_path_str = rules_path.to_str()
+                .ok_or_else(|| crate::error::Error::General("Rules path contains invalid UTF-8".to_string()))?;
+            let rules = ValidationEngine::load_rules(rules_path_str).await?;
             let engine = ValidationEngine::new(handler2.into(), rules);
             let rules_result = engine.execute().await?;
 

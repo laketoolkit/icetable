@@ -164,7 +164,8 @@ impl GenerateCommand {
                 "metadata_path": result.metadata_path,
                 "snapshot_id": result.snapshot_id
             });
-            println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
+            println!("{}", serde_json::to_string_pretty(&json_result)
+                .expect("JSON serialization of GenerateResult should never fail"));
         }
     }
 

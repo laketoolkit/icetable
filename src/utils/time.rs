@@ -25,7 +25,8 @@ pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
         return Ok(dt.and_utc());
     }
     if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Ok(date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+        // Safe: 0,0,0 is always a valid time
+        return Ok(date.and_hms_opt(0, 0, 0).expect("00:00:00 is a valid time").and_utc());
     }
 
     Err(Error::General(format!(

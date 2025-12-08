@@ -202,7 +202,7 @@ impl OptimizeService {
         overall_pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} Compacting {bar:30.cyan/blue} {pos}/{len} partitions ({percent}%) {msg}")
-                .unwrap()
+                .expect("hardcoded progress template is valid")
                 .progress_chars("━━╺"),
         );
         overall_pb.enable_steady_tick(Duration::from_millis(100));

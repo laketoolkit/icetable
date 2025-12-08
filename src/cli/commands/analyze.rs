@@ -87,7 +87,7 @@ impl AnalyzeCommand {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.cyan} Analyzing current snapshot...")
-                .unwrap(),
+                .expect("hardcoded progress template is valid"),
         );
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -105,7 +105,7 @@ impl AnalyzeCommand {
             pb.set_style(
                 ProgressStyle::default_spinner()
                     .template("{spinner:.cyan} Scanning for orphan files...")
-                    .unwrap(),
+                    .expect("hardcoded progress template is valid"),
             );
             pb.enable_steady_tick(std::time::Duration::from_millis(100));
             let result = analyze_service.analyze_orphans(&service).await?;

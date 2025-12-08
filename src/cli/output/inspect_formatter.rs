@@ -323,74 +323,54 @@ impl InspectionFormatter {
                 let column = batch.column(col_idx);
                 let cell = match column.data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow::array::StringArray>()
-                            .unwrap();
-                        if array.is_null(row_idx) {
-                            Cell::new("NULL").fg(Color::Red)
+                        if let Some(array) = column.as_any().downcast_ref::<arrow::array::StringArray>() {
+                            if array.is_null(row_idx) {
+                                Cell::new("NULL").fg(Color::Red)
+                            } else {
+                                Cell::new(array.value(row_idx))
+                            }
                         } else {
-                            Cell::new(array.value(row_idx))
+                            Cell::new("<string>")
                         }
                     }
                     DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
-                        if array.is_null(row_idx) {
+                        // Use array_value_to_string for generic int handling
+                        if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(array.value(row_idx).to_string())
+                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<int>".to_string()))
                         }
                     }
                     DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow::array::UInt64Array>()
-                            .unwrap();
-                        if array.is_null(row_idx) {
+                        if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(array.value(row_idx).to_string())
+                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<uint>".to_string()))
                         }
                     }
                     DataType::Float32 | DataType::Float64 => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
-                        if array.is_null(row_idx) {
+                        if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(format!("{:.2}", array.value(row_idx)))
+                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<float>".to_string()))
                         }
                     }
                     DataType::Boolean => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow::array::BooleanArray>()
-                            .unwrap();
-                        if array.is_null(row_idx) {
-                            Cell::new("NULL").fg(Color::Red)
-                        } else {
-                            Cell::new(if array.value(row_idx) {
-                                "true"
+                        if let Some(array) = column.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                            if array.is_null(row_idx) {
+                                Cell::new("NULL").fg(Color::Red)
                             } else {
-                                "false"
-                            })
+                                Cell::new(if array.value(row_idx) { "true" } else { "false" })
+                            }
+                        } else {
+                            Cell::new("<bool>")
                         }
                     }
                     DataType::Timestamp(_, _) => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
-                            .unwrap();
-                        if array.is_null(row_idx) {
+                        if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            let timestamp = array.value(row_idx);
-                            Cell::new(timestamp.to_string())
+                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<timestamp>".to_string()))
                         }
                     }
                     _ => Cell::new(format!("{:?}", column.data_type())),

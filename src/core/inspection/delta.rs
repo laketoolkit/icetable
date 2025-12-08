@@ -207,7 +207,9 @@ impl PhysicalInspector for DeltaInspector {
         let storage_options = Self::build_storage_options();
 
         // Load the Delta table
-        let table = DeltaTableBuilder::from_uri(self.path.to_str().unwrap())
+        let path_str = self.path.to_str()
+            .ok_or_else(|| Error::General("Path contains invalid UTF-8".to_string()))?;
+        let table = DeltaTableBuilder::from_uri(path_str)
             .with_storage_options(storage_options)
             .load()
             .await
@@ -219,7 +221,7 @@ impl PhysicalInspector for DeltaInspector {
         // Read file statistics from transaction log
         let file_stats = read_file_stats(
             self.storage.clone(),
-            self.path.to_str().unwrap(),
+            path_str,
             current_version,
         )
         .await?;

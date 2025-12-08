@@ -678,7 +678,7 @@ impl MetadataService for IcebergMetadataService {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("  {spinner:.cyan} Listing files on storage...")
-                .unwrap(),
+                .expect("hardcoded progress template is valid"),
         );
         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -761,7 +761,7 @@ impl MetadataService for IcebergMetadataService {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("  {spinner:.cyan} Scanning manifests {bar:30.dim.white/dim} {pos}/{len}")
-                .unwrap()
+                .expect("hardcoded progress template is valid")
                 .progress_chars("━━╺"),
         );
         pb.enable_steady_tick(std::time::Duration::from_millis(100));

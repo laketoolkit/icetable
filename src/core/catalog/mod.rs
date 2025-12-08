@@ -49,7 +49,8 @@ impl TableRef {
             // Catalog mode: parse as namespace.table
             let parts: Vec<&str> = s.split('.').collect();
             if parts.len() >= 2 {
-                let name = parts.last().unwrap().to_string();
+                // Safe: we checked len >= 2, so last() always exists
+                let name = parts.last().expect("checked len >= 2").to_string();
                 let namespace = parts[..parts.len() - 1]
                     .iter()
                     .map(|s| s.to_string())
