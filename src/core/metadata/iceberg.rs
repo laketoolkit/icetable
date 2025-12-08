@@ -692,7 +692,7 @@ impl MetadataService for IcebergMetadataService {
                 let partition = iceberg_partition::extract_partition_from_path_static(&path_str);
                 DataFileInfo {
                     path: path_str,
-                    size: obj.size as u64,
+                    size: obj.size,
                     record_count: 0,
                     partition,
                 }

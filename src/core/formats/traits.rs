@@ -480,10 +480,7 @@ impl FormatHandlerFactory {
         let mut stream = storage.list(Some(&prefix_path));
 
         // Check if we can get at least one item
-        match stream.try_next().await {
-            Ok(Some(_)) => true,
-            _ => false,
-        }
+        matches!(stream.try_next().await, Ok(Some(_)))
     }
 
     /// Check if Iceberg table exists using storage backend

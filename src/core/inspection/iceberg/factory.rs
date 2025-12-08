@@ -52,10 +52,7 @@ impl PhysicalInspectorFactory for IcebergInspectorFactory {
         let mut stream = storage.list(Some(&prefix_path));
 
         // Check if we can get at least one item
-        match stream.try_next().await {
-            Ok(Some(_)) => true,
-            _ => false,
-        }
+        matches!(stream.try_next().await, Ok(Some(_)))
     }
 
     fn priority(&self) -> i32 {

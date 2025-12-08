@@ -4,15 +4,32 @@ A fast CLI for Apache Iceberg table management. Inspect, optimize, vacuum, and m
 
 ## Installation
 
+### Linux / macOS
+
 ```bash
-cargo install --path .
+# Linux (x86_64)
+curl -L https://github.com/laketoolkit/icetable/releases/latest/download/icetable-linux-x86_64 -o icetable
+chmod +x icetable && sudo mv icetable /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/laketoolkit/icetable/releases/latest/download/icetable-darwin-aarch64 -o icetable
+chmod +x icetable && sudo mv icetable /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/laketoolkit/icetable/releases/latest/download/icetable-darwin-x86_64 -o icetable
+chmod +x icetable && sudo mv icetable /usr/local/bin/
 ```
 
-Or build from source:
+### Windows
+
+Download `icetable-windows-x86_64.exe` from [Releases](https://github.com/laketoolkit/icetable/releases) and add to PATH.
+
+### From source
 
 ```bash
-cargo build --release
-# Binary at ./target/release/icetable
+cargo install --path .
+# or
+cargo build --release && sudo cp target/release/icetable /usr/local/bin/
 ```
 
 ## Quick Start
@@ -254,6 +271,26 @@ icetable catalog -c nessie namespaces
 icetable catalog -c nessie -n analytics tables
 icetable catalog -c nessie create-namespace analytics
 icetable catalog -c nessie drop-namespace analytics --force
+```
+
+### generate
+
+Create synthetic Iceberg tables for testing and development.
+
+```bash
+# Generate table with predefined template
+icetable generate -t s3://warehouse/test_table --template events --rows 10000 --files 5
+
+# Available templates: events, transactions, sensors, users, web-logs
+icetable generate -t /tmp/test --template sensors --rows 5000
+
+# Custom schema
+icetable generate -t s3://bucket/custom \
+  --schema "id:long,name:string,amount:double,active:bool,ts:timestamp" \
+  --rows 1000 --files 2
+
+# Reproducible with seed
+icetable generate -t /tmp/test --template events --rows 1000 --seed 42
 ```
 
 ### Other commands

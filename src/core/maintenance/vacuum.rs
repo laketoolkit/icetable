@@ -153,10 +153,10 @@ impl VacuumService {
                 if file_time_ms < cutoff_ms {
                     orphan_files.push(OrphanFile {
                         path: path_str.clone(),
-                        size: obj.size as u64,
+                        size: obj.size,
                         mtime_ms: file_time_ms,
                     });
-                    orphan_bytes += obj.size as u64;
+                    orphan_bytes += obj.size;
                 }
             }
         }

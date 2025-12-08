@@ -64,18 +64,14 @@ pub async fn detect_format(storage: &Storage) -> TableFormat {
     // Check for Delta Lake (_delta_log directory)
     // The storage is already prefixed to the table path, so we just check relative paths
     let delta_prefix = StoragePath::from("_delta_log");
-    if let Ok(item) = storage.list(Some(&delta_prefix)).try_next().await {
-        if item.is_some() {
-            return TableFormat::Delta;
-        }
+    if let Ok(Some(_)) = storage.list(Some(&delta_prefix)).try_next().await {
+        return TableFormat::Delta;
     }
 
     // Check for Iceberg (metadata directory)
     let iceberg_prefix = StoragePath::from("metadata");
-    if let Ok(item) = storage.list(Some(&iceberg_prefix)).try_next().await {
-        if item.is_some() {
-            return TableFormat::Iceberg;
-        }
+    if let Ok(Some(_)) = storage.list(Some(&iceberg_prefix)).try_next().await {
+        return TableFormat::Iceberg;
     }
 
     TableFormat::Unknown

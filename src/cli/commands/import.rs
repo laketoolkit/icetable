@@ -95,7 +95,7 @@ impl ImportCommand {
                     "  {}. {} ({})",
                     i + 1,
                     name,
-                    crate::core::format_bytes(file.size as u64)
+                    crate::core::format_bytes(file.size)
                 );
             }
             if total_files > 10 {
@@ -243,7 +243,7 @@ impl ImportCommand {
         }
 
         let total_files = parquet_files.len();
-        let total_bytes: u64 = parquet_files.iter().map(|f| f.size as u64).sum();
+        let total_bytes: u64 = parquet_files.iter().map(|f| f.size).sum();
 
         println!();
         println!("Parquet Files Summary:");
@@ -262,7 +262,7 @@ impl ImportCommand {
                     "  {}. {} ({})",
                     i + 1,
                     name,
-                    crate::core::format_bytes(file.size as u64)
+                    crate::core::format_bytes(file.size)
                 );
             }
             if total_files > 10 {
@@ -322,7 +322,7 @@ impl ImportCommand {
 
             changes.added.push(crate::core::metadata::DataFileInfo {
                 path: file_path,
-                size: file.size as u64,
+                size: file.size,
                 record_count: row_count as u64,
                 partition: HashMap::new(),
             });

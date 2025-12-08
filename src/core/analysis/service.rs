@@ -376,7 +376,7 @@ impl AnalyzeService {
             .filter(|obj| obj.location.to_string().ends_with(".parquet"))
             .map(|obj| DataFileInfo {
                 path: obj.location.to_string(),
-                size: obj.size as u64,
+                size: obj.size,
                 record_count: 0,
                 partition: HashMap::new(),
             })
