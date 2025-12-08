@@ -454,13 +454,13 @@ impl GenerateOperation {
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     let mut builder = TimestampMicrosecondBuilder::with_capacity(num_rows as usize);
                     // Base timestamp: 2024-01-01 00:00:00 UTC in microseconds
-                    let base_ts: i64 = 1704067200_000_000;
+                    let base_ts: i64 = 1_704_067_200_000_000;
                     for i in 0..num_rows {
                         if field.is_nullable() && next_rand(&mut rng_state) % 100 < 5 {
                             builder.append_null();
                         } else {
                             let offset = (i as i64 * 1_000_000)
-                                + (next_rand(&mut rng_state) % 31536000_000_000) as i64;
+                                + (next_rand(&mut rng_state) % 31_536_000_000_000) as i64;
                             builder.append_value(base_ts + offset);
                         }
                     }

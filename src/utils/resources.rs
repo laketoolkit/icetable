@@ -14,6 +14,7 @@ static RESOURCE_LIMITS: OnceLock<ResourceLimits> = OnceLock::new();
 
 /// Resource limits for operations
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ResourceLimits {
     /// Maximum memory in bytes (0 = unlimited)
     pub max_memory_bytes: u64,
@@ -23,15 +24,6 @@ pub struct ResourceLimits {
     pub max_concurrency: u32,
 }
 
-impl Default for ResourceLimits {
-    fn default() -> Self {
-        Self {
-            max_memory_bytes: 0,
-            timeout: None,
-            max_concurrency: 0,
-        }
-    }
-}
 
 impl ResourceLimits {
     /// Parse memory string (e.g., "2GB", "512MB", "1024KB") to bytes

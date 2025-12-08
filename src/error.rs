@@ -212,11 +212,9 @@ impl Error {
         if let Some(caps) = regex::Regex::new(r"HTTP (\d{3})")
             .ok()
             .and_then(|re| re.captures(&error_str))
-        {
-            if let Some(status) = caps.get(1) {
+            && let Some(status) = caps.get(1) {
                 http_status = status.as_str().parse::<u16>().ok();
             }
-        }
 
         // Try to extract AWS error codes
         let aws_error_patterns = [

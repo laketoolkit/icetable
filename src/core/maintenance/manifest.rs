@@ -10,6 +10,7 @@ use iceberg::spec::{
     ManifestWriterBuilder, Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
     TableMetadata,
 };
+
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::{PutOptions, StorageBackendFactory};
@@ -81,6 +82,109 @@ pub struct ManifestRewriteResult {
     pub metadata_version: u32,
 }
 
+/// Builder for creating a new snapshot for manifest rewrite
+struct SnapshotBuilder<'a> {
+    new_snapshot_id: i64,
+    parent_snapshot_id: i64,
+    sequence_number: i64,
+    manifest_list_path: &'a str,
+    new_manifest_files: &'a [ManifestFile],
+    data_manifests: &'a [ManifestFile],
+    final_manifest_count: usize,
+    original_summary: &'a Summary,
+    schema_id: i32,
+}
+
+impl<'a> SnapshotBuilder<'a> {
+    fn new(
+        new_snapshot_id: i64,
+        parent_snapshot_id: i64,
+        sequence_number: i64,
+        manifest_list_path: &'a str,
+        new_manifest_files: &'a [ManifestFile],
+        data_manifests: &'a [ManifestFile],
+        final_manifest_count: usize,
+        original_summary: &'a Summary,
+        schema_id: i32,
+    ) -> Self {
+        Self {
+            new_snapshot_id,
+            parent_snapshot_id,
+            sequence_number,
+            manifest_list_path,
+            new_manifest_files,
+            data_manifests,
+            final_manifest_count,
+            original_summary,
+            schema_id,
+        }
+    }
+
+    fn build(&self) -> Snapshot {
+        // Calculate statistics
+        let total_data_files: u64 = self
+            .new_manifest_files
+            .iter()
+            .filter(|m| m.content == ManifestContentType::Data)
+            .map(|m| {
+                m.added_files_count.unwrap_or(0) as u64
+                    + m.existing_files_count.unwrap_or(0) as u64
+            })
+            .sum();
+
+        let total_rows: u64 = self
+            .new_manifest_files
+            .iter()
+            .filter(|m| m.content == ManifestContentType::Data)
+            .map(|m| m.added_rows_count.unwrap_or(0) + m.existing_rows_count.unwrap_or(0))
+            .sum();
+
+        let total_files_size: u64 = self
+            .original_summary
+            .additional_properties
+            .get("total-files-size")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        // Build summary
+        let mut summary_map: HashMap<String, String> = HashMap::new();
+        summary_map.insert("spark.app.id".to_string(), "icetable".to_string());
+        summary_map.insert(
+            "manifests-rewritten".to_string(),
+            self.data_manifests.len().to_string(),
+        );
+        summary_map.insert(
+            "manifests-created".to_string(),
+            self.final_manifest_count.to_string(),
+        );
+        summary_map.insert("total-data-files".to_string(), total_data_files.to_string());
+        summary_map.insert("total-records".to_string(), total_rows.to_string());
+        summary_map.insert(
+            "total-files-size".to_string(),
+            total_files_size.to_string(),
+        );
+        summary_map.insert("added-data-files".to_string(), "0".to_string());
+        summary_map.insert("deleted-data-files".to_string(), "0".to_string());
+        summary_map.insert("added-records".to_string(), "0".to_string());
+        summary_map.insert("deleted-records".to_string(), "0".to_string());
+
+        let summary = Summary {
+            operation: Operation::Replace,
+            additional_properties: summary_map,
+        };
+
+        Snapshot::builder()
+            .with_snapshot_id(self.new_snapshot_id)
+            .with_parent_snapshot_id(Some(self.parent_snapshot_id))
+            .with_sequence_number(self.sequence_number + 1)
+            .with_timestamp_ms(self.new_snapshot_id)
+            .with_manifest_list(self.manifest_list_path.to_string())
+            .with_summary(summary)
+            .with_schema_id(self.schema_id)
+            .build()
+    }
+}
+
 /// Service for rewriting Iceberg manifest files
 pub struct ManifestService {
     config: ManifestConfig,
@@ -100,14 +204,12 @@ impl ManifestService {
     }
 
     /// Analyze manifests for potential rewrite (dry-run mode)
-    pub async fn analyze(
-        &self,
-        table_path: &str,
-    ) -> Result<ManifestAnalysis> {
+    pub async fn analyze(&self, table_path: &str) -> Result<ManifestAnalysis> {
         let service = IcebergMetadataService::new_with_branch(
             table_path.to_string(),
             self.config.branch.clone(),
-        ).await?;
+        )
+        .await?;
         let (metadata, _) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
 
@@ -195,7 +297,8 @@ impl ManifestService {
         let service = IcebergMetadataService::new_with_branch(
             table_path.to_string(),
             self.config.branch.clone(),
-        ).await?;
+        )
+        .await?;
         let (metadata, _) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
 
@@ -351,8 +454,8 @@ impl ManifestService {
             .await
             .map_err(|e| Error::General(format!("Failed to close manifest list writer: {}", e)))?;
 
-        // Create new snapshot
-        let new_snapshot = self.build_snapshot(
+        // Create new snapshot using builder
+        let snapshot_builder = SnapshotBuilder::new(
             new_snapshot_id,
             snapshot_id,
             sequence_number,
@@ -363,6 +466,7 @@ impl ManifestService {
             current_snapshot.summary(),
             metadata.current_schema_id(),
         );
+        let new_snapshot = snapshot_builder.build();
 
         // Commit the snapshot
         let metadata_file_path = service.current_metadata_path().await?;
@@ -389,75 +493,6 @@ impl ManifestService {
             snapshot_id: new_snapshot_id,
             metadata_version: new_version,
         })
-    }
-
-    /// Build a new snapshot for the manifest rewrite
-    fn build_snapshot(
-        &self,
-        new_snapshot_id: i64,
-        parent_snapshot_id: i64,
-        sequence_number: i64,
-        manifest_list_path: &str,
-        new_manifest_files: &[ManifestFile],
-        data_manifests: &[ManifestFile],
-        final_manifest_count: usize,
-        original_summary: &Summary,
-        schema_id: i32,
-    ) -> Snapshot {
-        // Calculate statistics
-        let total_data_files: u64 = new_manifest_files
-            .iter()
-            .filter(|m| m.content == ManifestContentType::Data)
-            .map(|m| {
-                m.added_files_count.unwrap_or(0) as u64 + m.existing_files_count.unwrap_or(0) as u64
-            })
-            .sum();
-
-        let total_rows: u64 = new_manifest_files
-            .iter()
-            .filter(|m| m.content == ManifestContentType::Data)
-            .map(|m| m.added_rows_count.unwrap_or(0) + m.existing_rows_count.unwrap_or(0))
-            .sum();
-
-        let total_files_size: u64 = original_summary
-            .additional_properties
-            .get("total-files-size")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        // Build summary
-        let mut summary_map: HashMap<String, String> = HashMap::new();
-        summary_map.insert("spark.app.id".to_string(), "icetable".to_string());
-        summary_map.insert(
-            "manifests-rewritten".to_string(),
-            data_manifests.len().to_string(),
-        );
-        summary_map.insert(
-            "manifests-created".to_string(),
-            final_manifest_count.to_string(),
-        );
-        summary_map.insert("total-data-files".to_string(), total_data_files.to_string());
-        summary_map.insert("total-records".to_string(), total_rows.to_string());
-        summary_map.insert("total-files-size".to_string(), total_files_size.to_string());
-        summary_map.insert("added-data-files".to_string(), "0".to_string());
-        summary_map.insert("deleted-data-files".to_string(), "0".to_string());
-        summary_map.insert("added-records".to_string(), "0".to_string());
-        summary_map.insert("deleted-records".to_string(), "0".to_string());
-
-        let summary = Summary {
-            operation: Operation::Replace,
-            additional_properties: summary_map,
-        };
-
-        Snapshot::builder()
-            .with_snapshot_id(new_snapshot_id)
-            .with_parent_snapshot_id(Some(parent_snapshot_id))
-            .with_sequence_number(sequence_number + 1)
-            .with_timestamp_ms(new_snapshot_id)
-            .with_manifest_list(manifest_list_path.to_string())
-            .with_summary(summary)
-            .with_schema_id(schema_id)
-            .build()
     }
 
     /// Commit the snapshot to storage or catalog
@@ -521,8 +556,10 @@ impl ManifestService {
         let next_location = next_metadata_location(metadata_file_path)
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
-        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+        let new_version =
+            extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
+        let new_metadata_path =
+            format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
 
         let new_metadata_bytes = serde_json::to_vec_pretty(new_metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;

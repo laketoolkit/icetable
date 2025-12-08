@@ -132,7 +132,7 @@ impl GenerateCommand {
             println!(
                 "  {} Written {} ({} rows, {} bytes)",
                 "v".green(),
-                file.path.split('/').last().unwrap_or(&file.path),
+                file.path.split('/').next_back().unwrap_or(&file.path),
                 file.record_count,
                 file.file_size
             );

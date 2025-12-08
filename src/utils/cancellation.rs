@@ -25,13 +25,12 @@ pub fn request_cancellation() {
     CANCELLED.store(true, Ordering::SeqCst);
     
     // Run all cleanup handlers
-    if let Some(handlers) = CLEANUP_HANDLERS.get() {
-        if let Ok(mut handlers_lock) = handlers.lock() {
+    if let Some(handlers) = CLEANUP_HANDLERS.get()
+        && let Ok(mut handlers_lock) = handlers.lock() {
             for handler in handlers_lock.drain(..) {
                 handler();
             }
         }
-    }
 }
 
 /// Register a cleanup handler to be called on cancellation
@@ -39,11 +38,10 @@ pub fn register_cleanup_handler<F>(handler: F)
 where
     F: Fn() + Send + Sync + 'static,
 {
-    if let Some(handlers) = CLEANUP_HANDLERS.get() {
-        if let Ok(mut handlers_lock) = handlers.lock() {
+    if let Some(handlers) = CLEANUP_HANDLERS.get()
+        && let Ok(mut handlers_lock) = handlers.lock() {
             handlers_lock.push(Box::new(handler));
         }
-    }
 }
 
 /// Create a temporary directory that will be cleaned up on cancellation
