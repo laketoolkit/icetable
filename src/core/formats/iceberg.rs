@@ -16,6 +16,7 @@ use iceberg::table::StaticTable;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
+use crate::core::metadata::{DataFileInfo, IcebergSnapshotWriter};
 use crate::core::storage::{Storage, detect_storage_type};
 use crate::error::{Error, Result};
 
@@ -619,11 +620,7 @@ impl FormatHandler for IcebergHandler {
     }
 
     async fn write(&self, data: Vec<RecordBatch>, _options: &WriteOptions) -> Result<()> {
-        use iceberg::io::FileIOBuilder;
-        use iceberg::spec::{
-            DataContentType, DataFileBuilder, DataFileFormat, ManifestListWriter,
-            ManifestWriterBuilder, Snapshot, Struct, Summary, TableMetadataBuilder,
-        };
+        use iceberg::spec::Summary;
         use parquet::arrow::ArrowWriter;
         use parquet::file::properties::WriterProperties;
         use std::collections::HashMap;
@@ -633,7 +630,7 @@ impl FormatHandler for IcebergHandler {
             return Ok(());
         }
 
-        // Get table path
+        // Get absolute table path
         let abs_path = if self.path.is_absolute() {
             self.path.clone()
         } else {
@@ -645,37 +642,29 @@ impl FormatHandler for IcebergHandler {
 
         // Open existing table to get metadata
         let table = self.open_table().await?;
-        let old_metadata = table.metadata().clone();
+        let old_metadata = table.metadata();
 
-        // Directories
+        // Ensure data directory exists
         let data_dir = format!("{}/data", table_path);
-        let metadata_dir = format!("{}/metadata", table_path);
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| Error::General(format!("Failed to create data dir: {}", e)))?;
 
-        // Count total rows
-        let total_rows: usize = data.iter().map(|b| b.num_rows()).sum();
-
-        // Write parquet file - generate unique ID from timestamp and random
+        // Write parquet file with unique ID
         let timestamp_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let file_id = format!("{:016x}", timestamp_nanos);
-        let parquet_filename = format!("00000-0-{}.parquet", file_id);
+        let parquet_filename = format!("00000-0-{:016x}.parquet", timestamp_nanos);
         let parquet_path = format!("{}/{}", data_dir, parquet_filename);
 
-        // Get schema and add Iceberg field IDs for parquet compatibility
+        // Add Iceberg field IDs to Arrow schema for parquet compatibility
         let input_schema = data[0].schema();
         let iceberg_schema = old_metadata.current_schema();
-
-        // Create a new Arrow schema with field_id metadata from Iceberg schema
         let fields_with_ids: Vec<arrow::datatypes::Field> = input_schema
             .fields()
             .iter()
             .enumerate()
             .map(|(idx, field)| {
-                // Find matching Iceberg field by name
                 let field_id = iceberg_schema
                     .as_struct()
                     .fields()
@@ -683,112 +672,68 @@ impl FormatHandler for IcebergHandler {
                     .find(|f| f.name == *field.name())
                     .map(|f| f.id)
                     .unwrap_or((idx + 1) as i32);
-
-                // Add PARQUET:field_id metadata
                 let mut metadata = field.metadata().clone();
                 metadata.insert("PARQUET:field_id".to_string(), field_id.to_string());
                 field.as_ref().clone().with_metadata(metadata)
             })
             .collect();
-
         let schema = Arc::new(arrow::datatypes::Schema::new(fields_with_ids));
 
+        // Write batches to parquet
         let file = File::create(&parquet_path)
             .map_err(|e| Error::General(format!("Failed to create parquet file: {}", e)))?;
         let props = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
             .map_err(|e| Error::General(format!("Failed to create parquet writer: {}", e)))?;
-
         for batch in &data {
-            writer
-                .write(batch)
+            writer.write(batch)
                 .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
         }
-        writer
-            .close()
+        writer.close()
             .map_err(|e| Error::General(format!("Failed to close parquet writer: {}", e)))?;
 
+        let total_rows: u64 = data.iter().map(|b| b.num_rows() as u64).sum();
         let file_size = std::fs::metadata(&parquet_path)
             .map_err(|e| Error::General(format!("Failed to get file size: {}", e)))?
             .len();
 
-        // Build DataFile
-        let partition_spec = old_metadata.default_partition_spec();
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path(parquet_path.clone())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::empty())
-            .partition_spec_id(partition_spec.spec_id())
-            .record_count(total_rows as u64)
-            .file_size_in_bytes(file_size)
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))?;
+        // Use IcebergSnapshotWriter for manifest/snapshot/metadata operations
+        let file_io = Self::create_file_io(&table_path)?;
+        let snapshot_writer = IcebergSnapshotWriter::new(
+            table_path.clone(),
+            file_io,
+            self.storage.clone(),
+        );
 
-        // Create FileIO
-        let file_io = FileIOBuilder::new_fs_io()
-            .build()
-            .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))?;
+        // Create DataFileInfo
+        let data_file_info = DataFileInfo {
+            path: parquet_path,
+            size: file_size,
+            record_count: total_rows,
+            partition: HashMap::new(),
+        };
+
+        // Convert to Iceberg DataFile
+        let partition_spec = old_metadata.default_partition_spec();
+        let data_file = snapshot_writer.to_iceberg_data_file(&data_file_info, partition_spec)?;
 
         // Generate snapshot ID and sequence number
         let snapshot_id = chrono::Utc::now().timestamp_millis();
+        let parent_snapshot_id = old_metadata.current_snapshot().map(|s| s.snapshot_id());
         let sequence_number = old_metadata
             .current_snapshot()
             .map(|s| s.sequence_number() + 1)
             .unwrap_or(1);
 
-        // Write manifest file
-        let manifest_filename = format!("{}-m0.avro", file_id);
-        let manifest_path = format!("{}/{}", metadata_dir, manifest_filename);
+        // Write manifest and manifest list
+        let manifest_file = snapshot_writer
+            .write_manifest(&[data_file], snapshot_id, sequence_number, &old_metadata, timestamp_nanos)
+            .await?;
+        let manifest_list_path = snapshot_writer
+            .write_manifest_list(manifest_file, snapshot_id, parent_snapshot_id, sequence_number, timestamp_nanos)
+            .await?;
 
-        let output_file = file_io
-            .new_output(&manifest_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest output: {}", e)))?;
-
-        let mut manifest_writer = ManifestWriterBuilder::new(
-            output_file,
-            Some(snapshot_id),
-            None,
-            iceberg_schema.clone(),
-            (**partition_spec).clone(),
-        )
-        .build_v2_data();
-
-        manifest_writer
-            .add_file(data_file, sequence_number)
-            .map_err(|e| Error::General(format!("Failed to add file to manifest: {}", e)))?;
-
-        let manifest_file = manifest_writer
-            .write_manifest_file()
-            .await
-            .map_err(|e| Error::General(format!("Failed to write manifest: {}", e)))?;
-
-        // Write manifest list
-        let manifest_list_filename = format!("snap-{}-0-{}.avro", snapshot_id, file_id);
-        let manifest_list_path = format!("{}/{}", metadata_dir, manifest_list_filename);
-
-        let manifest_list_output = file_io
-            .new_output(&manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest list output: {}", e)))?;
-
-        let mut manifest_list_writer = ManifestListWriter::v2(
-            manifest_list_output,
-            snapshot_id,
-            Some(snapshot_id),
-            sequence_number,
-        );
-
-        manifest_list_writer
-            .add_manifests(vec![manifest_file].into_iter())
-            .map_err(|e| Error::General(format!("Failed to add manifest to list: {}", e)))?;
-
-        manifest_list_writer
-            .close()
-            .await
-            .map_err(|e| Error::General(format!("Failed to close manifest list: {}", e)))?;
-
-        // Build new snapshot
-        let timestamp_ms = chrono::Utc::now().timestamp_millis();
+        // Build summary
         let summary = Summary {
             operation: iceberg::spec::Operation::Append,
             additional_properties: HashMap::from([
@@ -801,44 +746,24 @@ impl FormatHandler for IcebergHandler {
             ]),
         };
 
-        let snapshot = Snapshot::builder()
-            .with_snapshot_id(snapshot_id)
-            .with_sequence_number(sequence_number)
-            .with_timestamp_ms(timestamp_ms)
-            .with_manifest_list(manifest_list_path)
-            .with_summary(summary)
-            .with_schema_id(iceberg_schema.schema_id())
-            .build();
+        // Build snapshot
+        let snapshot = snapshot_writer.build_snapshot(
+            snapshot_id,
+            parent_snapshot_id,
+            sequence_number,
+            manifest_list_path,
+            summary,
+            iceberg_schema.schema_id(),
+        );
 
-        // Build new metadata - need to dereference Arc
-        let old_metadata_owned: iceberg::spec::TableMetadata = (*old_metadata).clone();
-
-        // Find current metadata file and get its name for the log
+        // Update and write metadata
         let current_metadata_path = self.find_metadata_location(&table_path).await?;
-        let current_metadata_filename = current_metadata_path
-            .split('/')
-            .next_back()
-            .unwrap_or(&current_metadata_path);
-
-        let new_metadata =
-            TableMetadataBuilder::new_from_metadata(old_metadata_owned, Some(current_metadata_filename.to_string()))
-                .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
-                .map_err(|e| Error::General(format!("Failed to set branch snapshot: {}", e)))?
-                .build()
-                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
-
-        // Generate next metadata location using standard format
-        use crate::core::utils::{metadata_location_filename, new_metadata_location, next_metadata_location};
-
-        let next_location = next_metadata_location(&current_metadata_path)
-            .unwrap_or_else(|_| new_metadata_location(&table_path));
-
-        // Write new metadata file with standard naming
-        let new_metadata_file = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
-        let metadata_json = serde_json::to_string_pretty(&new_metadata.metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-        std::fs::write(&new_metadata_file, metadata_json)
-            .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
+        let new_metadata = snapshot_writer.update_metadata(
+            (*old_metadata).clone(),
+            snapshot,
+            &current_metadata_path,
+        )?;
+        snapshot_writer.write_metadata_file(&new_metadata, &current_metadata_path).await?;
 
         Ok(())
     }
