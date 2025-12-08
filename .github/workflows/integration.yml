@@ -1,11 +1,9 @@
 name: Integration Tests
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
+    branches: [develop]
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always

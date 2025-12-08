@@ -247,8 +247,8 @@ async fn test_minio_generate_synthetic_table() {
         let data = storage
             .get_bytes_str(&file.path)
             .await
-            .expect(&format!("Failed to read {}", file.path));
-        assert!(data.len() > 0, "File {} is empty", file.path);
+            .expect("Failed to read parquet file");
+        assert!(!data.is_empty(), "Parquet file is empty");
     }
 
     // Check metadata files (should have metadata.json, manifest, manifest list)
@@ -513,7 +513,7 @@ async fn cleanup_table(storage: &Storage, table_path: &str) {
 
     if let Ok(objects) = list_result {
         for obj in objects {
-            storage.delete_str(&obj.location.to_string()).await.ok();
+            storage.delete_str(obj.location.as_ref()).await.ok();
         }
     }
 }
