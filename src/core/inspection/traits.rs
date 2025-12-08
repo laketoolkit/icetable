@@ -1,4 +1,67 @@
-//! Traits and types for physical inspection of table formats
+//! Core traits and types for physical inspection of table formats
+//!
+//! This module defines the [`PhysicalInspector`] trait and associated types that enable
+//! format-agnostic inspection of data files. The trait provides a unified interface for
+//! extracting metadata, schema, layout, and statistics from various table formats.
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                   PhysicalInspector trait                   │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              ▲
+//!        ┌─────────────────────┼─────────────────────┐
+//!        │                     │                     │
+//! ┌──────┴──────┐      ┌───────┴───────┐     ┌───────┴───────┐
+//! │ParquetInsp. │      │ IcebergInsp.  │     │  DeltaInsp.   │
+//! └─────────────┘      └───────────────┘     └───────────────┘
+//! ```
+//!
+//! # Implementing a New Inspector
+//!
+//! To add support for a new table format:
+//!
+//! 1. Implement the [`PhysicalInspector`] trait
+//! 2. Implement format-specific metadata extraction in `extract_metadata`
+//! 3. Return appropriate [`LayoutInfo`] variant for the format
+//! 4. Register in the inspector factory
+//!
+//! # Example
+//!
+//! ```ignore
+//! use icetable::core::inspection::{PhysicalInspector, PhysicalInspectOptions, VerbosityLevel};
+//!
+//! // Create inspector for a table
+//! let inspector = IcebergInspector::new("/path/to/iceberg/table").await?;
+//!
+//! // Configure inspection options
+//! let options = PhysicalInspectOptions::from_cli_args(
+//!     true,   // show_schema
+//!     true,   // show_layout
+//!     true,   // show_stats
+//!     VerbosityLevel::Normal,
+//!     false,  // deep_scan
+//! );
+//!
+//! // Extract metadata
+//! let metadata = inspector.extract_metadata(&options).await?;
+//!
+//! // Access format-specific layout info
+//! if let Some(LayoutInfo::FileBased(layout)) = metadata.layout {
+//!     println!("Table has {} data files", layout.num_files);
+//! }
+//! ```
+//!
+//! # Data Types
+//!
+//! The module provides several data structures to represent inspection results:
+//!
+//! - [`PhysicalMetadata`] - Complete metadata from inspection
+//! - [`SchemaInfo`] / [`ColumnInfo`] - Schema and column definitions
+//! - [`LayoutInfo`] - Physical layout (row groups, batches, or files)
+//! - [`StatisticsInfo`] / [`ColumnStatistics`] - Row/column statistics
+//! - [`OrphanFilesInfo`] - Orphan file detection results
 
 use crate::error::Result;
 use async_trait::async_trait;
@@ -255,14 +318,91 @@ pub struct ColumnStatistics {
 }
 
 /// Core trait for physical inspection of table formats
+///
+/// This trait defines the interface that all format inspectors must implement.
+/// It enables icetable to work uniformly with different table formats (Parquet,
+/// Iceberg, Delta Lake, etc.) while allowing each implementation to handle
+/// format-specific details.
+///
+/// # Required Methods
+///
+/// - [`extract_metadata`](Self::extract_metadata) - Main inspection method that extracts
+///   all metadata according to the provided options
+/// - [`format_name`](Self::format_name) - Returns the human-readable format name
+/// - [`can_inspect`](Self::can_inspect) - Quick check to determine if this inspector
+///   can handle a given path
+///
+/// # Thread Safety
+///
+/// Implementations must be `Send + Sync` to support concurrent inspection of
+/// multiple tables.
+///
+/// # Example Implementation
+///
+/// ```ignore
+/// #[async_trait]
+/// impl PhysicalInspector for MyFormatInspector {
+///     async fn extract_metadata(&self, options: &PhysicalInspectOptions) -> Result<PhysicalMetadata> {
+///         let file_info = self.read_file_info()?;
+///         let schema = if options.show_schema { Some(self.read_schema()?) } else { None };
+///         let layout = if options.show_layout { Some(self.read_layout()?) } else { None };
+///         let stats = if options.show_stats { Some(self.read_stats().await?) } else { None };
+///
+///         Ok(PhysicalMetadata {
+///             format_name: self.format_name().to_string(),
+///             file_info,
+///             schema,
+///             layout,
+///             statistics: stats,
+///             orphan_files: None,
+///         })
+///     }
+///
+///     fn format_name(&self) -> &str {
+///         "My Custom Format"
+///     }
+///
+///     fn can_inspect(&self, path: &Path) -> bool {
+///         path.extension().map_or(false, |ext| ext == "myformat")
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait PhysicalInspector: Send + Sync {
     /// Extract metadata from physical structure
+    ///
+    /// This is the main inspection method. Implementations should respect the
+    /// options provided and only compute/return the requested sections.
+    ///
+    /// # Arguments
+    ///
+    /// * `options` - Controls which sections to extract (schema, layout, stats)
+    ///   and the verbosity level
+    ///
+    /// # Returns
+    ///
+    /// A [`PhysicalMetadata`] struct containing all requested information about
+    /// the table's physical structure.
     async fn extract_metadata(&self, options: &PhysicalInspectOptions) -> Result<PhysicalMetadata>;
 
     /// Get format name
+    ///
+    /// Returns a human-readable name for the format (e.g., "Apache Iceberg",
+    /// "Apache Parquet", "Delta Lake").
     fn format_name(&self) -> &str;
 
     /// Quick detection (fast, based on extension/magic bytes)
+    ///
+    /// This method should be fast and avoid I/O when possible. It's used to
+    /// determine which inspector to use for a given path before attempting
+    /// full inspection.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if this inspector can likely handle the given path
     fn can_inspect(&self, path: &Path) -> bool;
 }

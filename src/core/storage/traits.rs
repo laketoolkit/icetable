@@ -1,7 +1,53 @@
 //! Core traits for storage backends
 //!
-//! Defines the StorageBackend trait for abstracting over different storage
-//! systems (local filesystem, S3, GCS, Azure Blob Storage, etc.)
+//! This module defines the [`StorageBackend`] trait, which provides a unified
+//! interface for accessing different storage systems including local filesystem,
+//! Amazon S3, Google Cloud Storage, and Azure Blob Storage.
+//!
+//! # Architecture
+//!
+//! The storage abstraction allows icetable to work with tables stored anywhere:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────┐
+//! │              StorageBackend trait               │
+//! └─────────────────────────────────────────────────┘
+//!                        ▲
+//!        ┌───────────────┼───────────────┐
+//!        │               │               │
+//! ┌──────┴─────┐  ┌──────┴─────┐  ┌──────┴─────┐
+//! │ LocalBackend│  │  S3Backend │  │ GcsBackend │
+//! └────────────┘  └────────────┘  └────────────┘
+//! ```
+//!
+//! # Implementing a New Backend
+//!
+//! To add support for a new storage system:
+//!
+//! 1. Implement the [`StorageBackend`] trait
+//! 2. Handle authentication in your constructor
+//! 3. Map storage-specific errors to [`crate::error::Error`]
+//! 4. Register in [`crate::core::storage::StorageBackendFactory`]
+//!
+//! # Example
+//!
+//! ```ignore
+//! use icetable::core::storage::{StorageBackend, StorageBackendFactory};
+//!
+//! // Create backend from URL (auto-detects type)
+//! let backend = StorageBackendFactory::create_backend("s3://my-bucket/tables/events").await?;
+//!
+//! // Check if file exists
+//! if backend.exists("metadata/v1.metadata.json").await? {
+//!     let data = backend.get("metadata/v1.metadata.json", &GetOptions::default()).await?;
+//! }
+//!
+//! // List files with prefix
+//! let files = backend.list(&ListOptions {
+//!     prefix: Some("data/".to_string()),
+//!     ..Default::default()
+//! }).await?;
+//! ```
 
 use async_trait::async_trait;
 use bytes::Bytes;

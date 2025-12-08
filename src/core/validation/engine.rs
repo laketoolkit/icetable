@@ -1,4 +1,68 @@
-//! Validation engine for executing rules
+//! Validation engine for executing rules against table data
+//!
+//! The validation engine loads rules from YAML configuration files and executes
+//! them against table metadata and data. Rules can check various aspects of data
+//! quality including row counts, compression, schema compliance, null percentages,
+//! and custom expressions.
+//!
+//! # Usage
+//!
+//! ```ignore
+//! use icetable::core::validation::ValidationEngine;
+//! use icetable::core::formats::FormatHandler;
+//!
+//! // Load rules from YAML file
+//! let rules = ValidationEngine::load_rules("rules/quality.yaml").await?;
+//!
+//! // Create engine with a format handler
+//! let engine = ValidationEngine::new(handler, rules);
+//!
+//! // Execute all rules
+//! let results = engine.execute().await?;
+//!
+//! // Check results
+//! for result in results {
+//!     if !result.passed {
+//!         eprintln!("Rule '{}' failed: {}", result.name, result.message);
+//!     }
+//! }
+//! ```
+//!
+//! # Rule Types
+//!
+//! The engine supports the following rule types:
+//!
+//! - **MinRows/MaxRows**: Validate row count is within expected range
+//! - **CompressionRequired**: Ensure files use allowed compression codecs
+//! - **RequiredColumns**: Check that specified columns exist in schema
+//! - **MaxNullPercent**: Verify null percentage is below threshold
+//! - **ColumnType**: Validate column data types match expected types
+//! - **FileSize**: Check file size is within min/max bounds
+//! - **RowGroupSize**: Validate row group counts (Parquet-specific)
+//! - **ColumnNamePattern**: Ensure column names match a regex pattern
+//! - **CustomExpression**: Execute custom SQL-like expressions (planned)
+//!
+//! # Rules File Format
+//!
+//! Rules are defined in YAML format:
+//!
+//! ```yaml
+//! version: 1
+//! rules:
+//!   - name: "minimum_rows"
+//!     enabled: true
+//!     severity: error
+//!     rule_type:
+//!       min_rows:
+//!         value: 1000
+//!
+//!   - name: "required_columns"
+//!     enabled: true
+//!     severity: warning
+//!     rule_type:
+//!       required_columns:
+//!         columns: ["id", "timestamp", "value"]
+//! ```
 
 use std::sync::Arc;
 
@@ -10,7 +74,17 @@ use super::rules::{RuleResult, RuleType, Severity, ValidationRule, ValidationRul
 use crate::core::formats::{FileMetadata, FormatHandler, ReadOptions};
 use crate::error::{Error, Result};
 
-/// Validation engine that executes rules against data
+/// Validation engine that executes rules against table data and metadata
+///
+/// The engine is constructed with a format handler (to read table data) and a set
+/// of validation rules. When executed, it runs each enabled rule and collects results.
+///
+/// # Example
+///
+/// ```ignore
+/// let engine = ValidationEngine::new(handler, rules);
+/// let results = engine.execute().await?;
+/// ```
 pub struct ValidationEngine {
     handler: Arc<dyn FormatHandler>,
     rules: ValidationRules,
