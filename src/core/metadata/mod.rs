@@ -16,6 +16,6 @@ mod iceberg_writer;
 pub use traits::*;
 
 pub use iceberg::{IcebergMetadataService, RefInfo};
-pub use iceberg_conflict::{check_and_fail_on_conflict, ConflictCheckResult, ConflictDetector};
-pub use iceberg_validator::{validate_metadata, validate_or_error, ValidationResult};
+pub use iceberg_conflict::{ConflictCheckResult, ConflictDetector, check_and_fail_on_conflict};
+pub use iceberg_validator::{ValidationResult, validate_metadata, validate_or_error};
 pub use iceberg_writer::IcebergSnapshotWriter;

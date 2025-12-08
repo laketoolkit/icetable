@@ -20,14 +20,17 @@ pub mod core;
 // CLI re-exports
 pub use box_frame::create_box_frame;
 pub use cancellation::{
-    check_cancellation, is_cancelled, register_cleanup_handler, request_cancellation,
-    setup_signal_handlers, temp_dir_with_cleanup, with_cancellation, CancellationToken,
-    CancellationTokenSource,
+    CancellationToken, CancellationTokenSource, check_cancellation, is_cancelled,
+    register_cleanup_handler, request_cancellation, setup_signal_handlers, temp_dir_with_cleanup,
+    with_cancellation,
 };
 pub use credentials::CredentialSource;
 pub use logging::{LogLevel, init_logger};
 pub use progress::ProgressTracker;
-pub use resources::{ResourceLimits, get_resource_limits, init_resource_limits, with_timeout, track_memory_usage, release_memory, current_memory_usage};
+pub use resources::{
+    ResourceLimits, current_memory_usage, get_resource_limits, init_resource_limits,
+    release_memory, track_memory_usage, with_timeout,
+};
 pub use telemetry::TelemetryCollector;
 pub use text::{strip_ansi_codes, visual_width, wrap_line};
 pub use time::{parse_relative_duration, parse_timestamp};
@@ -35,11 +38,10 @@ pub use types::parse_data_type;
 
 // Core re-exports (for backward compatibility with crate::core::utils paths)
 pub use core::{
-    format_bytes, generate_unique_id, parse_bytes, sizes,
-    TableFormat, detect_table_format, detect_table_format_async, detect_table_format_with_storage,
-    ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files,
-    iceberg_to_arrow_type, extract_version_from_path, find_latest_metadata,
-    metadata_location_filename, new_metadata_location, next_metadata_location,
-    read_parquet_record_count,
-    ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
+    ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, detect_table_format,
+    detect_table_format_async, detect_table_format_with_storage, determine_cutoff_timestamp,
+    determine_snapshots_to_expire, extract_version_from_path, find_latest_metadata, format_bytes,
+    generate_unique_id, iceberg_to_arrow_type, metadata_location_filename, new_metadata_location,
+    next_metadata_location, normalize_path, normalize_relative_path, parse_bytes,
+    read_parquet_record_count, scan_parquet_files, sizes,
 };

@@ -13,7 +13,7 @@ use iceberg::spec::{
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{create_object_store, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::core::utils::{
     extract_version_from_path, metadata_location_filename, new_metadata_location,
     next_metadata_location,
@@ -158,8 +158,7 @@ impl<'a> SnapshotBuilder<'a> {
             .iter()
             .filter(|m| m.content == ManifestContentType::Data)
             .map(|m| {
-                m.added_files_count.unwrap_or(0) as u64
-                    + m.existing_files_count.unwrap_or(0) as u64
+                m.added_files_count.unwrap_or(0) as u64 + m.existing_files_count.unwrap_or(0) as u64
             })
             .sum();
 
@@ -188,10 +187,7 @@ impl<'a> SnapshotBuilder<'a> {
         );
         summary_map.insert("total-data-files".to_string(), total_data_files.to_string());
         summary_map.insert("total-records".to_string(), total_rows.to_string());
-        summary_map.insert(
-            "total-files-size".to_string(),
-            total_files_size.to_string(),
-        );
+        summary_map.insert("total-files-size".to_string(), total_files_size.to_string());
         summary_map.insert("added-data-files".to_string(), "0".to_string());
         summary_map.insert("deleted-data-files".to_string(), "0".to_string());
         summary_map.insert("added-records".to_string(), "0".to_string());
@@ -574,10 +570,12 @@ impl ManifestService {
         let next_location = next_metadata_location(metadata_file_path)
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
-        let new_version =
-            extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
-        let new_metadata_path =
-            format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
+        let new_metadata_path = format!(
+            "{}/{}",
+            metadata_dir,
+            metadata_location_filename(&next_location)
+        );
 
         let new_metadata_bytes = serde_json::to_vec_pretty(new_metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;

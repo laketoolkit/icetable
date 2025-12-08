@@ -14,11 +14,7 @@ pub struct IcebergInspectorFactory;
 
 #[async_trait]
 impl PhysicalInspectorFactory for IcebergInspectorFactory {
-    fn create(
-        &self,
-        path: &Path,
-        storage: Storage,
-    ) -> Result<Box<dyn PhysicalInspector>> {
+    fn create(&self, path: &Path, storage: Storage) -> Result<Box<dyn PhysicalInspector>> {
         Ok(Box::new(IcebergInspector::new(path.to_path_buf(), storage)))
     }
 

@@ -19,7 +19,7 @@ use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
 use crate::core::metadata::IcebergSnapshotWriter;
-use crate::core::storage::{Storage, create_object_store, ObjectStoreExt, to_path};
+use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, to_path};
 use crate::error::{Error, Result};
 use crate::utils::track_memory_usage;
 
@@ -104,7 +104,10 @@ impl GenerateOperation {
 
             let file_id = format!(
                 "{:016x}",
-                config.seed.wrapping_mul(1000003).wrapping_add(file_idx as u64)
+                config
+                    .seed
+                    .wrapping_mul(1000003)
+                    .wrapping_add(file_idx as u64)
             );
             let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
             let file_path = format!("{}/{}", data_path, file_name);
@@ -274,10 +277,7 @@ impl GenerateOperation {
             additional_properties: HashMap::from([
                 ("added-data-files".to_string(), data_files.len().to_string()),
                 ("added-records".to_string(), total_records.to_string()),
-                (
-                    "added-files-size".to_string(),
-                    total_size.to_string(),
-                ),
+                ("added-files-size".to_string(), total_size.to_string()),
                 ("total-records".to_string(), total_records.to_string()),
                 ("total-data-files".to_string(), data_files.len().to_string()),
             ]),
@@ -391,7 +391,8 @@ impl GenerateOperation {
                         if field.is_nullable() && next_rand(&mut rng_state) % 100 < 5 {
                             builder.append_null();
                         } else {
-                            builder.append_value(i as i64 + next_rand(&mut rng_state) as i64 % 1000);
+                            builder
+                                .append_value(i as i64 + next_rand(&mut rng_state) as i64 % 1000);
                         }
                     }
                     Arc::new(builder.finish())
@@ -471,10 +472,10 @@ impl GenerateOperation {
 
         let batch = RecordBatch::try_new(schema.clone(), columns)
             .map_err(|e| Error::General(format!("Failed to create record batch: {}", e)))?;
-        
+
         // Release memory tracking for batch generation (actual memory will be tracked by Arrow)
         crate::utils::resources::release_memory(estimated_memory);
-        
+
         Ok(batch)
     }
 
@@ -534,7 +535,7 @@ impl GenerateOperation {
         // Track memory for parquet writing (buffer + compression)
         let estimated_memory = batch.get_array_memory_size() as u64 * 2;
         track_memory_usage(estimated_memory)?;
-        
+
         let mut buf = Vec::new();
 
         let props = WriterProperties::builder()
@@ -555,7 +556,7 @@ impl GenerateOperation {
 
         // Release memory tracking for parquet writing
         crate::utils::resources::release_memory(estimated_memory);
-        
+
         Ok(buf)
     }
 

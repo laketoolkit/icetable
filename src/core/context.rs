@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::config::ResolvePath;
 use crate::core::TableFormat;
-use crate::core::storage::{create_object_store, Storage};
+use crate::core::storage::{Storage, create_object_store};
 use crate::core::utils::detect_format;
 use crate::error::{Error, Result};
 

@@ -7,17 +7,14 @@ use std::str::FromStr;
 use iceberg::MetadataLocation;
 use iceberg::spec::{PrimitiveType, Type};
 
-use crate::core::storage::{Storage, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
 
 /// Find the latest metadata file for an Iceberg table
 ///
 /// Lists the metadata directory and finds the file with highest version number.
 /// Supports the standard Iceberg format: `<version>-<uuid>.metadata.json`
-pub async fn find_latest_metadata(
-    table_path: &str,
-    storage: &Storage,
-) -> Result<String> {
+pub async fn find_latest_metadata(table_path: &str, storage: &Storage) -> Result<String> {
     let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
 
     let prefix = format!("{}/", metadata_dir);
@@ -72,7 +69,11 @@ pub fn extract_version_from_path(path: &str) -> Option<i32> {
 /// Returns the filename portion of the metadata location path (e.g., "00001-uuid.metadata.json")
 pub fn metadata_location_filename(location: &MetadataLocation) -> String {
     let full_path = location.to_string();
-    full_path.split('/').next_back().unwrap_or(&full_path).to_string()
+    full_path
+        .split('/')
+        .next_back()
+        .unwrap_or(&full_path)
+        .to_string()
 }
 
 /// Create a new metadata location for the next version
@@ -81,7 +82,10 @@ pub fn metadata_location_filename(location: &MetadataLocation) -> String {
 /// with incremented version and new UUID.
 pub fn next_metadata_location(current_path: &str) -> Result<MetadataLocation> {
     let current = MetadataLocation::from_str(current_path).map_err(|e| {
-        Error::General(format!("Failed to parse metadata location '{}': {}", current_path, e))
+        Error::General(format!(
+            "Failed to parse metadata location '{}': {}",
+            current_path, e
+        ))
     })?;
     Ok(current.with_next_version())
 }

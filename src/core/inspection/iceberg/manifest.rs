@@ -3,7 +3,7 @@
 use apache_avro::Reader;
 use std::collections::HashMap;
 
-use crate::core::storage::{Storage, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
 
 /// Statistics collected from manifest files
@@ -147,10 +147,9 @@ pub fn process_manifest_entries(
                     entry.records += *records;
                 }
 
-                if let Some((_, apache_avro::types::Value::Long(size))) =
-                    fields_to_process.iter().find(|(name, _)| {
-                        name == "file-size-in-bytes" || name == "file_size_in_bytes"
-                    })
+                if let Some((_, apache_avro::types::Value::Long(size))) = fields_to_process
+                    .iter()
+                    .find(|(name, _)| name == "file-size-in-bytes" || name == "file_size_in_bytes")
                 {
                     entry.size += *size;
                 }

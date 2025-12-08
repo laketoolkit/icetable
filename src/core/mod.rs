@@ -17,11 +17,13 @@ pub mod utils;
 pub mod validation;
 
 // Re-export commonly used types
-pub use catalog::{CatalogClient, CatalogConfig, CatalogType, RestCatalogClient, TableCommitter, TableRef};
+pub use catalog::{
+    CatalogClient, CatalogConfig, CatalogType, RestCatalogClient, TableCommitter, TableRef,
+};
 pub use context::{TableContext, TableContextBuilder};
 pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
-pub use storage::{create_object_store, ObjectStoreExt, Storage};
+pub use storage::{ObjectStoreExt, Storage, create_object_store};
 pub use utils::{
     TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
 };

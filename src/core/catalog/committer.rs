@@ -19,12 +19,12 @@
 
 use std::time::Duration;
 
-use iceberg::spec::{Snapshot, SnapshotReference, SnapshotRetention, TableMetadata, MAIN_BRANCH};
+use iceberg::spec::{MAIN_BRANCH, Snapshot, SnapshotReference, SnapshotRetention, TableMetadata};
 use iceberg::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
 use serde::Serialize;
 
 use super::CatalogConfig;
-use crate::core::storage::{create_object_store, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::error::{Error, Result};
 
 /// Request body for committing table updates via REST API
@@ -257,10 +257,7 @@ impl TableCommitter {
                     continue;
                 }
                 reqwest::StatusCode::NOT_FOUND => {
-                    return Err(Error::General(format!(
-                        "Table not found: {}",
-                        ident.name()
-                    )));
+                    return Err(Error::General(format!("Table not found: {}", ident.name())));
                 }
                 status => {
                     let body = response
@@ -413,8 +410,14 @@ impl TableCommitter {
             Ok(current_version as i64 + 1)
         } else {
             // Direct mode: build and write new metadata
-            self.write_add_ref_direct(table_path, current_metadata, ref_name, reference, current_version)
-                .await
+            self.write_add_ref_direct(
+                table_path,
+                current_metadata,
+                ref_name,
+                reference,
+                current_version,
+            )
+            .await
         }
     }
 
@@ -581,8 +584,15 @@ impl TableCommitter {
             Ok(current_version as i64 + 1)
         } else {
             // Direct mode: build and write new metadata
-            self.write_rename_ref_direct(table_path, current_metadata, old_name, new_name, reference, current_version)
-                .await
+            self.write_rename_ref_direct(
+                table_path,
+                current_metadata,
+                old_name,
+                new_name,
+                reference,
+                current_version,
+            )
+            .await
         }
     }
 

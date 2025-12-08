@@ -25,9 +25,7 @@ impl TableResolution {
     pub fn location(&self) -> String {
         match self {
             TableResolution::Path(p) => p.clone(),
-            TableResolution::CatalogTable { table, .. } => {
-                table.metadata().location().to_string()
-            }
+            TableResolution::CatalogTable { table, .. } => table.metadata().location().to_string(),
         }
     }
 
@@ -83,14 +81,15 @@ pub async fn resolve_table(
             catalog_config,
             table_name,
             ..
-        } => {
-            resolve_from_catalog(&table_name, &catalog_config).await
-        }
+        } => resolve_from_catalog(&table_name, &catalog_config).await,
     }
 }
 
 /// Resolve a table from a catalog
-async fn resolve_from_catalog(table_input: &str, catalog: &CatalogConfig) -> Result<TableResolution> {
+async fn resolve_from_catalog(
+    table_input: &str,
+    catalog: &CatalogConfig,
+) -> Result<TableResolution> {
     // Parse namespace.table
     let table_ref = TableRef::parse(table_input, Some(catalog));
 

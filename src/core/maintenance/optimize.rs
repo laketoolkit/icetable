@@ -20,7 +20,7 @@ use std::time::Duration;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_cast::cast;
-use futures::{TryStreamExt, stream, StreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use object_store::ObjectStore;
 use object_store::path::Path as ObjectPath;
@@ -50,9 +50,7 @@ struct TemporaryFileTracker {
 
 impl TemporaryFileTracker {
     fn new() -> Self {
-        Self {
-            files: Vec::new(),
-        }
+        Self { files: Vec::new() }
     }
 
     fn add_file(&mut self, path: String) {
@@ -87,9 +85,10 @@ impl OptimizeService {
             .filter(|(key, g)| {
                 // Filter by partition if specified (supports wildcards)
                 if let Some(ref filter) = self.config.partition_filter
-                    && !super::matches_partition_filter(key, filter) {
-                        return false;
-                    }
+                    && !super::matches_partition_filter(key, filter)
+                {
+                    return false;
+                }
                 g.needs_compaction(self.config.min_size)
             })
             .map(|(_, g)| g)
@@ -132,17 +131,21 @@ impl OptimizeService {
 
             // Check max_files limit
             if let Some(max_files) = self.config.max_files
-                && accumulated_files + group_files > max_files && !limited_groups.is_empty() {
-                    was_limited = true;
-                    break;
-                }
+                && accumulated_files + group_files > max_files
+                && !limited_groups.is_empty()
+            {
+                was_limited = true;
+                break;
+            }
 
             // Check max_bytes limit
             if let Some(max_bytes) = self.config.max_bytes
-                && accumulated_bytes + group_bytes > max_bytes && !limited_groups.is_empty() {
-                    was_limited = true;
-                    break;
-                }
+                && accumulated_bytes + group_bytes > max_bytes
+                && !limited_groups.is_empty()
+            {
+                was_limited = true;
+                break;
+            }
 
             accumulated_files += group_files;
             accumulated_bytes += group_bytes;
@@ -167,10 +170,7 @@ impl OptimizeService {
                 "partitions".to_string(),
                 groups_to_compact.len().to_string(),
             );
-            details.insert(
-                "bytes_to_process".to_string(),
-                format_bytes(total_bytes),
-            );
+            details.insert("bytes_to_process".to_string(), format_bytes(total_bytes));
 
             if was_limited {
                 details.insert("incremental".to_string(), "true".to_string());
@@ -224,12 +224,9 @@ impl OptimizeService {
                 let group = group.clone();
 
                 async move {
-                    let result = self.compact_group_streaming(
-                        &group,
-                        &schema,
-                        &data_dir,
-                        &object_store,
-                    ).await;
+                    let result = self
+                        .compact_group_streaming(&group, &schema, &data_dir, &object_store)
+                        .await;
 
                     // Update progress
                     files_processed.fetch_add(group.files.len(), Ordering::Relaxed);
@@ -337,21 +334,22 @@ impl OptimizeService {
 
         // Track temporary files for cleanup
         let mut temp_tracker = TemporaryFileTracker::new();
-        
+
         // Register cleanup handler for cancellation
         let tracker_for_cleanup = temp_tracker.files.clone();
         let object_store_for_cleanup = object_store.clone();
         register_cleanup_handler(move || {
             for path in &tracker_for_cleanup {
                 let object_path = ObjectPath::from(path.as_str());
-                let _ = tokio::runtime::Handle::current().block_on(async {
-                    object_store_for_cleanup.delete(&object_path).await
-                });
+                let _ = tokio::runtime::Handle::current()
+                    .block_on(async { object_store_for_cleanup.delete(&object_path).await });
             }
         });
 
         // Current writer state
-        let mut current_writer: Option<AsyncArrowWriter<parquet::arrow::async_writer::ParquetObjectWriter>> = None;
+        let mut current_writer: Option<
+            AsyncArrowWriter<parquet::arrow::async_writer::ParquetObjectWriter>,
+        > = None;
         let mut current_path: Option<std::path::PathBuf> = None;
         let mut current_records = 0u64;
         let mut current_bytes_estimate = 0u64;
@@ -394,17 +392,18 @@ impl OptimizeService {
                     && current_bytes_estimate + batch_size_estimate > self.config.target_size
                 {
                     // Finalize current writer
-                    if let (Some(writer), Some(ref out_path)) = (current_writer.take(), current_path.take()) {
-                        writer
-                            .close()
-                            .await
-                            .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
+                    if let (Some(writer), Some(ref out_path)) =
+                        (current_writer.take(), current_path.take())
+                    {
+                        writer.close().await.map_err(|e| {
+                            Error::General(format!("Failed to close writer: {}", e))
+                        })?;
 
-                        let out_object_path = self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
-                        let meta = object_store
-                            .head(&out_object_path)
-                            .await
-                            .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
+                        let out_object_path =
+                            self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
+                        let meta = object_store.head(&out_object_path).await.map_err(|e| {
+                            Error::General(format!("Failed to get file metadata: {}", e))
+                        })?;
 
                         let file_path = out_path.to_string_lossy().to_string();
                         temp_tracker.add_file(file_path.clone());
@@ -430,16 +429,20 @@ impl OptimizeService {
                     };
                     file_counter += 1;
 
-                    let output_object_path = self.path_to_object_path(&output_path.to_string_lossy(), table_base)?;
+                    let output_object_path =
+                        self.path_to_object_path(&output_path.to_string_lossy(), table_base)?;
 
                     let writer_obj = parquet::arrow::async_writer::ParquetObjectWriter::new(
                         object_store.clone(),
                         output_object_path,
                     );
 
-                    let async_writer =
-                        AsyncArrowWriter::try_new(writer_obj, table_schema.clone(), Some(props.clone()))
-                            .map_err(|e| Error::General(format!("Failed to create async writer: {}", e)))?;
+                    let async_writer = AsyncArrowWriter::try_new(
+                        writer_obj,
+                        table_schema.clone(),
+                        Some(props.clone()),
+                    )
+                    .map_err(|e| Error::General(format!("Failed to create async writer: {}", e)))?;
 
                     current_writer = Some(async_writer);
                     current_path = Some(output_path);
@@ -464,7 +467,8 @@ impl OptimizeService {
                 .await
                 .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
 
-            let out_object_path = self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
+            let out_object_path =
+                self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
             let meta = object_store
                 .head(&out_object_path)
                 .await

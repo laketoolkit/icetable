@@ -8,7 +8,7 @@
 
 use colored::Colorize;
 
-use super::common::{resolve_table, TableResolution};
+use super::common::{TableResolution, resolve_table};
 use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
 use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{
@@ -25,15 +25,23 @@ pub struct OptimizeCommand;
 
 impl OptimizeCommand {
     /// Execute optimize command
-    pub async fn execute(cmd: OptimizeCommands, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(
+        cmd: OptimizeCommands,
+        catalog_config: Option<CatalogConfig>,
+    ) -> Result<()> {
         match cmd {
             OptimizeCommands::Data(args) => Self::execute_data(args, catalog_config).await,
-            OptimizeCommands::Manifests(args) => Self::execute_manifests(args, catalog_config).await,
+            OptimizeCommands::Manifests(args) => {
+                Self::execute_manifests(args, catalog_config).await
+            }
         }
     }
 
     /// Execute optimize data subcommand
-    async fn execute_data(args: OptimizeDataArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    async fn execute_data(
+        args: OptimizeDataArgs,
+        catalog_config: Option<CatalogConfig>,
+    ) -> Result<()> {
         let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
         let table_path = resolution.location().to_string();
 
@@ -68,8 +76,13 @@ impl OptimizeCommand {
                 match format {
                     TableFormat::Delta => Self::optimize_delta_data(&args, &service).await,
                     TableFormat::Iceberg => {
-                        Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), committer)
-                            .await
+                        Self::optimize_iceberg_data(
+                            &table_path,
+                            &service,
+                            args.branch.as_deref(),
+                            committer,
+                        )
+                        .await
                     }
                     TableFormat::Unknown => Err(Error::General(format!(
                         "Path '{}' is not a Delta Lake or Iceberg table",
@@ -91,13 +104,16 @@ impl OptimizeCommand {
         resolution: &TableResolution,
     ) -> Option<TableCommitter> {
         match (catalog_config, resolution) {
-            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
-                Some(TableCommitter::with_catalog(
-                    config.clone(),
-                    namespace.clone(),
-                    name.clone(),
-                ))
-            }
+            (
+                Some(config),
+                TableResolution::CatalogTable {
+                    namespace, name, ..
+                },
+            ) => Some(TableCommitter::with_catalog(
+                config.clone(),
+                namespace.clone(),
+                name.clone(),
+            )),
             _ => None,
         }
     }
@@ -247,12 +263,18 @@ impl OptimizeCommand {
             println!(
                 "{} {}",
                 "Skipping:".yellow(),
-                analysis.skip_reason.as_deref().unwrap_or("No rewrite needed")
+                analysis
+                    .skip_reason
+                    .as_deref()
+                    .unwrap_or("No rewrite needed")
             );
             return Ok(());
         }
 
-        println!("Current manifests: {}", analysis.current_manifests.to_string().cyan());
+        println!(
+            "Current manifests: {}",
+            analysis.current_manifests.to_string().cyan()
+        );
         println!(
             "  Data manifests:   {}",
             analysis.data_manifests.to_string().cyan()

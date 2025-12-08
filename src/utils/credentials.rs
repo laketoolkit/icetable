@@ -26,7 +26,7 @@ pub enum CredentialSource {
 /// Serialization/deserialization for CredentialSource
 mod credential_serde {
     use super::*;
-    use serde::{de as serde_de, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de as serde_de};
     use std::fmt;
 
     #[derive(Serialize, Deserialize)]
@@ -121,27 +121,26 @@ mod credential_serde {
                 where
                     A: serde_de::MapAccess<'de>,
                 {
-                    let wrapper: CredentialWrapper = Deserialize::deserialize(
-                        serde_de::value::MapAccessDeserializer::new(map),
-                    )?;
+                    let wrapper: CredentialWrapper =
+                        Deserialize::deserialize(serde_de::value::MapAccessDeserializer::new(map))?;
 
                     match wrapper.typ {
                         CredentialType::Inline => {
-                            let value = wrapper.value.ok_or_else(|| {
-                                serde_de::Error::missing_field("value")
-                            })?;
+                            let value = wrapper
+                                .value
+                                .ok_or_else(|| serde_de::Error::missing_field("value"))?;
                             Ok(CredentialSource::Inline(value))
                         }
                         CredentialType::EnvVar => {
-                            let value = wrapper.value.ok_or_else(|| {
-                                serde_de::Error::missing_field("value")
-                            })?;
+                            let value = wrapper
+                                .value
+                                .ok_or_else(|| serde_de::Error::missing_field("value"))?;
                             Ok(CredentialSource::EnvVar(value))
                         }
                         CredentialType::File => {
-                            let value = wrapper.value.ok_or_else(|| {
-                                serde_de::Error::missing_field("value")
-                            })?;
+                            let value = wrapper
+                                .value
+                                .ok_or_else(|| serde_de::Error::missing_field("value"))?;
                             Ok(CredentialSource::File(PathBuf::from(value)))
                         }
                         CredentialType::IamRole => Ok(CredentialSource::IamRole),
@@ -162,27 +161,29 @@ impl CredentialSource {
             CredentialSource::Inline(s) => {
                 // Warn about plain text credentials
                 if std::env::var("ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS").is_err() {
-                    eprintln!("{}", "⚠️  Warning: Using inline credentials stored in plain text".yellow());
-                    eprintln!("   Consider using environment variables or credential files for better security.");
-                    eprintln!("   Set ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS=1 to suppress this warning.");
+                    eprintln!(
+                        "{}",
+                        "⚠️  Warning: Using inline credentials stored in plain text".yellow()
+                    );
+                    eprintln!(
+                        "   Consider using environment variables or credential files for better security."
+                    );
+                    eprintln!(
+                        "   Set ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS=1 to suppress this warning."
+                    );
                 }
                 Ok(Some(s.clone()))
             }
-            CredentialSource::EnvVar(var) => {
-                std::env::var(var)
-                    .map(Some)
-                    .map_err(|_| Error::General(format!(
-                        "Environment variable '{}' not found", var
-                    )))
-            }
-            CredentialSource::File(path) => {
-                std::fs::read_to_string(path)
-                    .map(Some)
-                    .map_err(|e| Error::General(format!(
-                        "Failed to read credential file '{}': {}",
-                        path.display(), e
-                    )))
-            }
+            CredentialSource::EnvVar(var) => std::env::var(var)
+                .map(Some)
+                .map_err(|_| Error::General(format!("Environment variable '{}' not found", var))),
+            CredentialSource::File(path) => std::fs::read_to_string(path).map(Some).map_err(|e| {
+                Error::General(format!(
+                    "Failed to read credential file '{}': {}",
+                    path.display(),
+                    e
+                ))
+            }),
             CredentialSource::IamRole => {
                 // Auto-detected IAM role - no explicit credential needed
                 // Cloud SDKs will use instance metadata service
@@ -254,7 +255,7 @@ mod tests {
     fn test_file_credential() {
         let temp_file = NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), "file-token").unwrap();
-        
+
         let cred = CredentialSource::File(temp_file.path().to_path_buf());
         assert_eq!(cred.resolve().unwrap(), Some("file-token".to_string()));
         assert!(cred.describe().contains("file"));
@@ -269,22 +270,12 @@ mod tests {
 
     #[test]
     fn test_from_cli_options() {
-        let cred = CredentialSource::from_cli_options(
-            Some("token".to_string()),
-            None,
-            None,
-            false,
-            false,
-        );
+        let cred =
+            CredentialSource::from_cli_options(Some("token".to_string()), None, None, false, false);
         assert!(matches!(cred, Some(CredentialSource::Inline(_))));
 
-        let cred = CredentialSource::from_cli_options(
-            None,
-            Some("VAR".to_string()),
-            None,
-            false,
-            false,
-        );
+        let cred =
+            CredentialSource::from_cli_options(None, Some("VAR".to_string()), None, false, false);
         assert!(matches!(cred, Some(CredentialSource::EnvVar(_))));
 
         let cred = CredentialSource::from_cli_options(
@@ -296,31 +287,13 @@ mod tests {
         );
         assert!(matches!(cred, Some(CredentialSource::File(_))));
 
-        let cred = CredentialSource::from_cli_options(
-            None,
-            None,
-            None,
-            true,
-            false,
-        );
+        let cred = CredentialSource::from_cli_options(None, None, None, true, false);
         assert!(matches!(cred, Some(CredentialSource::IamRole)));
 
-        let cred = CredentialSource::from_cli_options(
-            None,
-            None,
-            None,
-            false,
-            true,
-        );
+        let cred = CredentialSource::from_cli_options(None, None, None, false, true);
         assert!(matches!(cred, Some(CredentialSource::OAuth2)));
 
-        let cred = CredentialSource::from_cli_options(
-            None,
-            None,
-            None,
-            false,
-            false,
-        );
+        let cred = CredentialSource::from_cli_options(None, None, None, false, false);
         assert!(cred.is_none());
     }
 }

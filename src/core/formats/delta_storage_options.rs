@@ -5,14 +5,11 @@
 
 use std::collections::HashMap;
 
-use crate::core::storage::{Storage, ObjectStoreExt, to_path};
+use crate::core::storage::{ObjectStoreExt, Storage, to_path};
 use crate::error::Result;
 
 /// Build storage options for delta-rs from a StorageBackend
-pub fn build_storage_options(
-    storage: &Storage,
-    uri: &str,
-) -> Result<HashMap<String, String>> {
+pub fn build_storage_options(storage: &Storage, uri: &str) -> Result<HashMap<String, String>> {
     let mut options = HashMap::new();
 
     // Determine storage type from URI

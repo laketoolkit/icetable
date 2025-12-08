@@ -6,7 +6,7 @@ use colored::Colorize;
 
 use crate::cli::parser::{
     ConfigAddArgs, ConfigAddCatalogArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs,
-    ConfigListArgs, ConfigRemoveCatalogArgs, ConfigRemoveArgs, ConfigUnsetArgs, ConfigUseArgs,
+    ConfigListArgs, ConfigRemoveArgs, ConfigRemoveCatalogArgs, ConfigUnsetArgs, ConfigUseArgs,
 };
 use crate::config::{CatalogConfig, Config, ResolvedTable};
 use crate::error::Result;
@@ -37,7 +37,11 @@ impl ConfigCommand {
         // Validate the reference exists (path, alias, or catalog.table)
         let display_name = match config.resolve_table(&args.table)? {
             ResolvedTable::Path(path) => path,
-            ResolvedTable::Catalog { catalog_name, table_name, .. } => {
+            ResolvedTable::Catalog {
+                catalog_name,
+                table_name,
+                ..
+            } => {
                 format!("{}.{}", catalog_name, table_name)
             }
         };
@@ -134,11 +138,17 @@ impl ConfigCommand {
         }
 
         let credential = if let Some(token) = &args.credential {
-            Some(crate::utils::credentials::CredentialSource::Inline(token.clone()))
+            Some(crate::utils::credentials::CredentialSource::Inline(
+                token.clone(),
+            ))
         } else if let Some(env_var) = &args.credential_env {
-            Some(crate::utils::credentials::CredentialSource::EnvVar(env_var.clone()))
+            Some(crate::utils::credentials::CredentialSource::EnvVar(
+                env_var.clone(),
+            ))
         } else if let Some(file_path) = &args.credential_file {
-            Some(crate::utils::credentials::CredentialSource::File(PathBuf::from(file_path)))
+            Some(crate::utils::credentials::CredentialSource::File(
+                PathBuf::from(file_path),
+            ))
         } else if args.use_iam_role {
             Some(crate::utils::credentials::CredentialSource::IamRole)
         } else if args.use_oauth2 {
@@ -146,7 +156,7 @@ impl ConfigCommand {
         } else {
             None
         };
-        
+
         let catalog_config = CatalogConfig {
             catalog_type: args.catalog_type.clone(),
             uri: args.uri.clone(),

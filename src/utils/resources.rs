@@ -3,8 +3,8 @@
 //! Provides utilities for parsing and applying memory limits, timeouts,
 //! and concurrency controls for CLI operations.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::error::{Error, Result};
@@ -13,8 +13,7 @@ use crate::error::{Error, Result};
 static RESOURCE_LIMITS: OnceLock<ResourceLimits> = OnceLock::new();
 
 /// Resource limits for operations
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ResourceLimits {
     /// Maximum memory in bytes (0 = unlimited)
     pub max_memory_bytes: u64,
@@ -23,7 +22,6 @@ pub struct ResourceLimits {
     /// Maximum concurrent operations (0 = use system default)
     pub max_concurrency: u32,
 }
-
 
 impl ResourceLimits {
     /// Parse memory string (e.g., "2GB", "512MB", "1024KB") to bytes
@@ -164,16 +162,14 @@ where
     let limits = get_resource_limits();
 
     match limits.timeout {
-        Some(duration) => {
-            tokio::time::timeout(duration, operation)
-                .await
-                .map_err(|_| {
-                    Error::General(format!(
-                        "Operation timed out after {} seconds",
-                        duration.as_secs()
-                    ))
-                })?
-        }
+        Some(duration) => tokio::time::timeout(duration, operation)
+            .await
+            .map_err(|_| {
+                Error::General(format!(
+                    "Operation timed out after {} seconds",
+                    duration.as_secs()
+                ))
+            })?,
         None => operation.await,
     }
 }
@@ -184,14 +180,26 @@ mod tests {
 
     #[test]
     fn test_parse_memory_gb() {
-        assert_eq!(ResourceLimits::parse_memory("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
-        assert_eq!(ResourceLimits::parse_memory("1gb").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(
+            ResourceLimits::parse_memory("2GB").unwrap(),
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            ResourceLimits::parse_memory("1gb").unwrap(),
+            1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_parse_memory_mb() {
-        assert_eq!(ResourceLimits::parse_memory("512MB").unwrap(), 512 * 1024 * 1024);
-        assert_eq!(ResourceLimits::parse_memory("256mb").unwrap(), 256 * 1024 * 1024);
+        assert_eq!(
+            ResourceLimits::parse_memory("512MB").unwrap(),
+            512 * 1024 * 1024
+        );
+        assert_eq!(
+            ResourceLimits::parse_memory("256mb").unwrap(),
+            256 * 1024 * 1024
+        );
     }
 
     #[test]

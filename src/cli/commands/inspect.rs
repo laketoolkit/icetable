@@ -9,10 +9,10 @@ use crate::cli::parser::InspectArgs;
 use crate::config::{ResolveTableRef, ResolvedTable};
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
-use crate::core::storage::{create_object_store, Storage};
+use crate::core::storage::{Storage, create_object_store};
 use crate::core::{CatalogConfig, TableRef};
 use crate::error::Result;
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
+use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
 use common::{PhysicalInspectOptions, VerbosityLevel};
 
@@ -32,31 +32,28 @@ impl InspectCommand {
                     128 * 1024 * 1024 // 128MB for regular inspection
                 };
                 track_memory_usage(estimated_memory)?;
-                
+
                 Self::inspect_inner(args, catalog_config).await
-            }).await
-        }).await
+            })
+            .await
+        })
+        .await
     }
-    
+
     async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         // Priority 1: If --catalog-uri is provided, use it directly
         if let Some(ref cli_catalog) = catalog_config {
             let table_input = args.path.as_ref().ok_or_else(|| {
                 crate::error::Error::General(
-                    "Table identifier required when using --catalog-uri (e.g., namespace.table)".to_string()
+                    "Table identifier required when using --catalog-uri (e.g., namespace.table)"
+                        .to_string(),
                 )
             })?;
 
             let table_ref = TableRef::parse(table_input, Some(cli_catalog));
 
             if let TableRef::Catalog { namespace, name } = &table_ref {
-                return Self::execute_catalog_inspect(
-                    namespace,
-                    name,
-                    cli_catalog,
-                    args,
-                )
-                .await;
+                return Self::execute_catalog_inspect(namespace, name, cli_catalog, args).await;
             }
         }
 
@@ -68,7 +65,11 @@ impl InspectCommand {
                 // Direct path mode
                 return Self::execute_path_inspect(&path_str, args).await;
             }
-            ResolvedTable::Catalog { catalog_config, table_name, .. } => {
+            ResolvedTable::Catalog {
+                catalog_config,
+                table_name,
+                ..
+            } => {
                 // Parse table_name which may be "namespace.table" or "ns1.ns2.table"
                 let parts: Vec<&str> = table_name.split('.').collect();
                 let (namespace, name) = if parts.len() >= 2 {
@@ -84,7 +85,8 @@ impl InspectCommand {
                     (vec!["default".to_string()], table_name.clone())
                 };
 
-                return Self::execute_catalog_inspect(&namespace, &name, &catalog_config, args).await;
+                return Self::execute_catalog_inspect(&namespace, &name, &catalog_config, args)
+                    .await;
             }
         }
     }
@@ -248,10 +250,12 @@ impl InspectCommand {
         let catalog = CatalogClient::new(Some(catalog_config.clone())).await?;
 
         // Load table from catalog
-        let table = catalog.load_table(&crate::core::TableRef::Catalog {
-            namespace: namespace.to_vec(),
-            name: name.to_string(),
-        }).await?;
+        let table = catalog
+            .load_table(&crate::core::TableRef::Catalog {
+                namespace: namespace.to_vec(),
+                name: name.to_string(),
+            })
+            .await?;
 
         // Get table metadata
         let metadata = table.metadata();

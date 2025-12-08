@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use crate::core::storage::{Storage, create_object_store, detect_storage_type, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, detect_storage_type};
 use crate::error::Result;
 
 /// Check result status
@@ -45,7 +45,11 @@ impl CheckResult {
     }
 
     /// Create a warning check result with a suggestion
-    pub fn warning(name: impl Into<String>, message: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn warning(
+        name: impl Into<String>,
+        message: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             status: CheckStatus::Warning,
@@ -55,7 +59,11 @@ impl CheckResult {
     }
 
     /// Create an error check result with a suggestion
-    pub fn error(name: impl Into<String>, message: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn error(
+        name: impl Into<String>,
+        message: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             status: CheckStatus::Error,
@@ -80,9 +88,18 @@ impl CheckSummary {
     /// Create a summary from a list of check results
     pub fn from_checks(checks: &[CheckResult]) -> Self {
         Self {
-            ok_count: checks.iter().filter(|c| c.status == CheckStatus::Ok).count(),
-            warning_count: checks.iter().filter(|c| c.status == CheckStatus::Warning).count(),
-            error_count: checks.iter().filter(|c| c.status == CheckStatus::Error).count(),
+            ok_count: checks
+                .iter()
+                .filter(|c| c.status == CheckStatus::Ok)
+                .count(),
+            warning_count: checks
+                .iter()
+                .filter(|c| c.status == CheckStatus::Warning)
+                .count(),
+            error_count: checks
+                .iter()
+                .filter(|c| c.status == CheckStatus::Error)
+                .count(),
         }
     }
 
@@ -223,9 +240,7 @@ impl DoctorService {
             (Some(account), Some(_), _) => {
                 CheckResult::ok("Azure credentials", format!("Account: {}", account))
             }
-            (_, _, Some(_)) => {
-                CheckResult::ok("Azure credentials", "Using connection string")
-            }
+            (_, _, Some(_)) => CheckResult::ok("Azure credentials", "Using connection string"),
             _ => CheckResult::warning(
                 "Azure credentials",
                 "Not configured",
@@ -274,11 +289,14 @@ impl DoctorService {
         };
 
         // Check metadata format
-        let (metadata_format_check, current_version) = self.check_metadata_format(&storage, table_path).await;
+        let (metadata_format_check, current_version) =
+            self.check_metadata_format(&storage, table_path).await;
         checks.push(metadata_format_check);
 
         // Check metadata JSON
-        let (metadata_check, metadata) = self.check_metadata_json(&storage, table_path, current_version).await;
+        let (metadata_check, metadata) = self
+            .check_metadata_json(&storage, table_path, current_version)
+            .await;
         checks.push(metadata_check);
 
         // If metadata is valid, run additional checks
@@ -288,7 +306,10 @@ impl DoctorService {
             checks.push(self.check_manifests_exist(&storage, table_path, meta).await);
 
             if self.config.check_files {
-                checks.push(self.check_data_files_exist(&storage, table_path, meta).await);
+                checks.push(
+                    self.check_data_files_exist(&storage, table_path, meta)
+                        .await,
+                );
             }
         }
 
@@ -307,7 +328,10 @@ impl DoctorService {
 
         match find_latest_metadata(table_path, storage).await {
             Ok(metadata_path) => {
-                let filename = metadata_path.split('/').next_back().unwrap_or(&metadata_path);
+                let filename = metadata_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&metadata_path);
                 let version = extract_version_from_path(&metadata_path);
 
                 if let Some(v) = version {
@@ -385,7 +409,10 @@ impl DoctorService {
                                 .get("format-version")
                                 .and_then(|v| v.as_i64())
                                 .unwrap_or(0);
-                            let filename = metadata_path.split('/').next_back().unwrap_or(&metadata_path);
+                            let filename = metadata_path
+                                .split('/')
+                                .next_back()
+                                .unwrap_or(&metadata_path);
                             (
                                 CheckResult::ok(
                                     "Metadata JSON",
@@ -449,7 +476,9 @@ impl DoctorService {
 
         let mut orphan_count = 0;
         for snapshot in snapshots {
-            if let Some(parent_id) = snapshot.get("parent-snapshot-id").and_then(|id| id.as_i64())
+            if let Some(parent_id) = snapshot
+                .get("parent-snapshot-id")
+                .and_then(|id| id.as_i64())
                 && parent_id > 0
                 && !snapshot_ids.contains(&parent_id)
             {
@@ -460,20 +489,31 @@ impl DoctorService {
         if orphan_count > 0 {
             CheckResult::warning(
                 "Snapshot Graph",
-                format!("{} snapshots, {} orphan references", snapshots.len(), orphan_count),
+                format!(
+                    "{} snapshots, {} orphan references",
+                    snapshots.len(),
+                    orphan_count
+                ),
                 "Some snapshots reference expired parents (normal after expire)",
             )
         } else {
-            CheckResult::ok("Snapshot Graph", format!("{} snapshots, no cycles", snapshots.len()))
+            CheckResult::ok(
+                "Snapshot Graph",
+                format!("{} snapshots, no cycles", snapshots.len()),
+            )
         }
     }
 
     /// Check current snapshot reference is valid
     fn check_current_snapshot(metadata: &serde_json::Value) -> CheckResult {
-        let current_id = metadata.get("current-snapshot-id").and_then(|id| id.as_i64());
+        let current_id = metadata
+            .get("current-snapshot-id")
+            .and_then(|id| id.as_i64());
 
         match current_id {
-            Some(-1) | None => CheckResult::ok("Current Snapshot", "No current snapshot (empty table)"),
+            Some(-1) | None => {
+                CheckResult::ok("Current Snapshot", "No current snapshot (empty table)")
+            }
             Some(id) => {
                 let snapshots = metadata
                     .get("snapshots")
@@ -596,7 +636,10 @@ impl DoctorService {
                 "Some manifest files are missing. Table may be corrupted.",
             )
         } else {
-            CheckResult::ok("Manifest Files", format!("{} manifests verified", manifest_paths.len()))
+            CheckResult::ok(
+                "Manifest Files",
+                format!("{} manifests verified", manifest_paths.len()),
+            )
         }
     }
 

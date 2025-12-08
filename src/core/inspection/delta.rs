@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::core::storage::{Storage, ObjectStoreExt, to_path};
+use crate::core::storage::{ObjectStoreExt, Storage, to_path};
 use crate::error::{Error, Result};
 
 use super::formatters::{format_bytes, format_number};
@@ -207,7 +207,9 @@ impl PhysicalInspector for DeltaInspector {
         let storage_options = Self::build_storage_options();
 
         // Load the Delta table
-        let path_str = self.path.to_str()
+        let path_str = self
+            .path
+            .to_str()
             .ok_or_else(|| Error::General("Path contains invalid UTF-8".to_string()))?;
         let table = DeltaTableBuilder::from_uri(path_str)
             .with_storage_options(storage_options)
@@ -219,12 +221,7 @@ impl PhysicalInspector for DeltaInspector {
         let current_version = table.version().unwrap_or(0) as i64;
 
         // Read file statistics from transaction log
-        let file_stats = read_file_stats(
-            self.storage.clone(),
-            path_str,
-            current_version,
-        )
-        .await?;
+        let file_stats = read_file_stats(self.storage.clone(), path_str, current_version).await?;
 
         // Extract all metadata components
         let file_info = self.extract_file_info(&table, &file_stats)?;
@@ -270,11 +267,7 @@ pub struct DeltaInspectorFactory;
 
 #[async_trait]
 impl PhysicalInspectorFactory for DeltaInspectorFactory {
-    fn create(
-        &self,
-        path: &Path,
-        storage: Storage,
-    ) -> Result<Box<dyn PhysicalInspector>> {
+    fn create(&self, path: &Path, storage: Storage) -> Result<Box<dyn PhysicalInspector>> {
         Ok(Box::new(DeltaInspector::new(path.to_path_buf(), storage)))
     }
 
@@ -336,11 +329,7 @@ struct FileStats {
 
 #[cfg(feature = "delta")]
 /// Read file statistics from Delta transaction log
-async fn read_file_stats(
-    storage: Storage,
-    table_path: &str,
-    version: i64,
-) -> Result<FileStats> {
+async fn read_file_stats(storage: Storage, table_path: &str, version: i64) -> Result<FileStats> {
     let log_file = format!("{}/_delta_log/{:020}.json", table_path, version);
 
     let get_opts = GetOptions {

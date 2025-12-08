@@ -17,7 +17,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
-use crate::core::storage::{Storage, ObjectStoreExt, to_path};
+use crate::core::storage::{ObjectStoreExt, Storage, to_path};
 use crate::error::{Error, Result};
 
 /// Handler for Delta Lake tables
@@ -322,10 +322,7 @@ impl FormatHandler for DeltaHandler {
         );
         metadata_map.insert(
             "description".to_string(),
-            table_metadata
-                .description()
-                .unwrap_or("")
-                .to_string(),
+            table_metadata.description().unwrap_or("").to_string(),
         );
 
         // Add configuration entries

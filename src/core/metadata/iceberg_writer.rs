@@ -3,10 +3,9 @@
 //! Encapsulates the logic for writing Iceberg snapshots, manifests, and metadata files.
 //! This module is used by `IcebergMetadataService` to perform transactional writes.
 
-
 use super::traits::DataFileInfo;
 use crate::core::metadata::iceberg_partition;
-use crate::core::storage::{Storage, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
 use bytes;
 
@@ -163,12 +162,14 @@ impl IcebergSnapshotWriter {
             .next_back()
             .unwrap_or(current_metadata_path);
 
-        let build_result =
-            TableMetadataBuilder::new_from_metadata(old_metadata, Some(metadata_filename.to_string()))
-                .set_branch_snapshot(snapshot, branch)
-                .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
-                .build()
-                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        let build_result = TableMetadataBuilder::new_from_metadata(
+            old_metadata,
+            Some(metadata_filename.to_string()),
+        )
+        .set_branch_snapshot(snapshot, branch)
+        .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+        .build()
+        .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
 
         Ok(build_result.metadata)
     }
@@ -184,7 +185,9 @@ impl IcebergSnapshotWriter {
         metadata: &TableMetadata,
         current_metadata_path: &str,
     ) -> Result<String> {
-        use crate::core::utils::{extract_version_from_path, metadata_location_filename, next_metadata_location};
+        use crate::core::utils::{
+            extract_version_from_path, metadata_location_filename, next_metadata_location,
+        };
 
         // Validate metadata before writing
         super::iceberg_validator::validate_or_error(metadata)?;
@@ -202,7 +205,11 @@ impl IcebergSnapshotWriter {
 
         // Generate next metadata location with new UUID
         let next_location = next_metadata_location(current_metadata_path)?;
-        let metadata_path = format!("{}/{}", self.metadata_dir(), metadata_location_filename(&next_location));
+        let metadata_path = format!(
+            "{}/{}",
+            self.metadata_dir(),
+            metadata_location_filename(&next_location)
+        );
 
         let metadata_json = serde_json::to_string_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;

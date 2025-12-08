@@ -28,7 +28,9 @@ impl CatalogCommand {
             CatalogCommands::Namespaces(sub) => Self::list_namespaces(catalog, output, sub).await,
             CatalogCommands::Tables(_) => Self::list_tables(catalog, output, namespace).await,
             CatalogCommands::Info => Self::show_info(catalog, output).await,
-            CatalogCommands::CreateNamespace(sub) => Self::create_namespace(catalog, output, sub).await,
+            CatalogCommands::CreateNamespace(sub) => {
+                Self::create_namespace(catalog, output, sub).await
+            }
             CatalogCommands::DropNamespace(sub) => Self::drop_namespace(catalog, output, sub).await,
             CatalogCommands::CreateTable(sub) => Self::create_table(catalog, output, sub).await,
             CatalogCommands::DropTable(sub) => Self::drop_table(catalog, output, sub).await,
@@ -78,9 +80,10 @@ impl CatalogCommand {
         let (catalog_name, config) = Self::get_catalog_config(catalog.as_deref())?;
         let client = RestCatalogClient::new(&config).await?;
 
-        let parent: Option<Vec<String>> = args.parent.as_ref().map(|p| {
-            p.split('.').map(|s| s.to_string()).collect()
-        });
+        let parent: Option<Vec<String>> = args
+            .parent
+            .as_ref()
+            .map(|p| p.split('.').map(|s| s.to_string()).collect());
 
         let namespaces = client.list_namespaces(parent.as_deref()).await?;
 
@@ -171,7 +174,11 @@ impl CatalogCommand {
                 let ns_len = ns_tables.len();
                 for (i, (ns, tables)) in ns_tables.iter().enumerate() {
                     let is_last_ns = i == ns_len - 1;
-                    let ns_prefix = if is_last_ns { "└── " } else { "├── " };
+                    let ns_prefix = if is_last_ns {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
                     let continuation = if is_last_ns { "    " } else { "│   " };
 
                     println!("{}{}", ns_prefix.dimmed(), ns);
@@ -179,7 +186,11 @@ impl CatalogCommand {
                     let table_len = tables.len();
                     for (j, table) in tables.iter().enumerate() {
                         let is_last_table = j == table_len - 1;
-                        let table_prefix = if is_last_table { "└── " } else { "├── " };
+                        let table_prefix = if is_last_table {
+                            "└── "
+                        } else {
+                            "├── "
+                        };
                         println!(
                             "{}{}{}",
                             continuation.dimmed(),
@@ -320,24 +331,29 @@ impl CatalogCommand {
 
         // Read schema from file
         let schema_content = std::fs::read_to_string(&args.schema).map_err(|e| {
-            Error::General(format!("Failed to read schema file '{}': {}", args.schema.display(), e))
+            Error::General(format!(
+                "Failed to read schema file '{}': {}",
+                args.schema.display(),
+                e
+            ))
         })?;
 
         // Parse schema JSON
-        let schema: Schema = serde_json::from_str(&schema_content).map_err(|e| {
-            Error::General(format!("Failed to parse schema JSON: {}", e))
-        })?;
+        let schema: Schema = serde_json::from_str(&schema_content)
+            .map_err(|e| Error::General(format!("Failed to parse schema JSON: {}", e)))?;
 
         let namespace: Vec<String> = args.namespace.split('.').map(|s| s.to_string()).collect();
         let properties: HashMap<String, String> = args.property.into_iter().collect();
 
-        client.create_table(
-            &namespace,
-            &args.name,
-            schema,
-            args.location.as_deref(),
-            properties,
-        ).await?;
+        client
+            .create_table(
+                &namespace,
+                &args.name,
+                schema,
+                args.location.as_deref(),
+                properties,
+            )
+            .await?;
 
         if output == "json" {
             let json = serde_json::json!({
@@ -375,7 +391,9 @@ impl CatalogCommand {
 
         let namespace: Vec<String> = args.namespace.split('.').map(|s| s.to_string()).collect();
 
-        client.drop_table(&namespace, &args.name, args.purge).await?;
+        client
+            .drop_table(&namespace, &args.name, args.purge)
+            .await?;
 
         if output == "json" {
             let json = serde_json::json!({

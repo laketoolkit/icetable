@@ -60,23 +60,53 @@ pub struct Cli {
     pub log_file: Option<PathBuf>,
 
     /// REST Catalog URI [env: ICETABLE_CATALOG_URI]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide_env = true, help_heading = "Catalog Options")]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_URI",
+        hide_env = true,
+        help_heading = "Catalog Options"
+    )]
     pub catalog_uri: Option<String>,
 
     /// Catalog warehouse location [env: ICETABLE_CATALOG_WAREHOUSE]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide_env = true, help_heading = "Catalog Options")]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_WAREHOUSE",
+        hide_env = true,
+        help_heading = "Catalog Options"
+    )]
     pub catalog_warehouse: Option<String>,
 
     /// Catalog credential [env: ICETABLE_CATALOG_CREDENTIAL]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide_env = true, help_heading = "Catalog Options")]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL",
+        hide_env = true,
+        help_heading = "Catalog Options"
+    )]
     pub catalog_credential: Option<String>,
 
     /// Catalog credential from environment variable [env: ICETABLE_CATALOG_CREDENTIAL_ENV]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_ENV", hide_env = true, help_heading = "Catalog Options")]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL_ENV",
+        hide_env = true,
+        help_heading = "Catalog Options"
+    )]
     pub catalog_credential_env: Option<String>,
 
     /// Catalog credential from file [env: ICETABLE_CATALOG_CREDENTIAL_FILE]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_FILE", hide_env = true, help_heading = "Catalog Options")]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL_FILE",
+        hide_env = true,
+        help_heading = "Catalog Options"
+    )]
     pub catalog_credential_file: Option<std::path::PathBuf>,
 
     /// Use IAM role for authentication (AWS, GCP, Azure)
@@ -88,19 +118,47 @@ pub struct Cli {
     pub catalog_use_oauth2: bool,
 
     /// Maximum memory usage (e.g., 2GB, 512MB). 0 = unlimited [env: ICETABLE_MAX_MEMORY]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_MEMORY", hide_env = true, help_heading = "Resource Limits")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_MEMORY",
+        hide_env = true,
+        help_heading = "Resource Limits"
+    )]
     pub max_memory: String,
 
     /// Operation timeout in seconds. 0 = no timeout [env: ICETABLE_TIMEOUT]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_TIMEOUT", hide_env = true, help_heading = "Resource Limits")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_TIMEOUT",
+        hide_env = true,
+        help_heading = "Resource Limits"
+    )]
     pub timeout: u64,
 
     /// Maximum concurrent operations [env: ICETABLE_MAX_CONCURRENCY]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_CONCURRENCY", hide_env = true, help_heading = "Resource Limits")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_CONCURRENCY",
+        hide_env = true,
+        help_heading = "Resource Limits"
+    )]
     pub max_concurrency: u32,
 
     /// Maximum worker threads for runtime. 0 = use system default [env: ICETABLE_MAX_THREADS]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_THREADS", hide_env = true, help_heading = "Resource Limits")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_THREADS",
+        hide_env = true,
+        help_heading = "Resource Limits"
+    )]
     pub max_threads: usize,
 
     /// Print help

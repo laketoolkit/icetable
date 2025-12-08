@@ -14,7 +14,9 @@ pub mod validate;
 // Re-export operation types
 pub use convert::ConvertOperation;
 pub use diff::DiffOperation;
-pub use generate::{GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string};
+pub use generate::{
+    GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
+};
 pub use inspect::InspectOperation;
 pub use transform::{TransformConfig, apply_transforms};
 pub use validate::ValidateOperation;

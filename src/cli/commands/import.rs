@@ -9,7 +9,7 @@ use crate::cli::parser::ImportDeltaArgs;
 use crate::cli::parser::ImportParquetArgs;
 use crate::core::storage::{ObjectMeta, ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
+use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
 /// Handler for import commands
 pub struct ImportCommand;
@@ -24,12 +24,14 @@ impl ImportCommand {
                 // Estimate memory usage: Delta metadata + file lists
                 let estimated_memory = 128 * 1024 * 1024; // 128MB for Delta operations
                 track_memory_usage(estimated_memory)?;
-                
+
                 Self::delta_inner(args).await
-            }).await
-        }).await
+            })
+            .await
+        })
+        .await
     }
-    
+
     #[cfg(feature = "delta")]
     async fn delta_inner(args: ImportDeltaArgs) -> Result<()> {
         use deltalake::DeltaTableBuilder;
@@ -187,12 +189,14 @@ impl ImportCommand {
                 // Estimate memory usage: file lists + parquet reading buffers
                 let estimated_memory = 256 * 1024 * 1024; // 256MB for Parquet operations
                 track_memory_usage(estimated_memory)?;
-                
+
                 Self::parquet_inner(args).await
-            }).await
-        }).await
+            })
+            .await
+        })
+        .await
     }
-    
+
     async fn parquet_inner(args: ImportParquetArgs) -> Result<()> {
         use crate::core::storage::create_object_store;
 

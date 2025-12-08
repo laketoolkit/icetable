@@ -5,16 +5,14 @@
 
 use std::path::Path;
 
-
-
 use super::common::resolve_table_path;
 use crate::cli::parser::StatsArgs;
+use crate::core::CatalogConfig;
 use crate::core::format_bytes;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::inspection::formatters::format_number;
 use crate::core::maintenance::PartitionFilter;
 use crate::core::storage::create_object_store;
-use crate::core::CatalogConfig;
 use crate::error::Result;
 
 /// Statistics for a specific partition
@@ -61,11 +59,12 @@ impl StatsCommand {
 
         // If partition filter is specified, get detailed partition stats
         if let Some(partition_filter_str) = &args.partition {
-            let partition_filter = PartitionFilter::parse(partition_filter_str)
-                .map_err(|e| crate::error::Error::General(format!("Invalid partition filter: {}", e)))?;
-            
+            let partition_filter = PartitionFilter::parse(partition_filter_str).map_err(|e| {
+                crate::error::Error::General(format!("Invalid partition filter: {}", e))
+            })?;
+
             let partition_stats = Self::get_partition_stats(&table_path, &partition_filter).await?;
-            
+
             // Format output
             if args.output == "json" {
                 let json = serde_json::json!({
@@ -84,11 +83,20 @@ impl StatsCommand {
                 println!("Partition: {}", partition_filter_str);
                 println!("  Files: {}", partition_stats.file_count);
                 println!("  Total Size: {}", format_bytes(partition_stats.total_size));
-                println!("  Avg File Size: {}", format_bytes(partition_stats.avg_file_size));
-                println!("  Small Files (<128MB): {} ({:.1}%)", partition_stats.small_files, partition_stats.small_files_percent);
-                
+                println!(
+                    "  Avg File Size: {}",
+                    format_bytes(partition_stats.avg_file_size)
+                );
+                println!(
+                    "  Small Files (<128MB): {} ({:.1}%)",
+                    partition_stats.small_files, partition_stats.small_files_percent
+                );
+
                 if partition_stats.small_files > 0 && partition_stats.small_files_percent > 50.0 {
-                    println!("  ⚠  Recommend: optimize --target-size {}", format_bytes(partition_stats.recommended_target_size));
+                    println!(
+                        "  ⚠  Recommend: optimize --target-size {}",
+                        format_bytes(partition_stats.recommended_target_size)
+                    );
                 }
             }
         } else {

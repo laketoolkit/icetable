@@ -12,7 +12,7 @@ use crate::core::operations::generate::{
 };
 use crate::core::utils::format_bytes;
 use crate::error::Result;
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation, temp_dir_with_cleanup};
+use crate::utils::{temp_dir_with_cleanup, track_memory_usage, with_cancellation, with_timeout};
 
 /// Handler for generate command
 pub struct GenerateCommand;
@@ -51,13 +51,15 @@ impl GenerateCommand {
                 // Estimate memory usage: schema size + batch buffers
                 let estimated_memory = Self::estimate_memory_usage(&config);
                 track_memory_usage(estimated_memory)?;
-                
+
                 // Create temp directory for intermediate files (will be cleaned up on cancellation)
                 let _temp_dir = temp_dir_with_cleanup()?;
-                
+
                 GenerateOperation::execute(config).await
-            }).await
-        }).await?;
+            })
+            .await
+        })
+        .await?;
 
         Self::print_result(&result, &args.output);
 
@@ -164,12 +166,13 @@ impl GenerateCommand {
                 "metadata_path": result.metadata_path,
                 "snapshot_id": result.snapshot_id
             });
-            println!("{}", serde_json::to_string_pretty(&json_result)
-                .expect("JSON serialization of GenerateResult should never fail"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_result)
+                    .expect("JSON serialization of GenerateResult should never fail")
+            );
         }
     }
-
-
 
     /// Estimate memory usage for generation
     fn estimate_memory_usage(config: &GenerateConfig) -> u64 {
@@ -177,18 +180,19 @@ impl GenerateCommand {
         // 1. Schema metadata: ~100 bytes per column
         // 2. Batch buffers: rows * avg column size
         // 3. Parquet buffers: ~1.5x batch size
-        
+
         let schema_size = config.schema.fields().len() as u64 * 100;
-        
+
         // Average column size estimation
         let avg_column_size_bytes = 32; // Conservative estimate for mixed types
-        
+
         let rows_per_file = (config.rows / config.files as u64).max(1);
-        let batch_size = rows_per_file * config.schema.fields().len() as u64 * avg_column_size_bytes;
-        
+        let batch_size =
+            rows_per_file * config.schema.fields().len() as u64 * avg_column_size_bytes;
+
         // Parquet compression buffers
         let parquet_buffer_size = batch_size * 3 / 2;
-        
+
         // Total for one file at a time (streaming)
         schema_size + batch_size + parquet_buffer_size
     }

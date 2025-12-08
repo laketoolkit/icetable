@@ -21,12 +21,12 @@
 
 use std::sync::Arc;
 
+use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::azure::MicrosoftAzureBuilder;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::local::LocalFileSystem;
 use object_store::prefix::PrefixStore;
-use object_store::ObjectStore;
 use url::Url;
 
 use crate::error::{Error, Result};

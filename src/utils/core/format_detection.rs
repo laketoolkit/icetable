@@ -7,7 +7,7 @@ use std::path::Path;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 
-use crate::core::storage::{create_object_store, Storage, StoragePath};
+use crate::core::storage::{Storage, StoragePath, create_object_store};
 
 /// Supported table formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,10 +78,7 @@ pub async fn detect_format(storage: &Storage) -> TableFormat {
 }
 
 /// Legacy function for backward compatibility during migration
-pub async fn detect_table_format_with_storage(
-    _path: &str,
-    storage: &Storage,
-) -> TableFormat {
+pub async fn detect_table_format_with_storage(_path: &str, storage: &Storage) -> TableFormat {
     detect_format(storage).await
 }
 

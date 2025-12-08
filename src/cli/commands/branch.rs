@@ -4,7 +4,7 @@
 
 use colored::Colorize;
 
-use super::common::{resolve_table, TableResolution};
+use super::common::{TableResolution, resolve_table};
 use crate::cli::parser::{BranchArgs, BranchCommands};
 use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
@@ -34,7 +34,15 @@ impl BranchCommand {
                     max_snapshot_age_ms: a.max_snapshot_age_ms,
                     max_ref_age_ms: a.max_ref_age_ms,
                 };
-                Self::create(&ctx, &a.name, a.from_snapshot, retention, &a.output, committer).await
+                Self::create(
+                    &ctx,
+                    &a.name,
+                    a.from_snapshot,
+                    retention,
+                    &a.output,
+                    committer,
+                )
+                .await
             }
             BranchCommands::Delete(a) => {
                 let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
@@ -66,13 +74,16 @@ impl BranchCommand {
         resolution: &TableResolution,
     ) -> Option<TableCommitter> {
         match (catalog_config, resolution) {
-            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
-                Some(TableCommitter::with_catalog(
-                    config.clone(),
-                    namespace.clone(),
-                    name.clone(),
-                ))
-            }
+            (
+                Some(config),
+                TableResolution::CatalogTable {
+                    namespace, name, ..
+                },
+            ) => Some(TableCommitter::with_catalog(
+                config.clone(),
+                namespace.clone(),
+                name.clone(),
+            )),
             _ => None,
         }
     }
@@ -209,10 +220,7 @@ impl BranchCommand {
                 result.snapshot_id
             );
             println!();
-            println!(
-                "{}",
-                "Run without --dry-run to apply this change.".dimmed()
-            );
+            println!("{}", "Run without --dry-run to apply this change.".dimmed());
         } else {
             println!(
                 "{} Deleted branch '{}'",

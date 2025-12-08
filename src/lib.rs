@@ -73,5 +73,5 @@ pub mod v1;
 
 // Convenience re-exports for backward compatibility
 // Note: Prefer using v1::* for stable API
-pub use core::{FormatHandler, FormatHandlerFactory, create_object_store, ObjectStoreExt, Storage};
+pub use core::{FormatHandler, FormatHandlerFactory, ObjectStoreExt, Storage, create_object_store};
 pub use error::{Error, Result};

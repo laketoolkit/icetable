@@ -18,7 +18,7 @@ use std::env;
 use std::sync::Arc;
 
 use icetable::core::operations::generate::{GenerateConfig, GenerateOperation, SchemaTemplate};
-use icetable::core::storage::{create_object_store, ObjectStoreExt, Storage};
+use icetable::core::storage::{ObjectStoreExt, Storage, create_object_store};
 
 /// Get test bucket from environment or default
 fn test_bucket() -> String {
@@ -174,7 +174,10 @@ async fn test_minio_list_objects() {
     }
 
     // List objects
-    let result = storage.list_prefix(&base_path).await.expect("Failed to list");
+    let result = storage
+        .list_prefix(&base_path)
+        .await
+        .expect("Failed to list");
     let paths: Vec<_> = result.iter().map(|o| o.location.to_string()).collect();
 
     assert_eq!(paths.len(), 3, "Expected 3 objects, got: {:?}", paths);
@@ -228,7 +231,10 @@ async fn test_minio_generate_synthetic_table() {
 
     // Check data files
     let data_prefix = format!("{}/data", table_path);
-    let list_result = storage.list_prefix(&data_prefix).await.expect("Failed to list");
+    let list_result = storage
+        .list_prefix(&data_prefix)
+        .await
+        .expect("Failed to list");
     assert_eq!(
         list_result.len(),
         2,
@@ -256,7 +262,10 @@ async fn test_minio_generate_synthetic_table() {
     assert!(
         metadata_list.len() >= 3,
         "Expected at least 3 metadata files, found: {:?}",
-        metadata_list.iter().map(|o| o.location.to_string()).collect::<Vec<_>>()
+        metadata_list
+            .iter()
+            .map(|o| o.location.to_string())
+            .collect::<Vec<_>>()
     );
 
     println!("Generated table successfully:");
@@ -356,8 +365,15 @@ async fn test_minio_generate_all_templates() {
         );
 
         let result = result.unwrap();
-        assert_eq!(result.total_rows, 500, "Template {} has wrong row count", name);
-        println!("  Generated {} template: {} rows, {} bytes", name, result.total_rows, result.total_bytes);
+        assert_eq!(
+            result.total_rows, 500,
+            "Template {} has wrong row count",
+            name
+        );
+        println!(
+            "  Generated {} template: {} rows, {} bytes",
+            name, result.total_rows, result.total_bytes
+        );
 
         // Cleanup
         let storage = create_object_store(&table_path).await.unwrap();
@@ -402,8 +418,8 @@ async fn test_minio_inspect_generated_table() {
         .await
         .expect("Failed to read metadata");
 
-    let metadata: serde_json::Value = serde_json::from_slice(&metadata_bytes)
-        .expect("Failed to parse metadata JSON");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&metadata_bytes).expect("Failed to parse metadata JSON");
 
     // Verify metadata structure
     assert_eq!(metadata["format-version"], 2);
@@ -446,7 +462,10 @@ async fn test_minio_multiple_appends() {
         .await
         .expect("Failed to generate first batch");
 
-    println!("First batch: {} rows, snapshot {}", result1.total_rows, result1.snapshot_id);
+    println!(
+        "First batch: {} rows, snapshot {}",
+        result1.total_rows, result1.snapshot_id
+    );
 
     // Note: GenerateOperation creates a new table, not appends to existing
     // This test verifies that we can create tables with different seeds
@@ -466,7 +485,10 @@ async fn test_minio_multiple_appends() {
         .await
         .expect("Failed to generate second batch");
 
-    println!("Second batch: {} rows, snapshot {}", result2.total_rows, result2.snapshot_id);
+    println!(
+        "Second batch: {} rows, snapshot {}",
+        result2.total_rows, result2.snapshot_id
+    );
 
     // Different seeds should produce different data
     assert_ne!(

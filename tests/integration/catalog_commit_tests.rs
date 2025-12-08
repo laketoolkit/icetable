@@ -11,9 +11,18 @@ use icetable::utils::credentials::CredentialSource;
 #[test]
 fn test_committer_direct_mode() {
     let committer = TableCommitter::direct();
-    assert!(!committer.uses_catalog(), "Direct committer should not use catalog");
-    assert!(committer.table_ident().is_none(), "Direct committer should have no table ident");
-    assert!(committer.catalog_config().is_none(), "Direct committer should have no config");
+    assert!(
+        !committer.uses_catalog(),
+        "Direct committer should not use catalog"
+    );
+    assert!(
+        committer.table_ident().is_none(),
+        "Direct committer should have no table ident"
+    );
+    assert!(
+        committer.catalog_config().is_none(),
+        "Direct committer should have no config"
+    );
 }
 
 /// Test that TableCommitter can be created for catalog mode
@@ -27,9 +36,18 @@ fn test_committer_catalog_mode() {
         "orders".to_string(),
     );
 
-    assert!(committer.uses_catalog(), "Catalog committer should use catalog");
-    assert!(committer.table_ident().is_some(), "Catalog committer should have table ident");
-    assert!(committer.catalog_config().is_some(), "Catalog committer should have config");
+    assert!(
+        committer.uses_catalog(),
+        "Catalog committer should use catalog"
+    );
+    assert!(
+        committer.table_ident().is_some(),
+        "Catalog committer should have table ident"
+    );
+    assert!(
+        committer.catalog_config().is_some(),
+        "Catalog committer should have config"
+    );
 
     let ident = committer.table_ident().unwrap();
     assert_eq!(ident.name(), "orders");
@@ -42,7 +60,11 @@ fn test_committer_multi_level_namespace() {
 
     let committer = TableCommitter::with_catalog(
         config,
-        vec!["prod".to_string(), "analytics".to_string(), "data".to_string()],
+        vec![
+            "prod".to_string(),
+            "analytics".to_string(),
+            "data".to_string(),
+        ],
         "events".to_string(),
     );
 
@@ -58,7 +80,10 @@ fn test_catalog_config_with_credential() {
         .with_credential(CredentialSource::Inline("user:password".to_string()));
 
     assert_eq!(config.uri, "http://localhost:19120/api/v2");
-    assert_eq!(config.credential, Some(CredentialSource::Inline("user:password".to_string())));
+    assert_eq!(
+        config.credential,
+        Some(CredentialSource::Inline("user:password".to_string()))
+    );
 }
 
 /// Test catalog config with bearer token
@@ -78,11 +103,8 @@ fn test_catalog_config_with_bearer_token() {
 fn test_committer_single_level_namespace() {
     let config = CatalogConfig::rest("http://localhost:19120/api/v2");
 
-    let committer = TableCommitter::with_catalog(
-        config,
-        vec!["default".to_string()],
-        "my_table".to_string(),
-    );
+    let committer =
+        TableCommitter::with_catalog(config, vec!["default".to_string()], "my_table".to_string());
 
     let ident = committer.table_ident().unwrap();
     assert_eq!(ident.name(), "my_table");

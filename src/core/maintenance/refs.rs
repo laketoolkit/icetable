@@ -11,7 +11,7 @@ use iceberg::spec::{SnapshotReference, SnapshotRetention};
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{create_object_store, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::error::{Error, Result};
 
 /// Result of a reference operation
@@ -343,7 +343,14 @@ impl RefService {
         // Use committer if available (catalog mode)
         let new_version = if let Some(ref committer) = self.committer {
             committer
-                .commit_rename_ref(table_path, &metadata, old_name, new_name, new_ref, current_version)
+                .commit_rename_ref(
+                    table_path,
+                    &metadata,
+                    old_name,
+                    new_name,
+                    new_ref,
+                    current_version,
+                )
                 .await?
         } else {
             // Direct mode: build and write new metadata
@@ -406,13 +413,22 @@ impl RefService {
         // Create new tag ref with default retention
         let new_ref = SnapshotReference {
             snapshot_id,
-            retention: SnapshotRetention::Tag { max_ref_age_ms: None },
+            retention: SnapshotRetention::Tag {
+                max_ref_age_ms: None,
+            },
         };
 
         // Use committer if available (catalog mode)
         let new_version = if let Some(ref committer) = self.committer {
             committer
-                .commit_rename_ref(table_path, &metadata, old_name, new_name, new_ref, current_version)
+                .commit_rename_ref(
+                    table_path,
+                    &metadata,
+                    old_name,
+                    new_name,
+                    new_ref,
+                    current_version,
+                )
                 .await?
         } else {
             // Direct mode: build and write new metadata
@@ -536,7 +552,10 @@ impl RefService {
         metadata: &iceberg::spec::TableMetadata,
         _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
-        use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
+        use crate::core::utils::{
+            extract_version_from_path, find_latest_metadata, metadata_location_filename,
+            new_metadata_location, next_metadata_location,
+        };
 
         let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
@@ -549,7 +568,11 @@ impl RefService {
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
         let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+        let new_metadata_path = format!(
+            "{}/{}",
+            metadata_dir,
+            metadata_location_filename(&next_location)
+        );
 
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;

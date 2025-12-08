@@ -11,7 +11,7 @@ use futures::stream::{self, StreamExt};
 use iceberg::spec::ManifestList;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
-use crate::core::storage::{create_object_store, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::core::utils::{format_bytes, sizes};
 use crate::error::{Error, Result};
 
@@ -235,8 +235,14 @@ impl VacuumService {
                 format_bytes(result.analysis.orphan_bytes),
             );
         } else {
-            details.insert("deleted_files".to_string(), result.deleted_count.to_string());
-            details.insert("freed_bytes".to_string(), format_bytes(result.deleted_bytes));
+            details.insert(
+                "deleted_files".to_string(),
+                result.deleted_count.to_string(),
+            );
+            details.insert(
+                "freed_bytes".to_string(),
+                format_bytes(result.deleted_bytes),
+            );
             if !result.errors.is_empty() {
                 details.insert("errors".to_string(), result.errors.len().to_string());
             }

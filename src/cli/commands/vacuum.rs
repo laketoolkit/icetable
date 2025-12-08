@@ -8,9 +8,9 @@ use std::io;
 
 use super::common::resolve_table_path;
 use crate::cli::parser::VacuumArgs;
+use crate::core::CatalogConfig;
 use crate::core::format_bytes;
 use crate::core::maintenance::{VacuumConfig, VacuumResult, VacuumService};
-use crate::core::CatalogConfig;
 use crate::error::Result;
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
@@ -146,7 +146,10 @@ impl VacuumCommand {
                     .yellow()
                     .bold()
             );
-            println!("  Files newer than {} hours will be kept", args.retention_hours);
+            println!(
+                "  Files newer than {} hours will be kept",
+                args.retention_hours
+            );
             println!("  Add --force if you're sure this is safe");
             println!();
         }
@@ -227,7 +230,9 @@ impl VacuumCommand {
                 println!(
                     "  {} {} more files...",
                     "...and".dimmed(),
-                    (analysis.orphan_files.len() - show_count).to_string().dimmed()
+                    (analysis.orphan_files.len() - show_count)
+                        .to_string()
+                        .dimmed()
                 );
             }
 

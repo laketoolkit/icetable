@@ -5,8 +5,8 @@
 use colored::Colorize;
 
 use crate::cli::parser::DiffArgs;
-use crate::core::metadata::IcebergMetadataService;
 use crate::core::TableContext;
+use crate::core::metadata::IcebergMetadataService;
 use crate::error::{Error, Result};
 
 /// Handler for diff command
@@ -40,9 +40,11 @@ impl DiffCommand {
             let ref_snapshot = metadata
                 .snapshot_by_id(ref_id)
                 .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
-            ref_snapshot
-                .parent_snapshot_id()
-                .ok_or_else(|| Error::General("No parent snapshot. Use --base to specify a base reference.".to_string()))?
+            ref_snapshot.parent_snapshot_id().ok_or_else(|| {
+                Error::General(
+                    "No parent snapshot. Use --base to specify a base reference.".to_string(),
+                )
+            })?
         };
 
         if ref_id == base_id {
@@ -54,7 +56,8 @@ impl DiffCommand {
                 });
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
+                    serde_json::to_string_pretty(&json)
+                        .map_err(|e| Error::General(e.to_string()))?
                 );
             } else {
                 println!("{}", "References point to the same snapshot".yellow());

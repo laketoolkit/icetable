@@ -20,10 +20,8 @@ use object_store::ObjectStore;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
-use crate::core::storage::{Storage, create_object_store, ObjectStoreExt};
-use crate::core::utils::{
-    extract_version_from_path, find_latest_metadata, iceberg_to_arrow_type,
-};
+use crate::core::storage::{ObjectStoreExt, Storage, create_object_store};
+use crate::core::utils::{extract_version_from_path, find_latest_metadata, iceberg_to_arrow_type};
 use crate::error::{Error, Result};
 
 use super::iceberg_operations;
@@ -210,13 +208,14 @@ impl IcebergMetadataService {
 
         // Always include "main" pointing to current snapshot if not already present
         if !refs.iter().any(|r| r.name == "main")
-            && let Some(current_id) = json.get("current-snapshot-id").and_then(|v| v.as_i64()) {
-                refs.push(RefInfo {
-                    name: "main".to_string(),
-                    snapshot_id: current_id,
-                    ref_type: "branch".to_string(),
-                });
-            }
+            && let Some(current_id) = json.get("current-snapshot-id").and_then(|v| v.as_i64())
+        {
+            refs.push(RefInfo {
+                name: "main".to_string(),
+                snapshot_id: current_id,
+                ref_type: "branch".to_string(),
+            });
+        }
 
         Ok(refs)
     }
@@ -238,7 +237,8 @@ impl IcebergMetadataService {
             self.get_branch_snapshot_id(branch_name).await
         } else {
             let (metadata, _) = self.load_metadata().await?;
-            metadata.current_snapshot_id()
+            metadata
+                .current_snapshot_id()
                 .ok_or_else(|| Error::General("No current snapshot".to_string()))
         }
     }
@@ -246,13 +246,17 @@ impl IcebergMetadataService {
     /// List data files for a specific snapshot (by ID)
     ///
     /// This is the branch-aware version of list_data_files
-    pub async fn list_data_files_for_snapshot(&self, snapshot_id: i64) -> Result<Vec<DataFileInfo>> {
+    pub async fn list_data_files_for_snapshot(
+        &self,
+        snapshot_id: i64,
+    ) -> Result<Vec<DataFileInfo>> {
         use std::collections::HashSet;
 
         let (metadata, _) = self.load_metadata().await?;
 
         // Find the specific snapshot
-        let snapshot = metadata.snapshots()
+        let snapshot = metadata
+            .snapshots()
             .find(|s| s.snapshot_id() == snapshot_id)
             .ok_or_else(|| Error::General(format!("Snapshot {} not found", snapshot_id)))?;
 
@@ -332,7 +336,10 @@ impl IcebergMetadataService {
     }
 
     /// List data files for a branch (or current if None)
-    pub async fn list_data_files_for_branch(&self, branch: Option<&str>) -> Result<Vec<DataFileInfo>> {
+    pub async fn list_data_files_for_branch(
+        &self,
+        branch: Option<&str>,
+    ) -> Result<Vec<DataFileInfo>> {
         let snapshot_id = self.resolve_branch_snapshot_id(branch).await?;
         self.list_data_files_for_snapshot(snapshot_id).await
     }
@@ -440,7 +447,9 @@ impl MetadataService for IcebergMetadataService {
                 .await;
 
             for manifest_opt in results {
-                let Some(manifest) = manifest_opt else { continue };
+                let Some(manifest) = manifest_opt else {
+                    continue;
+                };
 
                 for entry in manifest.entries() {
                     let path = entry.data_file().file_path().to_string();
@@ -638,8 +647,12 @@ impl MetadataService for IcebergMetadataService {
             } else {
                 // Direct mode through committer (fallback)
                 let current_metadata_path = self.current_metadata_path().await?;
-                let new_metadata =
-                    writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
+                let new_metadata = writer.update_metadata_for_branch(
+                    (*metadata).clone(),
+                    snapshot,
+                    &current_metadata_path,
+                    target_branch,
+                )?;
                 writer
                     .write_metadata_file(&new_metadata, &current_metadata_path)
                     .await?;
@@ -647,8 +660,12 @@ impl MetadataService for IcebergMetadataService {
         } else {
             // No committer: direct write to storage
             let current_metadata_path = self.current_metadata_path().await?;
-            let new_metadata =
-                writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
+            let new_metadata = writer.update_metadata_for_branch(
+                (*metadata).clone(),
+                snapshot,
+                &current_metadata_path,
+                target_branch,
+            )?;
             writer
                 .write_metadata_file(&new_metadata, &current_metadata_path)
                 .await?;
@@ -777,7 +794,9 @@ impl MetadataService for IcebergMetadataService {
 
             for manifest_opt in results {
                 processed += 1;
-                let Some(manifest) = manifest_opt else { continue };
+                let Some(manifest) = manifest_opt else {
+                    continue;
+                };
 
                 for entry in manifest.entries() {
                     // For orphan detection: if a file appears as Added/Existing in ANY manifest,

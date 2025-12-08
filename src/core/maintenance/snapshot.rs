@@ -14,7 +14,7 @@ use iceberg::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMeta
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{create_object_store, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::core::utils::snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
 };
@@ -202,7 +202,9 @@ impl SnapshotService {
         let current_id = if target_branch == "main" {
             metadata.current_snapshot_id()
         } else {
-            metadata.snapshot_for_ref(target_branch).map(|s| s.snapshot_id())
+            metadata
+                .snapshot_for_ref(target_branch)
+                .map(|s| s.snapshot_id())
         };
 
         let to_expire = self.determine_snapshots_to_expire(
@@ -304,7 +306,13 @@ impl SnapshotService {
         let new_version = if let Some(ref committer) = self.committer {
             // Use catalog committer for multi-writer safety
             committer
-                .commit_set_snapshot_ref(table_path, &metadata, MAIN_BRANCH, target_id, current_version)
+                .commit_set_snapshot_ref(
+                    table_path,
+                    &metadata,
+                    MAIN_BRANCH,
+                    target_id,
+                    current_version,
+                )
                 .await?
         } else {
             // Direct write to storage (single-writer mode)
@@ -374,10 +382,7 @@ impl SnapshotService {
 
         // Create backup with timestamp
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let backup_file = metadata_dir.join(format!(
-            "{}.{}.backup",
-            metadata_filename, timestamp
-        ));
+        let backup_file = metadata_dir.join(format!("{}.{}.backup", metadata_filename, timestamp));
 
         std::fs::copy(&metadata_file, &backup_file)
             .map_err(|e| Error::General(format!("Failed to create backup: {}", e)))?;
@@ -504,18 +509,14 @@ impl SnapshotService {
         match (id, as_of, branch, tag) {
             (Some(id), _, _, _) => Ok(id),
             (None, Some(timestamp), _, _) => self.find_snapshot_at_timestamp(metadata, &timestamp),
-            (None, None, Some(branch_name), _) => {
-                metadata
-                    .snapshot_for_ref(&branch_name)
-                    .map(|s| s.snapshot_id())
-                    .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name)))
-            }
-            (None, None, None, Some(tag_name)) => {
-                metadata
-                    .snapshot_for_ref(&tag_name)
-                    .map(|s| s.snapshot_id())
-                    .ok_or_else(|| Error::General(format!("Tag '{}' not found", tag_name)))
-            }
+            (None, None, Some(branch_name), _) => metadata
+                .snapshot_for_ref(&branch_name)
+                .map(|s| s.snapshot_id())
+                .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name))),
+            (None, None, None, Some(tag_name)) => metadata
+                .snapshot_for_ref(&tag_name)
+                .map(|s| s.snapshot_id())
+                .ok_or_else(|| Error::General(format!("Tag '{}' not found", tag_name))),
             (None, None, None, None) => Err(Error::General(
                 "Must specify --id, --as-of, --branch, or --tag".to_string(),
             )),
@@ -529,7 +530,10 @@ impl SnapshotService {
         metadata: &TableMetadata,
         _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
-        use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
+        use crate::core::utils::{
+            extract_version_from_path, find_latest_metadata, metadata_location_filename,
+            new_metadata_location, next_metadata_location,
+        };
 
         let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
@@ -542,7 +546,11 @@ impl SnapshotService {
             .unwrap_or_else(|_| new_metadata_location(table_path));
 
         let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-        let new_metadata_path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+        let new_metadata_path = format!(
+            "{}/{}",
+            metadata_dir,
+            metadata_location_filename(&next_location)
+        );
 
         let new_metadata_bytes = serde_json::to_vec_pretty(metadata)
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;

@@ -1,9 +1,9 @@
 //! CLI command implementations
 
-pub mod common;
 pub mod analyze;
 pub mod branch;
 pub mod catalog;
+pub mod common;
 pub mod config;
 pub mod diff;
 pub mod doctor;

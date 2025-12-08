@@ -66,17 +66,16 @@ pub fn extract_layout_info(
 
     if current_snapshot_id != -1
         && let Some(snapshots) = metadata.get("snapshots").and_then(|s| s.as_array())
-        && let Some(snapshot) = snapshots.iter().find(|s| {
-            s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_snapshot_id)
-        })
+        && let Some(snapshot) = snapshots
+            .iter()
+            .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_snapshot_id))
         && let Some(summary) = snapshot.get("summary").and_then(|s| s.as_object())
     {
         num_files = parse_summary_value::<usize>(summary.get("total-data-files")).unwrap_or(0);
         total_size = parse_summary_value::<u64>(summary.get("total-files-size")).unwrap_or(0);
 
         // Extract delta info (files added/deleted in last snapshot)
-        let added_files =
-            parse_summary_value::<i64>(summary.get("added-data-files")).unwrap_or(0);
+        let added_files = parse_summary_value::<i64>(summary.get("added-data-files")).unwrap_or(0);
         let deleted_files =
             parse_summary_value::<i64>(summary.get("deleted-data-files")).unwrap_or(0);
 
@@ -193,9 +192,9 @@ pub async fn extract_statistics(
 
     let snapshots = metadata.get("snapshots").and_then(|s| s.as_array());
     let snapshot = snapshots.and_then(|snaps| {
-        snaps.iter().find(|s| {
-            s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_snapshot_id)
-        })
+        snaps
+            .iter()
+            .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_snapshot_id))
     });
 
     if let Some(snapshot) = snapshot
@@ -217,7 +216,9 @@ pub async fn extract_statistics(
             let manifest_list_path = normalize_path(manifest_list, table_location);
 
             // Try to read manifest stats, but don't fail if it doesn't work
-            let _ = super::manifest::read_manifest_stats(storage, table_location, &manifest_list_path).await;
+            let _ =
+                super::manifest::read_manifest_stats(storage, table_location, &manifest_list_path)
+                    .await;
         }
 
         return Ok(StatisticsInfo {

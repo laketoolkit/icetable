@@ -142,17 +142,19 @@ impl CatalogClient {
 
     /// List namespaces in the catalog
     pub async fn list_namespaces(&self, parent: Option<&[String]>) -> Result<Vec<Vec<String>>> {
-        let client = self.rest_client.as_ref().ok_or_else(|| {
-            Error::General("REST catalog not configured".to_string())
-        })?;
+        let client = self
+            .rest_client
+            .as_ref()
+            .ok_or_else(|| Error::General("REST catalog not configured".to_string()))?;
         client.list_namespaces(parent).await
     }
 
     /// List tables in a namespace
     pub async fn list_tables(&self, namespace: &[String]) -> Result<Vec<String>> {
-        let client = self.rest_client.as_ref().ok_or_else(|| {
-            Error::General("REST catalog not configured".to_string())
-        })?;
+        let client = self
+            .rest_client
+            .as_ref()
+            .ok_or_else(|| Error::General("REST catalog not configured".to_string()))?;
         client.list_tables(namespace).await
     }
 }

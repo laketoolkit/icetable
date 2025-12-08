@@ -686,10 +686,12 @@ impl FormatHandler for IcebergHandler {
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
             .map_err(|e| Error::General(format!("Failed to create parquet writer: {}", e)))?;
         for batch in &data {
-            writer.write(batch)
+            writer
+                .write(batch)
                 .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
         }
-        writer.close()
+        writer
+            .close()
             .map_err(|e| Error::General(format!("Failed to close parquet writer: {}", e)))?;
 
         let total_rows: u64 = data.iter().map(|b| b.num_rows() as u64).sum();
@@ -699,11 +701,8 @@ impl FormatHandler for IcebergHandler {
 
         // Use IcebergSnapshotWriter for manifest/snapshot/metadata operations
         let file_io = Self::create_file_io(&table_path)?;
-        let snapshot_writer = IcebergSnapshotWriter::new(
-            table_path.clone(),
-            file_io,
-            self.storage.clone(),
-        );
+        let snapshot_writer =
+            IcebergSnapshotWriter::new(table_path.clone(), file_io, self.storage.clone());
 
         // Create DataFileInfo
         let data_file_info = DataFileInfo {
@@ -727,10 +726,22 @@ impl FormatHandler for IcebergHandler {
 
         // Write manifest and manifest list
         let manifest_file = snapshot_writer
-            .write_manifest(&[data_file], snapshot_id, sequence_number, &old_metadata, timestamp_nanos)
+            .write_manifest(
+                &[data_file],
+                snapshot_id,
+                sequence_number,
+                &old_metadata,
+                timestamp_nanos,
+            )
             .await?;
         let manifest_list_path = snapshot_writer
-            .write_manifest_list(manifest_file, snapshot_id, parent_snapshot_id, sequence_number, timestamp_nanos)
+            .write_manifest_list(
+                manifest_file,
+                snapshot_id,
+                parent_snapshot_id,
+                sequence_number,
+                timestamp_nanos,
+            )
             .await?;
 
         // Build summary
@@ -763,7 +774,9 @@ impl FormatHandler for IcebergHandler {
             snapshot,
             &current_metadata_path,
         )?;
-        snapshot_writer.write_metadata_file(&new_metadata, &current_metadata_path).await?;
+        snapshot_writer
+            .write_metadata_file(&new_metadata, &current_metadata_path)
+            .await?;
 
         Ok(())
     }

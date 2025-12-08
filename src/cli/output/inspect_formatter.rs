@@ -323,7 +323,9 @@ impl InspectionFormatter {
                 let column = batch.column(col_idx);
                 let cell = match column.data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 => {
-                        if let Some(array) = column.as_any().downcast_ref::<arrow::array::StringArray>() {
+                        if let Some(array) =
+                            column.as_any().downcast_ref::<arrow::array::StringArray>()
+                        {
                             if array.is_null(row_idx) {
                                 Cell::new("NULL").fg(Color::Red)
                             } else {
@@ -338,29 +340,44 @@ impl InspectionFormatter {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<int>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<int>".to_string()),
+                            )
                         }
                     }
                     DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<uint>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<uint>".to_string()),
+                            )
                         }
                     }
                     DataType::Float32 | DataType::Float64 => {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<float>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<float>".to_string()),
+                            )
                         }
                     }
                     DataType::Boolean => {
-                        if let Some(array) = column.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                        if let Some(array) =
+                            column.as_any().downcast_ref::<arrow::array::BooleanArray>()
+                        {
                             if array.is_null(row_idx) {
                                 Cell::new("NULL").fg(Color::Red)
                             } else {
-                                Cell::new(if array.value(row_idx) { "true" } else { "false" })
+                                Cell::new(if array.value(row_idx) {
+                                    "true"
+                                } else {
+                                    "false"
+                                })
                             }
                         } else {
                             Cell::new("<bool>")
@@ -370,7 +387,10 @@ impl InspectionFormatter {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<timestamp>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<timestamp>".to_string()),
+                            )
                         }
                     }
                     _ => Cell::new(format!("{:?}", column.data_type())),

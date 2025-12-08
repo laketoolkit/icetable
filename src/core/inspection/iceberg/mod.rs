@@ -324,10 +324,7 @@ mod parse_summary_value_tests {
             .iter()
             .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id))
             .unwrap();
-        let summary = snapshot
-            .get("summary")
-            .and_then(|s| s.as_object())
-            .unwrap();
+        let summary = snapshot.get("summary").and_then(|s| s.as_object()).unwrap();
 
         let num_files: usize = parse_summary_value(summary.get("total-data-files")).unwrap_or(0);
         let total_size: u64 = parse_summary_value(summary.get("total-files-size")).unwrap_or(0);
@@ -365,10 +362,7 @@ mod parse_summary_value_tests {
             .iter()
             .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id))
             .unwrap();
-        let summary = snapshot
-            .get("summary")
-            .and_then(|s| s.as_object())
-            .unwrap();
+        let summary = snapshot.get("summary").and_then(|s| s.as_object()).unwrap();
 
         let num_files: usize = parse_summary_value(summary.get("total-data-files")).unwrap_or(0);
         let total_size: u64 = parse_summary_value(summary.get("total-files-size")).unwrap_or(0);

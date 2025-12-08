@@ -9,12 +9,15 @@ pub mod parquet;
 pub mod snapshot;
 
 pub use format_detection::{
-    TableFormat, detect_table_format, detect_table_format_async, detect_format,
+    TableFormat, detect_format, detect_table_format, detect_table_format_async,
     detect_table_format_with_storage,
 };
 pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
 pub use iceberg::iceberg_to_arrow_type;
-pub use iceberg::{extract_version_from_path, find_latest_metadata, metadata_location_filename, new_metadata_location, next_metadata_location};
+pub use iceberg::{
+    extract_version_from_path, find_latest_metadata, metadata_location_filename,
+    new_metadata_location, next_metadata_location,
+};
 pub use parquet::read_parquet_record_count;
 pub use snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
@@ -65,28 +68,33 @@ pub fn parse_bytes(s: &str) -> Result<u64, String> {
 
     // Parse with unit suffix
     let (num_str, multiplier) = if s.ends_with("TB") {
-        (&s[..s.len()-2], 1024u64 * 1024 * 1024 * 1024)
+        (&s[..s.len() - 2], 1024u64 * 1024 * 1024 * 1024)
     } else if s.ends_with("GB") {
-        (&s[..s.len()-2], 1024u64 * 1024 * 1024)
+        (&s[..s.len() - 2], 1024u64 * 1024 * 1024)
     } else if s.ends_with("MB") {
-        (&s[..s.len()-2], 1024u64 * 1024)
+        (&s[..s.len() - 2], 1024u64 * 1024)
     } else if s.ends_with("KB") {
-        (&s[..s.len()-2], 1024u64)
+        (&s[..s.len() - 2], 1024u64)
     } else if s.ends_with('T') {
-        (&s[..s.len()-1], 1024u64 * 1024 * 1024 * 1024)
+        (&s[..s.len() - 1], 1024u64 * 1024 * 1024 * 1024)
     } else if s.ends_with('G') {
-        (&s[..s.len()-1], 1024u64 * 1024 * 1024)
+        (&s[..s.len() - 1], 1024u64 * 1024 * 1024)
     } else if s.ends_with('M') {
-        (&s[..s.len()-1], 1024u64 * 1024)
+        (&s[..s.len() - 1], 1024u64 * 1024)
     } else if s.ends_with('K') {
-        (&s[..s.len()-1], 1024u64)
+        (&s[..s.len() - 1], 1024u64)
     } else if s.ends_with('B') {
-        (&s[..s.len()-1], 1u64)
+        (&s[..s.len() - 1], 1u64)
     } else {
-        return Err(format!("Invalid size format: '{}'. Use formats like '10GB', '500MB', '1TB'", s));
+        return Err(format!(
+            "Invalid size format: '{}'. Use formats like '10GB', '500MB', '1TB'",
+            s
+        ));
     };
 
-    let num: f64 = num_str.trim().parse()
+    let num: f64 = num_str
+        .trim()
+        .parse()
         .map_err(|_| format!("Invalid number in size: '{}'", num_str))?;
 
     Ok((num * multiplier as f64) as u64)

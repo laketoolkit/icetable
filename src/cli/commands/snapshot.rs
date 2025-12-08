@@ -5,15 +5,15 @@
 
 use colored::Colorize;
 
-use super::common::{resolve_table, TableResolution};
+use super::common::{TableResolution, resolve_table};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
+use crate::core::TableFormat;
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::{Storage, create_object_store};
 use crate::core::utils::detect_table_format_with_storage;
 use crate::core::{CatalogConfig, TableCommitter};
-use crate::core::TableFormat;
 use crate::error::{Error, Result};
 
 /// Configuration for expire snapshots operation
@@ -68,7 +68,9 @@ impl SnapshotCommand {
 
         match format {
             TableFormat::Delta => Self::execute_delta(args, &path, storage).await,
-            TableFormat::Iceberg => Self::execute_iceberg(args, &path, catalog_config, &resolution).await,
+            TableFormat::Iceberg => {
+                Self::execute_iceberg(args, &path, catalog_config, &resolution).await
+            }
             TableFormat::Unknown => Err(Error::General(format!(
                 "Path '{}' is not a Delta Lake or Iceberg table",
                 path
@@ -165,9 +167,18 @@ impl SnapshotCommand {
     ) -> Option<TableCommitter> {
         // Only create committer if we have catalog config AND the table came from a catalog
         match (catalog_config, resolution) {
-            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
+            (
+                Some(config),
+                TableResolution::CatalogTable {
+                    namespace, name, ..
+                },
+            ) => {
                 // Use the actual namespace and name from catalog resolution
-                Some(TableCommitter::with_catalog(config.clone(), namespace.clone(), name.clone()))
+                Some(TableCommitter::with_catalog(
+                    config.clone(),
+                    namespace.clone(),
+                    name.clone(),
+                ))
             }
             _ => {
                 // No catalog or table is from direct path - use direct mode (no committer)
@@ -265,7 +276,9 @@ impl SnapshotCommand {
                 b.cyan()
             );
         }
-        let config = SnapshotConfig { dry_run: cfg.dry_run };
+        let config = SnapshotConfig {
+            dry_run: cfg.dry_run,
+        };
         let snapshot_service = if let Some(c) = cfg.committer {
             SnapshotService::with_committer(config, c)
         } else {
@@ -288,7 +301,13 @@ impl SnapshotCommand {
         }
 
         let result = snapshot_service
-            .expire_snapshots(&metadata_service, cfg.path, cfg.older_than, cfg.retain_last, cfg.ids)
+            .expire_snapshots(
+                &metadata_service,
+                cfg.path,
+                cfg.older_than,
+                cfg.retain_last,
+                cfg.ids,
+            )
             .await?;
 
         if result.expired_count == 0 {
@@ -355,7 +374,9 @@ impl SnapshotCommand {
 
     async fn iceberg_set(cfg: SetSnapshotConfig<'_>) -> Result<()> {
         let metadata_service = IcebergMetadataService::new_async(cfg.path.to_string()).await?;
-        let config = SnapshotConfig { dry_run: cfg.dry_run };
+        let config = SnapshotConfig {
+            dry_run: cfg.dry_run,
+        };
         let snapshot_service = if let Some(c) = cfg.committer {
             SnapshotService::with_committer(config, c)
         } else {
@@ -363,7 +384,14 @@ impl SnapshotCommand {
         };
 
         let result = snapshot_service
-            .set_current_snapshot(&metadata_service, cfg.path, cfg.id, cfg.as_of, cfg.branch, cfg.tag)
+            .set_current_snapshot(
+                &metadata_service,
+                cfg.path,
+                cfg.id,
+                cfg.as_of,
+                cfg.branch,
+                cfg.tag,
+            )
             .await?;
 
         if cfg.output == "json" {
@@ -407,9 +435,13 @@ impl SnapshotCommand {
         let (metadata, _) = metadata_service.load_metadata().await?;
 
         // Get starting snapshot
-        let start_id = snapshot_id.or_else(|| metadata.current_snapshot_id()).ok_or_else(|| {
-            Error::General("No snapshot specified and table has no current snapshot".to_string())
-        })?;
+        let start_id = snapshot_id
+            .or_else(|| metadata.current_snapshot_id())
+            .ok_or_else(|| {
+                Error::General(
+                    "No snapshot specified and table has no current snapshot".to_string(),
+                )
+            })?;
 
         // Build parent map for quick lookup
         let parent_map: HashMap<i64, Option<i64>> = metadata
@@ -418,10 +450,8 @@ impl SnapshotCommand {
             .collect();
 
         // Build snapshot info map
-        let snapshot_map: HashMap<i64, _> = metadata
-            .snapshots()
-            .map(|s| (s.snapshot_id(), s))
-            .collect();
+        let snapshot_map: HashMap<i64, _> =
+            metadata.snapshots().map(|s| (s.snapshot_id(), s)).collect();
 
         // Walk the full lineage first to get total count and root
         let mut full_lineage: Vec<(i64, Option<i64>, i64, String)> = Vec::new();
@@ -474,7 +504,7 @@ impl SnapshotCommand {
                 serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
             );
         } else {
-            use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
+            use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
 
             println!("{} snapshot lineage at {}", "Showing".green(), path);
             println!();
@@ -491,7 +521,11 @@ impl SnapshotCommand {
             ]);
 
             // Show items up to limit
-            let display_count = if is_truncated { max_items - 1 } else { total_count };
+            let display_count = if is_truncated {
+                max_items - 1
+            } else {
+                total_count
+            };
 
             for (id, parent, ts, op) in full_lineage.iter().take(display_count) {
                 let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
@@ -522,7 +556,11 @@ impl SnapshotCommand {
             // Show truncation indicator and root outside the table
             if is_truncated {
                 let skipped = total_count - max_items;
-                println!("         {} ({})", "...".dimmed(), format!("{} more", skipped).dimmed());
+                println!(
+                    "         {} ({})",
+                    "...".dimmed(),
+                    format!("{} more", skipped).dimmed()
+                );
 
                 // Show root in a separate mini-table
                 if let Some((id, _, ts, op)) = full_lineage.last() {
@@ -534,9 +572,12 @@ impl SnapshotCommand {
                     root_table.load_preset(UTF8_FULL);
                     root_table.set_content_arrangement(ContentArrangement::Dynamic);
                     root_table.set_header(vec![
-                        Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
-                        Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
-                        Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
+                        Cell::new("Snapshot".cyan().to_string())
+                            .set_alignment(CellAlignment::Center),
+                        Cell::new("Operation".cyan().to_string())
+                            .set_alignment(CellAlignment::Center),
+                        Cell::new("Timestamp".cyan().to_string())
+                            .set_alignment(CellAlignment::Center),
                         Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
                     ]);
                     root_table.add_row(vec![

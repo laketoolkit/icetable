@@ -6,11 +6,11 @@ use std::path::Path;
 
 use super::common::resolve_table_path;
 use crate::cli::parser::ValidateArgs;
+use crate::core::CatalogConfig;
 use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::create_object_store;
 use crate::core::validation::{Severity, ValidationEngine};
-use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
 use crate::utils::progress::ProgressTracker;
 
@@ -78,8 +78,9 @@ impl ValidateCommand {
                 .create_handler(Path::new(&table_path), storage2)
                 .await?;
 
-            let rules_path_str = rules_path.to_str()
-                .ok_or_else(|| crate::error::Error::General("Rules path contains invalid UTF-8".to_string()))?;
+            let rules_path_str = rules_path.to_str().ok_or_else(|| {
+                crate::error::Error::General("Rules path contains invalid UTF-8".to_string())
+            })?;
             let rules = ValidationEngine::load_rules(rules_path_str).await?;
             let engine = ValidationEngine::new(handler2.into(), rules);
             let rules_result = engine.execute().await?;

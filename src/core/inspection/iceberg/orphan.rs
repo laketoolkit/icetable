@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::manifest::normalize_path;
 use crate::core::inspection::traits::{OrphanFileEntry, OrphanFilesInfo};
 use crate::core::metadata::{IcebergMetadataService, MetadataService};
-use crate::core::storage::{Storage, ObjectStoreExt};
+use crate::core::storage::{ObjectStoreExt, Storage};
 use crate::error::Result;
 
 /// Detect orphan files - files in data/ not tracked in metadata

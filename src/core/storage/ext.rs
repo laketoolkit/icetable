@@ -43,9 +43,7 @@ pub trait ObjectStoreExt: ObjectStore {
 
     /// Get a range of bytes from an object
     async fn get_range_bytes(&self, path: &Path, start: u64, end: u64) -> Result<Bytes> {
-        self.get_range(path, start..end)
-            .await
-            .map_err(Error::from)
+        self.get_range(path, start..end).await.map_err(Error::from)
     }
 
     /// List all objects with a given prefix, collecting into a Vec
@@ -77,7 +75,9 @@ pub trait ObjectStoreExt: ObjectStore {
 
     /// Copy an object (string path version)
     async fn copy_str(&self, from: &str, to: &str) -> Result<()> {
-        self.copy(&to_path(from), &to_path(to)).await.map_err(Error::from)
+        self.copy(&to_path(from), &to_path(to))
+            .await
+            .map_err(Error::from)
     }
 }
 

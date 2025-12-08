@@ -118,8 +118,14 @@ mod tests {
 
         assert_eq!(deserialized.catalog_type, CatalogType::Rest);
         assert_eq!(deserialized.uri, "http://nessie:19120/api/v2");
-        assert_eq!(deserialized.warehouse, Some("s3://lakehouse/warehouse".to_string()));
-        assert_eq!(deserialized.properties.get("key"), Some(&"value".to_string()));
+        assert_eq!(
+            deserialized.warehouse,
+            Some("s3://lakehouse/warehouse".to_string())
+        );
+        assert_eq!(
+            deserialized.properties.get("key"),
+            Some(&"value".to_string())
+        );
     }
 
     #[test]
@@ -133,7 +139,10 @@ mod tests {
         assert!(yaml.contains("credential: secret"));
 
         let deserialized: CatalogConfig = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(deserialized.credential, Some(CredentialSource::Inline("secret".to_string())));
+        assert_eq!(
+            deserialized.credential,
+            Some(CredentialSource::Inline("secret".to_string()))
+        );
     }
 
     #[test]
@@ -148,7 +157,10 @@ mod tests {
         assert!(yaml.contains("value: MY_TOKEN"));
 
         let deserialized: CatalogConfig = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(deserialized.credential, Some(CredentialSource::EnvVar("MY_TOKEN".to_string())));
+        assert_eq!(
+            deserialized.credential,
+            Some(CredentialSource::EnvVar("MY_TOKEN".to_string()))
+        );
     }
 
     #[test]

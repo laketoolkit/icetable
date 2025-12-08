@@ -1,7 +1,7 @@
 //! Snapshot command formatting utilities
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
+use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
 use serde_json::Value;
 
 use crate::core::format_bytes;
@@ -45,11 +45,7 @@ impl SnapshotFormatter {
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "-".to_string());
 
-            let operation_str = snap
-                .operation
-                .as_deref()
-                .unwrap_or("-")
-                .to_string();
+            let operation_str = snap.operation.as_deref().unwrap_or("-").to_string();
 
             let status = if snap.is_current {
                 Cell::new("● current".green().to_string())
@@ -68,7 +64,11 @@ impl SnapshotFormatter {
 
         output.push(table.to_string());
         output.push(String::new());
-        output.push(format!("Total: {} snapshots", snapshots.len()).dimmed().to_string());
+        output.push(
+            format!("Total: {} snapshots", snapshots.len())
+                .dimmed()
+                .to_string(),
+        );
         output.join("\n")
     }
 
@@ -147,7 +147,9 @@ impl SnapshotFormatter {
             ));
             output.push(String::new());
             output.push(
-                "Run without --dry-run to apply these changes.".dimmed().to_string()
+                "Run without --dry-run to apply these changes."
+                    .dimmed()
+                    .to_string(),
             );
         } else {
             output.push("Expire complete!".green().bold().to_string());

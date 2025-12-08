@@ -4,7 +4,7 @@
 //! The business logic is delegated to AnalyzeService in core::analysis.
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
+use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
 
 use super::common::resolve_table_path;
 use crate::cli::parser::AnalyzeArgs;
@@ -16,7 +16,7 @@ use crate::core::metadata::IcebergMetadataService;
 use crate::core::utils::format_bytes;
 use crate::core::{CatalogConfig, TableFormat, detect_table_format_async};
 use crate::error::{Error, Result};
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
+use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
 /// Handler for analyze command
 pub struct AnalyzeCommand;
@@ -25,7 +25,7 @@ impl AnalyzeCommand {
     /// Execute analyze command
     pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
-        
+
         // Apply timeout and cancellation from global resource limits
         with_timeout(async {
             with_cancellation(async {
@@ -173,8 +173,7 @@ impl AnalyzeCommand {
         };
         table.add_row(vec![
             Cell::new("Manifests"),
-            Cell::new(format_count(manifest.total_manifests))
-                .set_alignment(CellAlignment::Right),
+            Cell::new(format_count(manifest.total_manifests)).set_alignment(CellAlignment::Right),
             Cell::new("-").set_alignment(CellAlignment::Right),
             Cell::new(manifest_status).set_alignment(CellAlignment::Center),
         ]);
@@ -239,7 +238,10 @@ impl AnalyzeCommand {
                 "Expire {} snapshots older than 7 days",
                 snapshot.snapshots_older_than_7d
             );
-            recommendations.push((detail, "icetable snapshot expire --older-than 7d --dry-run".to_string()));
+            recommendations.push((
+                detail,
+                "icetable snapshot expire --older-than 7d --dry-run".to_string(),
+            ));
         }
 
         // Orphan files recommendation
@@ -254,7 +256,10 @@ impl AnalyzeCommand {
             }
             if orphan.has_missing_files() {
                 let detail = format!("Repair {} missing file references", orphan.missing_count);
-                recommendations.push((detail, "icetable repair --remove-missing --dry-run".to_string()));
+                recommendations.push((
+                    detail,
+                    "icetable repair --remove-missing --dry-run".to_string(),
+                ));
             }
         }
 

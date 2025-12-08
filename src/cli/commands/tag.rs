@@ -4,7 +4,7 @@
 
 use colored::Colorize;
 
-use super::common::{resolve_table, TableResolution};
+use super::common::{TableResolution, resolve_table};
 use crate::cli::parser::{TagArgs, TagCommands};
 use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{RefConfig, RefService};
@@ -29,7 +29,15 @@ impl TagCommand {
                 let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
                 let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
-                Self::create(&ctx, &a.name, a.snapshot_id, a.max_ref_age_ms, &a.output, committer).await
+                Self::create(
+                    &ctx,
+                    &a.name,
+                    a.snapshot_id,
+                    a.max_ref_age_ms,
+                    &a.output,
+                    committer,
+                )
+                .await
             }
             TagCommands::Delete(a) => {
                 let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
@@ -54,13 +62,16 @@ impl TagCommand {
         resolution: &TableResolution,
     ) -> Option<TableCommitter> {
         match (catalog_config, resolution) {
-            (Some(config), TableResolution::CatalogTable { namespace, name, .. }) => {
-                Some(TableCommitter::with_catalog(
-                    config.clone(),
-                    namespace.clone(),
-                    name.clone(),
-                ))
-            }
+            (
+                Some(config),
+                TableResolution::CatalogTable {
+                    namespace, name, ..
+                },
+            ) => Some(TableCommitter::with_catalog(
+                config.clone(),
+                namespace.clone(),
+                name.clone(),
+            )),
             _ => None,
         }
     }
@@ -84,16 +95,13 @@ impl TagCommand {
                 .collect();
             println!(
                 "{}",
-                serde_json::to_string_pretty(&tag_json).map_err(|e| Error::General(e.to_string()))?
+                serde_json::to_string_pretty(&tag_json)
+                    .map_err(|e| Error::General(e.to_string()))?
             );
         } else {
             println!("{} Iceberg tags at {}", "Listing".green(), ctx.path);
             println!();
-            println!(
-                "{:<20} {:<20}",
-                "TAG".cyan(),
-                "SNAPSHOT ID".cyan()
-            );
+            println!("{:<20} {:<20}", "TAG".cyan(), "SNAPSHOT ID".cyan());
             println!("{}", "-".repeat(40));
 
             if tags.is_empty() {
@@ -185,16 +193,9 @@ impl TagCommand {
                 result.snapshot_id
             );
             println!();
-            println!(
-                "{}",
-                "Run without --dry-run to apply this change.".dimmed()
-            );
+            println!("{}", "Run without --dry-run to apply this change.".dimmed());
         } else {
-            println!(
-                "{} Deleted tag '{}'",
-                "Success:".green(),
-                result.name.red()
-            );
+            println!("{} Deleted tag '{}'", "Success:".green(), result.name.red());
             if let Some(v) = result.new_version {
                 println!("New metadata version: v{}", v);
             }

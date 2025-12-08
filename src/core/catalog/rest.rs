@@ -48,9 +48,8 @@ impl RestCatalogClient {
 
     /// List namespaces in the catalog
     pub async fn list_namespaces(&self, parent: Option<&[String]>) -> Result<Vec<Vec<String>>> {
-        let parent_ident = parent.map(|p| {
-            NamespaceIdent::from_vec(p.to_vec()).expect("Invalid namespace")
-        });
+        let parent_ident =
+            parent.map(|p| NamespaceIdent::from_vec(p.to_vec()).expect("Invalid namespace"));
 
         let namespaces = self
             .catalog

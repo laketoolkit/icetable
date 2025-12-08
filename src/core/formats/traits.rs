@@ -4,8 +4,8 @@
 //! This provides a unified interface for working with table formats
 //! (Delta Lake, Iceberg).
 
+use crate::core::storage::{Storage, detect_storage_type};
 use arrow::datatypes::Schema;
-use crate::core::storage::{detect_storage_type, Storage};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use std::path::Path;
@@ -404,10 +404,7 @@ impl FormatHandlerFactory {
         }
     }
     /// Detect the table format and create an appropriate handler
-    pub async fn create_handler(
-        path: &Path,
-        storage: Storage,
-    ) -> Result<Box<dyn FormatHandler>> {
+    pub async fn create_handler(path: &Path, storage: Storage) -> Result<Box<dyn FormatHandler>> {
         // Use storage-based detection that works with cloud storage
         let path_str = path.to_str().unwrap_or("");
 
@@ -459,10 +456,7 @@ impl FormatHandlerFactory {
     }
 
     /// Check if Delta Lake table exists using storage backend
-    async fn check_delta_exists(
-        path_str: &str,
-        storage: &Storage,
-    ) -> bool {
+    async fn check_delta_exists(path_str: &str, storage: &Storage) -> bool {
         // Extract the path without scheme for listing
         let clean_path = Self::extract_storage_path(path_str);
 
@@ -484,10 +478,7 @@ impl FormatHandlerFactory {
     }
 
     /// Check if Iceberg table exists using storage backend
-    async fn check_iceberg_exists(
-        path_str: &str,
-        storage: &Storage,
-    ) -> bool {
+    async fn check_iceberg_exists(path_str: &str, storage: &Storage) -> bool {
         use crate::core::storage::to_path;
         use futures::TryStreamExt;
 

@@ -9,11 +9,7 @@ use std::path::Path;
 #[async_trait::async_trait]
 pub trait PhysicalInspectorFactory: Send + Sync {
     /// Create an inspector for the given path and storage
-    fn create(
-        &self,
-        path: &Path,
-        storage: Storage,
-    ) -> Result<Box<dyn PhysicalInspector>>;
+    fn create(&self, path: &Path, storage: Storage) -> Result<Box<dyn PhysicalInspector>>;
 
     /// Check if this factory can handle the given path
     /// For remote storage (S3, etc.), this may need to check for directory existence
