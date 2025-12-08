@@ -199,6 +199,14 @@ pub struct DoctorArgs {
     #[arg(long)]
     pub check_files: bool,
 
+    /// Validate specific catalog by name
+    #[arg(long)]
+    pub catalog: Option<String>,
+
+    /// Validate storage connectivity
+    #[arg(long)]
+    pub storage: bool,
+
     /// Output format: human or json
     #[arg(short, long, default_value = "human")]
     pub output: String,
@@ -1111,9 +1119,6 @@ pub enum ConfigCommands {
 
     /// List all configured tables and catalogs
     List(ConfigListArgs),
-
-    /// Validate configuration and connectivity
-    Validate(ConfigValidateArgs),
 }
 
 /// Arguments for config use
@@ -1204,22 +1209,6 @@ pub struct ConfigRemoveCatalogArgs {
 /// Arguments for config list
 #[derive(Parser, Debug)]
 pub struct ConfigListArgs {
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
-    pub output: String,
-}
-
-/// Arguments for config validate command
-#[derive(Parser, Debug)]
-pub struct ConfigValidateArgs {
-    /// Validate specific catalog by name
-    #[arg(long)]
-    pub catalog: Option<String>,
-
-    /// Validate storage connectivity
-    #[arg(long)]
-    pub storage: bool,
-
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,

@@ -72,6 +72,8 @@ impl DoctorCommand {
 
     /// Run environment health checks (credentials, config, etc.)
     async fn execute_environment_check(args: &DoctorArgs) -> Result<()> {
+        use crate::config::Config;
+
         // Warn if --check-files is used without a table
         if args.check_files {
             println!(
@@ -92,10 +94,129 @@ impl DoctorCommand {
         // Run all diagnostic checks
         checks.push(Self::check_rust_version().await);
         checks.push(Self::check_config_file().await);
+
+        // Config validation checks
+        let config = Config::load().ok();
+        if let Some(ref cfg) = config {
+            // Check current context
+            if let Some(context) = cfg.get_current_context() {
+                match cfg.resolve_table(context) {
+                    Ok(resolved) => {
+                        let msg = match resolved {
+                            crate::config::ResolvedTable::Path(path) => {
+                                format!("{} → {}", context, path)
+                            }
+                            crate::config::ResolvedTable::Catalog { catalog_name, table_name, .. } => {
+                                format!("{} → {}.{}", context, catalog_name, table_name)
+                            }
+                        };
+                        checks.push(CheckResult {
+                            name: "Current context".to_string(),
+                            status: CheckStatus::Ok,
+                            message: msg,
+                            suggestion: None,
+                        });
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult {
+                            name: "Current context".to_string(),
+                            status: CheckStatus::Warning,
+                            message: format!("Invalid: {}", e),
+                            suggestion: Some("Run 'icetable config use <table>' to set a valid context".to_string()),
+                        });
+                    }
+                }
+            }
+
+            // Check table aliases
+            if !cfg.tables.is_empty() {
+                checks.push(CheckResult {
+                    name: "Table aliases".to_string(),
+                    status: CheckStatus::Ok,
+                    message: format!("{} configured", cfg.tables.len()),
+                    suggestion: None,
+                });
+            }
+
+            // Check catalogs
+            if !cfg.catalogs.is_empty() {
+                checks.push(CheckResult {
+                    name: "Catalogs".to_string(),
+                    status: CheckStatus::Ok,
+                    message: format!("{} configured", cfg.catalogs.len()),
+                    suggestion: None,
+                });
+            }
+        }
+
+        // Validate specific catalog if requested
+        if let Some(catalog_name) = &args.catalog {
+            if let Some(ref cfg) = config {
+                if let Some(catalog) = cfg.catalogs.get(catalog_name) {
+                    checks.push(CheckResult {
+                        name: format!("Catalog '{}'", catalog_name),
+                        status: CheckStatus::Ok,
+                        message: "Found in config".to_string(),
+                        suggestion: None,
+                    });
+
+                    // Test connectivity
+                    match Self::test_catalog_connectivity(catalog_name, catalog).await {
+                        Ok(_) => {
+                            checks.push(CheckResult {
+                                name: format!("Catalog '{}' connectivity", catalog_name),
+                                status: CheckStatus::Ok,
+                                message: "Connected successfully".to_string(),
+                                suggestion: None,
+                            });
+                        }
+                        Err(e) => {
+                            checks.push(CheckResult {
+                                name: format!("Catalog '{}' connectivity", catalog_name),
+                                status: CheckStatus::Error,
+                                message: format!("Connection failed: {}", e),
+                                suggestion: Some("Check catalog URI and credentials".to_string()),
+                            });
+                        }
+                    }
+                } else {
+                    checks.push(CheckResult {
+                        name: format!("Catalog '{}'", catalog_name),
+                        status: CheckStatus::Error,
+                        message: "Not found in config".to_string(),
+                        suggestion: Some("Run 'icetable config add-catalog' to add it".to_string()),
+                    });
+                }
+            }
+        }
+
+        // Cloud credentials checks
         checks.push(Self::check_aws_credentials().await);
         checks.push(Self::check_aws_endpoint().await);
         checks.push(Self::check_gcs_credentials().await);
         checks.push(Self::check_azure_credentials().await);
+
+        // Storage connectivity test if requested
+        if args.storage {
+            match Self::test_storage_connectivity().await {
+                Ok(_) => {
+                    checks.push(CheckResult {
+                        name: "Storage connectivity".to_string(),
+                        status: CheckStatus::Ok,
+                        message: "Local filesystem available".to_string(),
+                        suggestion: None,
+                    });
+                }
+                Err(e) => {
+                    checks.push(CheckResult {
+                        name: "Storage connectivity".to_string(),
+                        status: CheckStatus::Error,
+                        message: format!("Failed: {}", e),
+                        suggestion: Some("Check storage backend configuration".to_string()),
+                    });
+                }
+            }
+        }
 
         // Display results
         if args.output == "json" {
@@ -130,6 +251,71 @@ impl DoctorCommand {
             );
         }
 
+        Ok(())
+    }
+
+    /// Test catalog connectivity
+    async fn test_catalog_connectivity(name: &str, catalog: &crate::config::CatalogConfig) -> Result<()> {
+        use crate::core::CatalogType;
+
+        log::debug!("Testing connectivity to catalog: {}", name);
+
+        // For REST catalogs, validate configuration
+        if catalog.catalog_type == CatalogType::Rest {
+            if catalog.uri.is_empty() {
+                return Err(crate::error::Error::General("REST catalog URI is empty".to_string()));
+            }
+
+            if !catalog.uri.starts_with("http://") && !catalog.uri.starts_with("https://") {
+                return Err(crate::error::Error::General(format!(
+                    "REST catalog URI should start with http:// or https://: {}",
+                    catalog.uri
+                )));
+            }
+
+            // Try to fetch config endpoint
+            let client = reqwest::Client::new();
+            let config_url = format!("{}/v1/config", catalog.uri.trim_end_matches('/'));
+            match client
+                .get(&config_url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    log::debug!("REST catalog {} is reachable", catalog.uri);
+                    Ok(())
+                }
+                Ok(resp) => {
+                    Err(crate::error::Error::General(format!(
+                        "REST catalog returned status {}", resp.status()
+                    )))
+                }
+                Err(e) => {
+                    Err(crate::error::Error::General(format!(
+                        "Cannot connect to REST catalog: {}", e
+                    )))
+                }
+            }
+        } else {
+            log::debug!("Catalog type {} configuration validated", catalog.catalog_type);
+            Ok(())
+        }
+    }
+
+    /// Test storage connectivity
+    async fn test_storage_connectivity() -> Result<()> {
+        use crate::core::storage::StorageBackendFactory;
+
+        log::debug!("Testing storage connectivity");
+
+        // Test local filesystem
+        match StorageBackendFactory::create_backend("file:///tmp").await {
+            Ok(_) => log::debug!("Local filesystem backend available"),
+            Err(e) => return Err(crate::error::Error::General(format!("Local filesystem backend unavailable: {}", e))),
+        }
+
+        log::debug!("Storage backends available");
         Ok(())
     }
 
