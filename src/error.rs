@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use regex;
 
 /// The main error type for TableTools operations
 #[derive(Error, Debug)]
@@ -136,6 +137,19 @@ pub enum Error {
     #[error("Storage error: {0}")]
     ObjectStore(#[from] object_store::Error),
 
+    /// Cloud storage provider-specific errors
+    #[error("{provider} error: {message}")]
+    CloudStorage {
+        /// The cloud storage provider (e.g., "S3", "GCS", "Azure")
+        provider: String,
+        /// The error message describing the failure
+        message: String,
+        /// The underlying error code if available
+        error_code: Option<String>,
+        /// The HTTP status code if available
+        http_status: Option<u16>,
+    },
+
     /// General errors with context
     #[error("{0}")]
     General(String),
@@ -171,6 +185,125 @@ impl Error {
         Error::Parse {
             message: message.into(),
             source: None,
+        }
+    }
+
+    /// Parse an object_store::Error into a more specific Error
+    pub fn from_object_store(error: object_store::Error, path: &str) -> Self {
+        let error_str = error.to_string();
+        let error_str_lower = error_str.to_lowercase();
+        
+        // Extract provider from path
+        let provider = if path.starts_with("s3://") {
+            "S3"
+        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
+            "GCS"
+        } else if path.starts_with("az://") || path.starts_with("azure://") {
+            "Azure"
+        } else {
+            "CloudStorage"
+        };
+
+        // Parse HTTP status codes and error codes from the error string
+        let mut error_code = None;
+        let mut http_status = None;
+
+        // Try to extract HTTP status code
+        if let Some(caps) = regex::Regex::new(r"HTTP (\d{3})")
+            .ok()
+            .and_then(|re| re.captures(&error_str))
+        {
+            if let Some(status) = caps.get(1) {
+                http_status = status.as_str().parse::<u16>().ok();
+            }
+        }
+
+        // Try to extract AWS error codes
+        let aws_error_patterns = [
+            ("AccessDenied", "AccessDenied"),
+            ("NoSuchBucket", "NoSuchBucket"),
+            ("NoSuchKey", "NoSuchKey"),
+            ("SlowDown", "SlowDown"),
+            ("RequestTimeTooSkewed", "RequestTimeTooSkewed"),
+            ("SignatureDoesNotMatch", "SignatureDoesNotMatch"),
+            ("InvalidAccessKeyId", "InvalidAccessKeyId"),
+            ("InvalidToken", "InvalidToken"),
+            ("ExpiredToken", "ExpiredToken"),
+            ("TokenRefreshRequired", "TokenRefreshRequired"),
+            ("BucketAlreadyExists", "BucketAlreadyExists"),
+            ("BucketAlreadyOwnedByYou", "BucketAlreadyOwnedByYou"),
+            ("InvalidBucketName", "InvalidBucketName"),
+            ("InvalidRange", "InvalidRange"),
+            ("KeyTooLong", "KeyTooLong"),
+            ("MissingContentLength", "MissingContentLength"),
+            ("MissingSecurityHeader", "MissingSecurityHeader"),
+            ("RequestTimeout", "RequestTimeout"),
+            ("ServiceUnavailable", "ServiceUnavailable"),
+            ("Throttling", "Throttling"),
+            ("RequestThrottled", "RequestThrottled"),
+        ];
+
+        for (pattern, code) in aws_error_patterns.iter() {
+            if error_str.contains(pattern) {
+                error_code = Some(code.to_string());
+                break;
+            }
+        }
+
+        // If no AWS error code found, try to extract generic error patterns
+        if error_code.is_none() {
+            if error_str_lower.contains("connection") || error_str_lower.contains("network") {
+                error_code = Some("NetworkError".to_string());
+            } else if error_str_lower.contains("timeout") || error_str_lower.contains("timed out") {
+                error_code = Some("Timeout".to_string());
+            } else if error_str_lower.contains("permission") || error_str_lower.contains("access denied") {
+                error_code = Some("PermissionDenied".to_string());
+            } else if error_str_lower.contains("not found") {
+                error_code = Some("NotFound".to_string());
+            } else if error_str_lower.contains("throttl") || error_str_lower.contains("slow down") {
+                error_code = Some("Throttling".to_string());
+            }
+        }
+
+        // Create appropriate error type based on the parsed information
+        match (error_code.as_deref(), http_status) {
+            (Some("AccessDenied"), _) | (_, Some(403)) => Error::AccessDenied {
+                path: path.to_string(),
+                message: format!("{}: {}", provider, error_str),
+            },
+            (Some("NoSuchBucket") | Some("NoSuchKey") | Some("NotFound"), Some(404)) => {
+                Error::FileNotFound {
+                    path: std::path::PathBuf::from(path),
+                }
+            }
+            (Some("InvalidAccessKeyId") | Some("SignatureDoesNotMatch") | Some("ExpiredToken") | Some("InvalidToken"), _) => {
+                Error::AuthenticationFailed {
+                    provider: provider.to_string(),
+                    message: error_str,
+                }
+            }
+            (Some("Throttling") | Some("SlowDown") | Some("RequestThrottled"), Some(429)) => {
+                Error::CloudStorage {
+                    provider: provider.to_string(),
+                    message: format!("Rate limited or throttled: {}", error_str),
+                    error_code,
+                    http_status,
+                }
+            }
+            (_, Some(503) | Some(502) | Some(504)) => Error::Network {
+                message: format!("{} service unavailable: {}", provider, error_str),
+                source: Some(Box::new(error)),
+            },
+            (Some("NetworkError") | Some("Timeout"), _) => Error::Network {
+                message: format!("{} network error: {}", provider, error_str),
+                source: Some(Box::new(error)),
+            },
+            _ => Error::CloudStorage {
+                provider: provider.to_string(),
+                message: error_str,
+                error_code,
+                http_status,
+            },
         }
     }
 
@@ -246,15 +379,85 @@ impl Error {
     }
 
     fn authentication_failed_suggestion(provider: &str, message: &str) -> String {
-        let suggestion = match provider {
-            "aws" | "s3" => "Try: aws configure",
-            "gcp" | "gcs" => "Try: gcloud auth application-default login",
-            "azure" => "Try: az login",
-            _ => "Check your cloud credentials",
+        let suggestion = match provider.to_lowercase().as_str() {
+            "aws" | "s3" => "Try:\n  1. aws configure\n  2. Check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables\n  3. Verify AWS_REGION is set correctly",
+            "gcp" | "gcs" => "Try:\n  1. gcloud auth application-default login\n  2. Check GOOGLE_APPLICATION_CREDENTIALS environment variable\n  3. Verify the service account has storage.objectAdmin role",
+            "azure" => "Try:\n  1. az login\n  2. Check AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY environment variables\n  3. For managed identity: export AZURE_STORAGE_USE_AZURE_AD=true",
+            _ => "Check your cloud credentials configuration",
         };
         format!(
             "Authentication failed for {}: {}\n\n{}",
             provider, message, suggestion
+        )
+    }
+
+    fn cloud_storage_suggestion(provider: &str, message: &str, error_code: Option<&str>, http_status: Option<u16>) -> String {
+        let mut suggestions = Vec::new();
+        
+        // Add provider-specific suggestions
+        match provider.to_lowercase().as_str() {
+            "s3" => {
+                suggestions.push("• Check S3 bucket permissions and policies");
+                suggestions.push("• Verify bucket exists and is in the correct region");
+                suggestions.push("• For MinIO: check AWS_ENDPOINT_URL is set correctly");
+            }
+            "gcs" => {
+                suggestions.push("• Check GCS bucket permissions and IAM roles");
+                suggestions.push("• Verify bucket exists in the correct project");
+                suggestions.push("• Check if requester pays is enabled on the bucket");
+            }
+            "azure" => {
+                suggestions.push("• Check Azure Storage account permissions");
+                suggestions.push("• Verify container exists in the storage account");
+                suggestions.push("• Check if firewall rules allow your IP address");
+            }
+            _ => {
+                suggestions.push("• Check cloud provider credentials and permissions");
+                suggestions.push("• Verify the resource exists and is accessible");
+            }
+        }
+
+        // Add error code specific suggestions
+        if let Some(code) = error_code {
+            match code {
+                "Throttling" | "SlowDown" | "RequestThrottled" => {
+                    suggestions.push("• This is a rate limiting error - try again later");
+                    suggestions.push("• Consider implementing exponential backoff in your application");
+                    suggestions.push("• Check if you're exceeding request quotas");
+                }
+                "NetworkError" | "Timeout" => {
+                    suggestions.push("• Check your network connection");
+                    suggestions.push("• Verify firewall allows outbound connections");
+                    suggestions.push("• Try increasing timeout settings");
+                }
+                "NoSuchBucket" | "NoSuchKey" => {
+                    suggestions.push("• Verify the bucket/container name is correct");
+                    suggestions.push("• Check if the object/key exists");
+                    suggestions.push("• Ensure you have list permissions on the bucket");
+                }
+                _ => {}
+            }
+        }
+
+        // Add HTTP status specific suggestions
+        if let Some(status) = http_status {
+            match status {
+                403 => suggestions.push("• Check IAM permissions or bucket policies"),
+                404 => suggestions.push("• Resource not found - verify the path is correct"),
+                429 => suggestions.push("• Too many requests - implement rate limiting"),
+                500..=599 => suggestions.push("• Cloud provider service issue - try again later"),
+                _ => {}
+            }
+        }
+
+        let suggestions_str = suggestions.join("\n");
+        format!(
+            "{} error: {}{}{}\n\nTroubleshooting:\n{}",
+            provider,
+            message,
+            error_code.map(|c| format! ( " (Error code: {})", c)).unwrap_or_default(),
+            http_status.map(|s| format! ( " (HTTP: {})", s)).unwrap_or_default(),
+            suggestions_str
         )
     }
 
@@ -283,6 +486,15 @@ impl Error {
             }
             Error::Timeout { operation, seconds } => Self::timeout_suggestion(operation, *seconds),
             Error::Conflict(message) => Self::conflict_suggestion(message),
+            Error::CloudStorage { provider, message, error_code, http_status } => {
+                Self::cloud_storage_suggestion(provider, message, error_code.as_deref(), *http_status)
+            }
+            Error::AccessDenied { path, message } => {
+                format!("Access denied to {}: {}\n\nCheck:\n  1. IAM permissions or bucket policies\n  2. Network firewall rules\n  3. Resource exists and is accessible", path, message)
+            }
+            Error::Network { message, .. } => {
+                format!("Network error: {}\n\nPossible causes:\n  1. Internet connection issues\n  2. Firewall blocking connections\n  3. Cloud provider service disruption\n  4. DNS resolution problems", message)
+            }
             _ => self.to_string(),
         }
     }

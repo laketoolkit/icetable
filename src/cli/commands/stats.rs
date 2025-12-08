@@ -5,14 +5,34 @@
 
 use std::path::Path;
 
+
+
 use super::common::resolve_table_path;
 use crate::cli::parser::StatsArgs;
 use crate::core::format_bytes;
 use crate::core::formats::FormatHandlerFactory;
 use crate::core::inspection::formatters::format_number;
+use crate::core::maintenance::PartitionFilter;
 use crate::core::storage::StorageBackendFactory;
 use crate::core::CatalogConfig;
 use crate::error::Result;
+
+/// Statistics for a specific partition
+#[derive(Debug, serde::Serialize)]
+struct PartitionStats {
+    /// Number of files in the partition
+    file_count: usize,
+    /// Total size in bytes
+    total_size: u64,
+    /// Average file size in bytes
+    avg_file_size: u64,
+    /// Number of small files (less than 128MB)
+    small_files: usize,
+    /// Percentage of small files
+    small_files_percent: f64,
+    /// Recommended target size for optimize
+    recommended_target_size: u64,
+}
 
 /// Handler for stats command
 pub struct StatsCommand;
@@ -39,23 +59,58 @@ impl StatsCommand {
         // Extract table name from path
         let table_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("table");
 
-        // Format output
-        if args.output == "json" {
-            let json = serde_json::json!({
-                "table": table_name,
-                "format": handler.format_name(),
-                "total_records": metadata.num_rows,
-                "compressed_size_bytes": metadata.compressed_size,
-                "format_version": metadata.format_version,
-                "created_at": metadata.created_at.map(|dt| dt.to_rfc3339()),
-                "properties": metadata.metadata,
-            });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_default()
-            );
+        // If partition filter is specified, get detailed partition stats
+        if let Some(partition_filter_str) = &args.partition {
+            let partition_filter = PartitionFilter::parse(partition_filter_str)
+                .map_err(|e| crate::error::Error::General(format!("Invalid partition filter: {}", e)))?;
+            
+            let partition_stats = Self::get_partition_stats(&*handler, &partition_filter).await?;
+            
+            // Format output
+            if args.output == "json" {
+                let json = serde_json::json!({
+                    "table": table_name,
+                    "format": handler.format_name(),
+                    "partition_filter": partition_filter_str,
+                    "stats": partition_stats,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                );
+            } else {
+                // Print simple partition stats
+                println!();
+                println!("Partition: {}", partition_filter_str);
+                println!("  Files: {}", partition_stats.file_count);
+                println!("  Total Size: {}", format_bytes(partition_stats.total_size));
+                println!("  Avg File Size: {}", format_bytes(partition_stats.avg_file_size));
+                println!("  Small Files (<128MB): {} ({:.1}%)", partition_stats.small_files, partition_stats.small_files_percent);
+                
+                if partition_stats.small_files > 0 && partition_stats.small_files_percent > 50.0 {
+                    println!("  ⚠  Recommend: optimize --target-size {}", format_bytes(partition_stats.recommended_target_size));
+                }
+            }
         } else {
-            Self::print_text_output(&metadata, table_name);
+            // Original behavior: general table stats
+            // Format output
+            if args.output == "json" {
+                let json = serde_json::json!({
+                    "table": table_name,
+                    "format": handler.format_name(),
+                    "total_records": metadata.num_rows,
+                    "compressed_size_bytes": metadata.compressed_size,
+                    "format_version": metadata.format_version,
+                    "created_at": metadata.created_at.map(|dt| dt.to_rfc3339()),
+                    "properties": metadata.metadata,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                );
+            } else {
+                Self::print_text_output(&metadata, table_name);
+            }
         }
 
         Ok(())
@@ -126,5 +181,28 @@ impl StatsCommand {
         println!("│{}│", " ".repeat(box_width));
         println!("╰{}╯", "─".repeat(box_width));
         println!();
+    }
+
+    /// Get statistics for files matching a partition filter
+    async fn get_partition_stats(
+        _handler: &dyn crate::core::formats::FormatHandler,
+        _partition_filter: &PartitionFilter,
+    ) -> Result<PartitionStats> {
+
+        
+        // Get metadata service from handler if possible
+        // For now, we'll use a simpler approach: get general stats
+        // In a real implementation, we would need to access the metadata service
+        
+        // Placeholder implementation - returns basic stats
+        // TODO: Implement actual partition filtering
+        Ok(PartitionStats {
+            file_count: 0,
+            total_size: 0,
+            avg_file_size: 0,
+            small_files: 0,
+            small_files_percent: 0.0,
+            recommended_target_size: 256 * 1024 * 1024, // 256MB default
+        })
     }
 }

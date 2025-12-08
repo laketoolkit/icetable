@@ -4,7 +4,7 @@
 //! and checked by operations to enable clean shutdown.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::watch;
 
 /// Global cancellation flag
@@ -13,7 +13,9 @@ static CANCELLED: AtomicBool = AtomicBool::new(false);
 /// Global cleanup handlers
 static CLEANUP_HANDLERS: OnceLock<Mutex<Vec<Box<dyn Fn() + Send + Sync>>>> = OnceLock::new();
 
-
+fn get_cleanup_handlers() -> &'static Mutex<Vec<Box<dyn Fn() + Send + Sync>>> {
+    CLEANUP_HANDLERS.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 /// Check if cancellation was requested
 pub fn is_cancelled() -> bool {
@@ -32,36 +34,6 @@ pub fn request_cancellation() {
             }
         }
     }
-}
-
-/// Register a cleanup handler to be called on cancellation
-pub fn register_cleanup_handler<F>(handler: F)
-where
-    F: Fn() + Send + Sync + 'static,
-{
-    if let Some(handlers) = CLEANUP_HANDLERS.get() {
-        if let Ok(mut handlers_lock) = handlers.lock() {
-            handlers_lock.push(Box::new(handler));
-        }
-    }
-}
-
-/// Create a temporary directory that will be cleaned up on cancellation
-pub fn temp_dir_with_cleanup() -> std::io::Result<tempfile::TempDir> {
-    let temp_dir = tempfile::TempDir::new()?;
-    let temp_dir_path = temp_dir.path().to_path_buf();
-    
-    register_cleanup_handler(move || {
-        let _ = std::fs::remove_dir_all(&temp_dir_path);
-    });
-    
-    Ok(temp_dir)
-}
-
-/// Run cleanup handlers (useful for tests)
-#[cfg(test)]
-pub fn run_cleanup_handlers() {
-    request_cancellation();
 }
 
 /// Reset cancellation flag (for testing)
@@ -198,6 +170,36 @@ async fn wait_for_cancellation() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+/// Register a cleanup handler to be called on cancellation
+pub fn register_cleanup_handler<F>(handler: F)
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    if let Some(handlers) = CLEANUP_HANDLERS.get() {
+        if let Ok(mut handlers_lock) = handlers.lock() {
+            handlers_lock.push(Box::new(handler));
+        }
+    }
+}
+
+/// Create a temporary directory that will be cleaned up on cancellation
+pub fn temp_dir_with_cleanup() -> std::io::Result<tempfile::TempDir> {
+    let temp_dir = tempfile::TempDir::new()?;
+    let temp_dir_path = temp_dir.path().to_path_buf();
+    
+    register_cleanup_handler(move || {
+        let _ = std::fs::remove_dir_all(&temp_dir_path);
+    });
+    
+    Ok(temp_dir)
+}
+
+/// Run cleanup handlers (useful for tests)
+#[cfg(test)]
+pub fn run_cleanup_handlers() {
+    request_cancellation();
 }
 
 #[cfg(test)]

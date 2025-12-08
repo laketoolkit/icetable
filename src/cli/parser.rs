@@ -130,6 +130,9 @@ pub enum Commands {
     /// Interact with Iceberg REST catalogs (Nessie, Polaris, etc.)
     Catalog(CatalogArgs),
 
+    /// Generate synthetic test data for benchmarking and testing
+    Generate(GenerateArgs),
+
     /// Generate shell completions
     Completions(CompletionsArgs),
 
@@ -373,6 +376,10 @@ pub struct StatsArgs {
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
+
+    /// Filter by partition (e.g., "date=2024-01-15/*" or "region=us-west-2")
+    #[arg(short, long)]
+    pub partition: Option<String>,
 }
 
 /// Arguments for analyze command
@@ -1104,6 +1111,9 @@ pub enum ConfigCommands {
 
     /// List all configured tables and catalogs
     List(ConfigListArgs),
+
+    /// Validate configuration and connectivity
+    Validate(ConfigValidateArgs),
 }
 
 /// Arguments for config use
@@ -1194,6 +1204,22 @@ pub struct ConfigRemoveCatalogArgs {
 /// Arguments for config list
 #[derive(Parser, Debug)]
 pub struct ConfigListArgs {
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Arguments for config validate command
+#[derive(Parser, Debug)]
+pub struct ConfigValidateArgs {
+    /// Validate specific catalog by name
+    #[arg(long)]
+    pub catalog: Option<String>,
+
+    /// Validate storage connectivity
+    #[arg(long)]
+    pub storage: bool,
+
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
@@ -1337,4 +1363,63 @@ fn parse_key_value(s: &str) -> Result<(String, String), String> {
 /// Parse log level from string
 fn parse_log_level(s: &str) -> Result<crate::utils::LogLevel, String> {
     s.parse()
+}
+
+/// Arguments for generate command
+#[derive(Parser, Debug)]
+pub struct GenerateArgs {
+    /// Path where the table will be created (local or s3://, gs://, etc.)
+    #[arg(short = 't', long = "table")]
+    pub path: String,
+
+    /// Schema definition as "col:type,col:type" (e.g., "id:int,name:string,ts:timestamp")
+    #[arg(long)]
+    pub schema: Option<String>,
+
+    /// Use a predefined schema template
+    #[arg(long, value_enum)]
+    pub template: Option<SchemaTemplate>,
+
+    /// Number of rows to generate
+    #[arg(long, default_value = "10000")]
+    pub rows: u64,
+
+    /// Number of data files to create
+    #[arg(long, default_value = "4")]
+    pub files: u32,
+
+    /// Partition columns (comma-separated, e.g., "year,month")
+    #[arg(long, value_delimiter = ',')]
+    pub partition_by: Option<Vec<String>>,
+
+    /// Random seed for reproducible data generation
+    #[arg(long)]
+    pub seed: Option<u64>,
+
+    /// Target file size in bytes (default: 64MB)
+    #[arg(long, default_value = "67108864")]
+    pub target_file_size: u64,
+
+    /// Dry run - show what would be generated without creating data
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+}
+
+/// Predefined schema templates for common use cases
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+pub enum SchemaTemplate {
+    /// Simple events: id, timestamp, event_type, user_id, value
+    Events,
+    /// Financial transactions: id, timestamp, amount, currency, account_from, account_to, status
+    Transactions,
+    /// IoT sensor data: sensor_id, timestamp, temperature, humidity, pressure, location
+    Sensors,
+    /// User profiles: user_id, created_at, name, email, country, age, active
+    Users,
+    /// Web logs: request_id, timestamp, method, path, status_code, response_time_ms, user_agent
+    WebLogs,
 }

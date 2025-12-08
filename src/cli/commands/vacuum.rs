@@ -3,12 +3,14 @@
 //! Removes old files no longer referenced by Iceberg tables.
 
 use colored::Colorize;
+use std::io;
 
 use super::common::resolve_table_path;
 use crate::cli::parser::VacuumArgs;
 use crate::core::format_bytes;
 use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
+use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
 /// Handler for vacuum command
 pub struct VacuumCommand;
@@ -17,7 +19,17 @@ impl VacuumCommand {
     /// Execute vacuum command
     pub async fn execute(args: VacuumArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
-        Self::vacuum_iceberg(&table_path, &args).await
+        
+        // Apply timeout and cancellation
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: manifests + file lists
+                let estimated_memory = 256 * 1024 * 1024; // 256MB for manifest scanning
+                track_memory_usage(estimated_memory)?;
+                
+                Self::vacuum_iceberg(&table_path, &args).await
+            }).await
+        }).await
     }
 
     /// Vacuum Iceberg table
@@ -58,6 +70,38 @@ impl VacuumCommand {
                 },
                 table_path
             );
+        }
+
+        // Safety warning for vacuum without --dry-run or --force
+        if !args.dry_run && !args.force {
+            println!();
+            println!("{}", "⚠ WARNING: This will delete orphan files".yellow().bold());
+            println!("  Use --dry-run first to see what would be deleted");
+            println!("  Add --force to proceed without this warning");
+            println!();
+            
+            // Ask for confirmation (simple stdin read)
+            println!("{}", "Type 'yes' to continue, anything else to cancel:".cyan());
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() || input.trim().to_lowercase() != "yes" {
+                println!("{}", "Vacuum cancelled".yellow());
+                return Ok(());
+            }
+            println!();
+        } else if args.force && !args.dry_run {
+            println!();
+            println!("{}", "⚠ WARNING: Running vacuum with --force".yellow().bold());
+            println!("  Orphan files will be deleted without confirmation");
+            println!();
+        }
+
+        // Warning for low retention period
+        if args.retention_hours < 24 && !args.force {
+            println!();
+            println!("{}", "⚠ WARNING: Retention period is less than 24 hours".yellow().bold());
+            println!("  Files newer than {} hours will be kept", args.retention_hours);
+            println!("  Add --force if you're sure this is safe");
+            println!();
         }
 
         // Load metadata

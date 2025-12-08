@@ -12,6 +12,7 @@ use crate::core::storage::StorageBackendFactory;
 use crate::core::utils::detect_table_format_with_storage;
 use crate::core::{CatalogConfig, TableFormat, format_bytes};
 use crate::error::{Error, Result};
+use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
 /// Repair options specifying what actions to take
 #[derive(Debug, Clone, Copy)]
@@ -27,8 +28,22 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(mut args: RepairArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: RepairArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        
+        // Apply timeout and cancellation from global resource limits
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: storage scanning + metadata
+                let estimated_memory = 256 * 1024 * 1024; // 256MB for repair operations
+                track_memory_usage(estimated_memory)?;
+                
+                Self::repair_inner(table_path, args, catalog_config).await
+            }).await
+        }).await
+    }
+    
+    async fn repair_inner(table_path: String, mut args: RepairArgs, _catalog_config: Option<CatalogConfig>) -> Result<()> {
         args.path = Some(table_path.clone());
 
         // Validate at least one repair option is specified

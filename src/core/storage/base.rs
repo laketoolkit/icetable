@@ -13,7 +13,7 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 use super::path_parser::CloudPathParser;
-use super::retry::{with_retry, RetryConfig};
+use super::retry::RetryContext;
 use super::traits::*;
 use crate::error::{Error, Result};
 
@@ -36,8 +36,8 @@ pub struct BaseStorageBackend<P: CloudPathParser> {
     parser: P,
     /// Storage type name for identification
     storage_type_name: &'static str,
-    /// Retry configuration for transient failures
-    retry_config: RetryConfig,
+    /// Retry context with circuit breaker
+    retry_context: RetryContext,
 }
 
 impl<P: CloudPathParser> BaseStorageBackend<P> {
@@ -48,18 +48,18 @@ impl<P: CloudPathParser> BaseStorageBackend<P> {
     /// * `parser` - The path parser for this storage type
     /// * `storage_type_name` - Name of the storage type (e.g., "s3", "gcs", "azure")
     pub fn new(store: Arc<dyn ObjectStore>, parser: P, storage_type_name: &'static str) -> Self {
-        // Use cloud storage retry config for remote backends, local for filesystem
-        let retry_config = if storage_type_name == "local" {
-            RetryConfig::for_local()
+        // Use cloud storage retry context for remote backends, local for filesystem
+        let retry_context = if storage_type_name == "local" {
+            RetryContext::for_local()
         } else {
-            RetryConfig::for_cloud_storage()
+            RetryContext::for_cloud_storage()
         };
 
         Self {
             store,
             parser,
             storage_type_name,
-            retry_config,
+            retry_context,
         }
     }
 
@@ -81,17 +81,14 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
         let store = self.store.clone();
         let storage_type = self.storage_type_name;
 
-        with_retry(&self.retry_config, &format!("{} exists", storage_type), || {
+        self.retry_context.execute(&format!("{} exists", storage_type), || {
             let store = store.clone();
             let obj_path = obj_path.clone();
             async move {
                 match store.head(&obj_path).await {
                     Ok(_) => Ok(true),
                     Err(object_store::Error::NotFound { .. }) => Ok(false),
-                    Err(e) => Err(Error::General(format!(
-                        "Failed to check {} object: {}",
-                        storage_type, e
-                    ))),
+                    Err(e) => Err(Error::from_object_store(e, path)),
                 }
             }
         })
@@ -106,19 +103,13 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
         let path_owned = path.to_string();
         let storage_type = self.storage_type_name;
 
-        with_retry(&self.retry_config, &format!("{} head", storage_type), || {
+        self.retry_context.execute(&format!("{} head", storage_type), || {
             let store = store.clone();
             let obj_path = obj_path.clone();
             let path_owned = path_owned.clone();
             async move {
-                let meta = store.head(&obj_path).await.map_err(|e| match e {
-                    object_store::Error::NotFound { .. } => Error::FileNotFound {
-                        path: std::path::PathBuf::from(&path_owned),
-                    },
-                    e => Error::General(format!(
-                        "Failed to access {} object at {}: {}",
-                        storage_type, path_owned, e
-                    )),
+                let meta = store.head(&obj_path).await.map_err(|e| {
+                    Error::from_object_store(e, &path_owned)
                 })?;
 
                 Ok(ObjectMetadata {
@@ -141,7 +132,7 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
         let storage_type = self.storage_type_name;
         let range = options.range;
 
-        with_retry(&self.retry_config, &format!("{} get", storage_type), || {
+        self.retry_context.execute(&format!("{} get", storage_type), || {
             let store = store.clone();
             let obj_path = obj_path.clone();
             let path_owned = path_owned.clone();
@@ -157,10 +148,7 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
                     );
                     let range = start..end;
                     store.get_range(&obj_path, range).await.map_err(|e| {
-                        Error::General(format!(
-                            "Failed to get {} object range: {}",
-                            storage_type, e
-                        ))
+                        Error::from_object_store(e, &path_owned)
                     })
                 } else {
                     // Get full object
@@ -169,14 +157,8 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
                         storage_type.to_uppercase(),
                         path_owned
                     );
-                    let result = store.get(&obj_path).await.map_err(|e| match e {
-                        object_store::Error::NotFound { .. } => Error::FileNotFound {
-                            path: std::path::PathBuf::from(&path_owned),
-                        },
-                        e => Error::General(format!(
-                            "Failed to access {} object at {}: {}",
-                            storage_type, path_owned, e
-                        )),
+                    let result = store.get(&obj_path).await.map_err(|e| {
+                        Error::from_object_store(e, &path_owned)
                     })?;
 
                     result.bytes().await.map_err(|e| {
@@ -197,13 +179,13 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
         let store = self.store.clone();
         let storage_type = self.storage_type_name;
 
-        with_retry(&self.retry_config, &format!("{} put", storage_type), || {
+        self.retry_context.execute(&format!("{} put", storage_type), || {
             let store = store.clone();
             let obj_path = obj_path.clone();
             let data = data.clone();
             async move {
                 store.put(&obj_path, data.into()).await.map_err(|e| {
-                    Error::General(format!("Failed to put {} object: {}", storage_type, e))
+                    Error::from_object_store(e, path)
                 })?;
                 Ok(())
             }
@@ -232,10 +214,7 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
 
         while let Some(result) = stream.next().await {
             let meta = result.map_err(|e| {
-                Error::General(format!(
-                    "Failed to list {} objects: {}",
-                    self.storage_type_name, e
-                ))
+                Error::from_object_store(e, prefix)
             })?;
 
             // Reconstruct full cloud path including bucket
@@ -274,15 +253,14 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
         let store = self.store.clone();
         let storage_type = self.storage_type_name;
 
-        with_retry(
-            &self.retry_config,
+        self.retry_context.execute(
             &format!("{} delete", storage_type),
             || {
                 let store = store.clone();
                 let obj_path = obj_path.clone();
                 async move {
                     store.delete(&obj_path).await.map_err(|e| {
-                        Error::General(format!("Failed to delete {} object: {}", storage_type, e))
+                        Error::from_object_store(e, path)
                     })?;
                     Ok(())
                 }
@@ -300,13 +278,13 @@ impl<P: CloudPathParser> StorageBackend for BaseStorageBackend<P> {
         let store = self.store.clone();
         let storage_type = self.storage_type_name;
 
-        with_retry(&self.retry_config, &format!("{} copy", storage_type), || {
+        self.retry_context.execute(&format!("{} copy", storage_type), || {
             let store = store.clone();
             let from_path = from_path.clone();
             let to_path = to_path.clone();
             async move {
                 store.copy(&from_path, &to_path).await.map_err(|e| {
-                    Error::General(format!("Failed to copy {} object: {}", storage_type, e))
+                    Error::from_object_store(e, from)
                 })?;
                 Ok(())
             }

@@ -146,6 +146,7 @@ impl ObjectStoreAdapter {
                 store: "storage_backend",
                 source: Box::new(e),
             },
+            Error::ObjectStore(e) => e,
             other => object_store::Error::Generic {
                 store: "storage_backend",
                 source: Box::new(std::io::Error::other(format!("Storage error: {}", other))),

@@ -9,6 +9,7 @@ use crate::cli::parser::ImportDeltaArgs;
 use crate::cli::parser::ImportParquetArgs;
 use crate::core::storage::traits::{GetOptions, ObjectMetadata};
 use crate::error::{Error, Result};
+use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
 /// Handler for import commands
 pub struct ImportCommand;
@@ -17,6 +18,20 @@ impl ImportCommand {
     /// Import from Delta Lake table
     #[cfg(feature = "delta")]
     pub async fn delta(args: ImportDeltaArgs) -> Result<()> {
+        // Apply timeout and cancellation from global resource limits
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: Delta metadata + file lists
+                let estimated_memory = 128 * 1024 * 1024; // 128MB for Delta operations
+                track_memory_usage(estimated_memory)?;
+                
+                Self::delta_inner(args).await
+            }).await
+        }).await
+    }
+    
+    #[cfg(feature = "delta")]
+    async fn delta_inner(args: ImportDeltaArgs) -> Result<()> {
         use deltalake::DeltaTableBuilder;
 
         println!(
@@ -166,6 +181,19 @@ impl ImportCommand {
 
     /// Import from Parquet files
     pub async fn parquet(args: ImportParquetArgs) -> Result<()> {
+        // Apply timeout and cancellation from global resource limits
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: file lists + parquet reading buffers
+                let estimated_memory = 256 * 1024 * 1024; // 256MB for Parquet operations
+                track_memory_usage(estimated_memory)?;
+                
+                Self::parquet_inner(args).await
+            }).await
+        }).await
+    }
+    
+    async fn parquet_inner(args: ImportParquetArgs) -> Result<()> {
         use crate::core::storage::StorageBackendFactory;
         use crate::core::storage::traits::ListOptions;
 

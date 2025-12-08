@@ -12,6 +12,7 @@ use crate::core::operations::inspect::{InspectOperation, InspectOptions};
 use crate::core::storage::StorageBackendFactory;
 use crate::core::{CatalogConfig, TableRef};
 use crate::error::Result;
+use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
 use common::{PhysicalInspectOptions, VerbosityLevel};
 
@@ -21,6 +22,23 @@ pub struct InspectCommand;
 impl InspectCommand {
     /// Execute inspect command
     pub async fn execute(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // Apply timeout and cancellation from global resource limits
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: depends on --deep flag and rows
+                let estimated_memory = if args.deep {
+                    512 * 1024 * 1024 // 512MB for deep inspection
+                } else {
+                    128 * 1024 * 1024 // 128MB for regular inspection
+                };
+                track_memory_usage(estimated_memory)?;
+                
+                Self::inspect_inner(args, catalog_config).await
+            }).await
+        }).await
+    }
+    
+    async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         // Priority 1: If --catalog-uri is provided, use it directly
         if let Some(ref cli_catalog) = catalog_config {
             let table_input = args.path.as_ref().ok_or_else(|| {

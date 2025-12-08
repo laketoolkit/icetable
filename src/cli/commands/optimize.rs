@@ -14,6 +14,7 @@ use crate::core::metadata::MaintenanceResult;
 use crate::core::utils::parse_bytes;
 use crate::core::{CatalogConfig, TableFormat, detect_table_format_async, format_bytes};
 use crate::error::{Error, Result};
+use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
 /// Handler for optimize command
 pub struct OptimizeCommand;
@@ -58,16 +59,25 @@ impl OptimizeCommand {
 
         let service = OptimizeService::with_config(config);
 
-        let result = match format {
-            TableFormat::Delta => Self::optimize_delta_data(&args, &service).await?,
-            TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), committer).await?,
-            TableFormat::Unknown => {
-                return Err(Error::General(format!(
-                    "Path '{}' is not a Delta Lake or Iceberg table",
-                    table_path
-                )));
-            }
-        };
+        // Apply timeout and cancellation
+        let result = with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: target_size * parallelism for streaming buffers
+                let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
+                track_memory_usage(estimated_memory)?;
+                
+                match format {
+                    TableFormat::Delta => Self::optimize_delta_data(&args, &service).await,
+                    TableFormat::Iceberg => Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), committer).await,
+                    TableFormat::Unknown => {
+                        Err(Error::General(format!(
+                            "Path '{}' is not a Delta Lake or Iceberg table",
+                            table_path
+                        )))
+                    }
+                }
+            }).await
+        }).await?;
 
         Self::output_data_result(&result, &args.output)?;
         Ok(())
@@ -101,20 +111,29 @@ impl OptimizeCommand {
         // Detect table format (supports remote storage)
         let format = detect_table_format_async(&table_path).await;
 
-        match format {
-            TableFormat::Delta => {
-                println!(
-                    "{}",
-                    "Delta Lake does not use manifest files. Use 'optimize data' instead.".yellow()
-                );
-                Ok(())
-            }
-            TableFormat::Iceberg => Self::rewrite_iceberg_manifests(&table_path, &args, committer).await,
-            TableFormat::Unknown => Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                table_path
-            ))),
-        }
+        // Apply timeout and cancellation
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: target_size for manifest buffers
+                let estimated_memory = args.target_size * 2; // Double for safety
+                track_memory_usage(estimated_memory)?;
+                
+                match format {
+                    TableFormat::Delta => {
+                        println!(
+                            "{}",
+                            "Delta Lake does not use manifest files. Use 'optimize data' instead.".yellow()
+                        );
+                        Ok(())
+                    }
+                    TableFormat::Iceberg => Self::rewrite_iceberg_manifests(&table_path, &args, committer).await,
+                    TableFormat::Unknown => Err(Error::General(format!(
+                        "Path '{}' is not a Delta Lake or Iceberg table",
+                        table_path
+                    ))),
+                }
+            }).await
+        }).await
     }
 
     /// Optimize Delta Lake data files - not supported, use Iceberg instead

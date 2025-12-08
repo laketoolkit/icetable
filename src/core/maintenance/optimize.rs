@@ -35,11 +35,29 @@ use crate::core::metadata::{
 };
 use crate::core::utils::{format_bytes, generate_unique_id, normalize_relative_path};
 use crate::error::{Error, Result};
+use crate::utils::register_cleanup_handler;
 
 /// Result of compacting a single partition group
 struct CompactionResult {
     added: Vec<DataFileInfo>,
     removed: Vec<DataFileInfo>,
+}
+
+/// Tracks temporary files created during compaction for cleanup on cancellation
+struct TemporaryFileTracker {
+    files: Vec<String>,
+}
+
+impl TemporaryFileTracker {
+    fn new() -> Self {
+        Self {
+            files: Vec::new(),
+        }
+    }
+
+    fn add_file(&mut self, path: String) {
+        self.files.push(path);
+    }
 }
 
 /// Service for optimizing tables by compacting small files
@@ -317,6 +335,21 @@ impl OptimizeService {
         // Track all output files
         let mut output_files: Vec<DataFileInfo> = Vec::new();
 
+        // Track temporary files for cleanup
+        let mut temp_tracker = TemporaryFileTracker::new();
+        
+        // Register cleanup handler for cancellation
+        let tracker_for_cleanup = temp_tracker.files.clone();
+        let object_store_for_cleanup = object_store.clone();
+        register_cleanup_handler(move || {
+            for path in &tracker_for_cleanup {
+                let object_path = ObjectPath::from(path.as_str());
+                let _ = tokio::runtime::Handle::current().block_on(async {
+                    object_store_for_cleanup.delete(&object_path).await
+                });
+            }
+        });
+
         // Current writer state
         let mut current_writer: Option<AsyncArrowWriter<parquet::arrow::async_writer::ParquetObjectWriter>> = None;
         let mut current_path: Option<std::path::PathBuf> = None;
@@ -373,8 +406,10 @@ impl OptimizeService {
                             .await
                             .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
 
+                        let file_path = out_path.to_string_lossy().to_string();
+                        temp_tracker.add_file(file_path.clone());
                         output_files.push(DataFileInfo {
-                            path: out_path.to_string_lossy().to_string(),
+                            path: file_path,
                             size: meta.size,
                             record_count: current_records,
                             partition: partition.clone(),
@@ -435,8 +470,10 @@ impl OptimizeService {
                 .await
                 .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
 
+            let file_path = out_path.to_string_lossy().to_string();
+            temp_tracker.add_file(file_path.clone());
             output_files.push(DataFileInfo {
-                path: out_path.to_string_lossy().to_string(),
+                path: file_path,
                 size: meta.size,
                 record_count: current_records,
                 partition: partition.clone(),

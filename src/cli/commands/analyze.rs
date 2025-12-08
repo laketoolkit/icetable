@@ -16,6 +16,7 @@ use crate::core::metadata::IcebergMetadataService;
 use crate::core::utils::format_bytes;
 use crate::core::{CatalogConfig, TableFormat, detect_table_format_async};
 use crate::error::{Error, Result};
+use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
 
 /// Handler for analyze command
 pub struct AnalyzeCommand;
@@ -24,25 +25,34 @@ impl AnalyzeCommand {
     /// Execute analyze command
     pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        
+        // Apply timeout and cancellation from global resource limits
+        with_timeout(async {
+            with_cancellation(async {
+                // Estimate memory usage: metadata + file lists
+                let estimated_memory = 128 * 1024 * 1024; // 128MB for analysis
+                track_memory_usage(estimated_memory)?;
 
-        // Detect table format
-        let format = detect_table_format_async(&table_path).await;
+                // Detect table format
+                let format = detect_table_format_async(&table_path).await;
 
-        match format {
-            TableFormat::Delta => {
-                println!(
-                    "{}",
-                    "Delta Lake analysis is not supported. Use 'icetable import delta' to convert to Iceberg."
-                        .yellow()
-                );
-                Ok(())
-            }
-            TableFormat::Iceberg => Self::analyze_iceberg(&table_path, &args).await,
-            TableFormat::Unknown => Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                table_path
-            ))),
-        }
+                match format {
+                    TableFormat::Delta => {
+                        println!(
+                            "{}",
+                            "Delta Lake analysis is not supported. Use 'icetable import delta' to convert to Iceberg."
+                                .yellow()
+                        );
+                        Ok(())
+                    }
+                    TableFormat::Iceberg => Self::analyze_iceberg(&table_path, &args).await,
+                    TableFormat::Unknown => Err(Error::General(format!(
+                        "Path '{}' is not a Delta Lake or Iceberg table",
+                        table_path
+                    ))),
+                }
+            }).await
+        }).await
     }
 
     async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs) -> Result<()> {

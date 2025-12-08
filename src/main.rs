@@ -91,6 +91,7 @@ async fn async_main(cli: Cli) -> i32 {
         Commands::Tag(args) => TagCommand::execute(args, catalog_config.clone()).await,
         Commands::Config(args) => ConfigCommand::execute(args).await,
         Commands::Catalog(args) => CatalogCommand::execute(args).await,
+        Commands::Generate(args) => GenerateCommand::execute(args).await,
         Commands::Completions(args) => {
             args.generate();
             Ok(())
