@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::storage::{ObjectStoreExt, Storage, to_path};
@@ -255,9 +255,10 @@ impl PhysicalInspector for DeltaInspector {
         "Delta Lake"
     }
 
-    fn can_inspect(&self, path: &Path) -> bool {
-        // Check if path contains _delta_log directory
-        let delta_log_path = path.join("_delta_log");
+    fn can_inspect(&self, path: &str) -> bool {
+        // For local paths, check if _delta_log directory exists
+        let local_path = std::path::Path::new(path);
+        let delta_log_path = local_path.join("_delta_log");
         delta_log_path.exists() && delta_log_path.is_dir()
     }
 }
@@ -267,49 +268,24 @@ pub struct DeltaInspectorFactory;
 
 #[async_trait]
 impl PhysicalInspectorFactory for DeltaInspectorFactory {
-    fn create(&self, path: &Path, storage: Storage) -> Result<Box<dyn PhysicalInspector>> {
-        Ok(Box::new(DeltaInspector::new(path.to_path_buf(), storage)))
+    fn create(&self, path: &str, storage: Storage) -> Result<Box<dyn PhysicalInspector>> {
+        Ok(Box::new(DeltaInspector::new(PathBuf::from(path), storage)))
     }
 
-    async fn can_handle(&self, path: &Path, storage: &Storage) -> bool {
-        // Check for _delta_log directory by trying to list files in it
-        let path_str = path.to_str().unwrap_or("");
+    async fn can_handle(&self, _path: &str, storage: &Storage) -> bool {
+        // The storage is already configured with the table path as prefix.
+        // We just need to check if there's a _delta_log/ directory.
+        use futures::TryStreamExt;
 
-        // Strip the scheme (s3://, file://, etc.) if present, then strip bucket/container
-        let clean_path = if let Some(pos) = path_str.find("://") {
-            let after_scheme = &path_str[pos + 3..];
-            // For cloud storage, strip the bucket/container name (first path segment)
-            if let Some(slash_pos) = after_scheme.find('/') {
-                &after_scheme[slash_pos + 1..]
-            } else {
-                // Just the bucket name, no path
-                ""
-            }
-        } else {
-            path_str
-        };
+        let prefix_path = to_path("_delta_log/");
+        let mut stream = storage.list(Some(&prefix_path));
 
-        let delta_log_prefix = if clean_path.is_empty() {
-            "_delta_log/".to_string()
-        } else {
-            format!("{}/_delta_log/", clean_path)
-        };
-
-        let list_opts = crate::core::storage::traits::ListOptions {
-            prefix: Some(delta_log_prefix),
-            delimiter: None,
-            max_results: Some(1),
-            continuation_token: None,
-        };
-
-        match storage.list(&list_opts).await {
-            Ok(result) => !result.objects.is_empty(),
-            Err(_) => false,
-        }
+        // Check if we can get at least one item in _delta_log/
+        matches!(stream.try_next().await, Ok(Some(_)))
     }
 
     fn priority(&self) -> i32 {
-        80 // Higher than Parquet (100), checked before generic file formats
+        80 // Higher than Iceberg (75), checked before
     }
 }
 

@@ -19,7 +19,7 @@ mod orphan;
 pub use factory::IcebergInspectorFactory;
 
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::core::inspection::iceberg_metadata_extractor::extract_file_info;
 use crate::core::inspection::traits::{
@@ -101,8 +101,9 @@ impl IcebergInspector {
         options: &PhysicalInspectOptions,
         iceberg_metadata: Option<&iceberg::spec::TableMetadata>,
     ) -> FileInfo {
+        let path_str = self.path.to_str().unwrap_or("");
         extract_file_info(
-            &self.path,
+            path_str,
             metadata,
             metadata_path,
             options,
@@ -195,13 +196,15 @@ impl PhysicalInspector for IcebergInspector {
         "Apache Iceberg"
     }
 
-    fn can_inspect(&self, path: &Path) -> bool {
-        // Check if path contains a metadata/ directory
-        let path_str = path.to_str().unwrap_or("");
-        let metadata_path = path.join("metadata");
+    fn can_inspect(&self, path: &str) -> bool {
+        // For local paths, check if metadata directory exists
+        // For URLs, this is a quick heuristic - actual detection is done in factory
+        let local_path = std::path::Path::new(path);
+        let metadata_path = local_path.join("metadata");
 
-        // Check if metadata directory exists OR if path ends with/contains metadata
-        metadata_path.exists() || path_str.ends_with("/metadata") || path_str.contains("/metadata/")
+        metadata_path.exists()
+            || path.ends_with("/metadata")
+            || path.contains("/metadata/")
     }
 }
 

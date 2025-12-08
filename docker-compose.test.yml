@@ -1,8 +1,3 @@
-version: '3.8'
-
-# Test environment for icetable integration tests
-# Usage: docker-compose -f docker-compose.test.yml up -d
-
 services:
   minio:
     image: minio/minio:latest

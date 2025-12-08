@@ -66,7 +66,6 @@
 use crate::error::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Verbosity level for inspection output
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -362,8 +361,8 @@ pub struct ColumnStatistics {
 ///         "My Custom Format"
 ///     }
 ///
-///     fn can_inspect(&self, path: &Path) -> bool {
-///         path.extension().map_or(false, |ext| ext == "myformat")
+///     fn can_inspect(&self, path: &str) -> bool {
+///         path.ends_with(".myformat")
 ///     }
 /// }
 /// ```
@@ -399,10 +398,10 @@ pub trait PhysicalInspector: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `path` - The path to check
+    /// * `path` - The path or URL to check (e.g., "s3://bucket/table" or "/local/path")
     ///
     /// # Returns
     ///
     /// `true` if this inspector can likely handle the given path
-    fn can_inspect(&self, path: &Path) -> bool;
+    fn can_inspect(&self, path: &str) -> bool;
 }

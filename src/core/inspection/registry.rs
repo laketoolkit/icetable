@@ -3,17 +3,17 @@
 use super::traits::PhysicalInspector;
 use crate::core::storage::Storage;
 use crate::error::{Error, Result};
-use std::path::Path;
 
 /// Factory trait for creating physical inspectors
 #[async_trait::async_trait]
 pub trait PhysicalInspectorFactory: Send + Sync {
-    /// Create an inspector for the given path and storage
-    fn create(&self, path: &Path, storage: Storage) -> Result<Box<dyn PhysicalInspector>>;
+    /// Create an inspector for the given path (URL or local path) and storage
+    fn create(&self, path: &str, storage: Storage) -> Result<Box<dyn PhysicalInspector>>;
 
     /// Check if this factory can handle the given path
-    /// For remote storage (S3, etc.), this may need to check for directory existence
-    async fn can_handle(&self, path: &Path, storage: &Storage) -> bool;
+    /// The storage is already configured for this path, so list operations
+    /// should use relative paths (e.g., "metadata/" not "{table_path}/metadata/")
+    async fn can_handle(&self, path: &str, storage: &Storage) -> bool;
 
     /// Get the priority of this factory (higher = checked first)
     fn priority(&self) -> i32 {
@@ -56,10 +56,10 @@ impl PhysicalInspectorRegistry {
             .sort_by_key(|f| std::cmp::Reverse(f.priority()));
     }
 
-    /// Create an inspector for the given path
+    /// Create an inspector for the given path (URL or local path)
     pub async fn create_inspector(
         &self,
-        path: &Path,
+        path: &str,
         storage: Storage,
     ) -> Result<Box<dyn PhysicalInspector>> {
         for factory in &self.factories {
@@ -69,12 +69,12 @@ impl PhysicalInspectorRegistry {
         }
 
         Err(Error::InvalidFormat {
-            message: format!("No table format inspector found for: {}", path.display()),
+            message: format!("No table format inspector found for: {}", path),
         })
     }
 
     /// Check if any factory can handle the given path
-    pub async fn can_handle(&self, path: &Path, storage: &Storage) -> bool {
+    pub async fn can_handle(&self, path: &str, storage: &Storage) -> bool {
         for factory in &self.factories {
             if factory.can_handle(path, storage).await {
                 return true;

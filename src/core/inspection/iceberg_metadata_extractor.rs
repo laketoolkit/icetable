@@ -1,7 +1,6 @@
 //! Iceberg metadata extraction utilities
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use crate::core::inspection::PhysicalInspectOptions;
 use crate::core::inspection::traits::{ColumnInfo, FileInfo, VerbosityLevel};
@@ -9,7 +8,7 @@ use crate::error::{Error, Result};
 
 /// Extract file information from Iceberg metadata
 pub fn extract_file_info(
-    path: &Path,
+    path: &str,
     metadata: &serde_json::Value,
     metadata_path: &str,
     options: &PhysicalInspectOptions,
@@ -127,7 +126,7 @@ pub fn extract_file_info(
     }
 
     FileInfo {
-        path: path.display().to_string(),
+        path: path.to_string(),
         file_size: 0, // Iceberg tables don't have a single file size
         format_version: format_version.to_string(),
         created_by: None,

@@ -9,7 +9,7 @@ use crate::cli::parser::InspectArgs;
 use crate::config::{ResolveTableRef, ResolvedTable};
 use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
 use crate::core::operations::inspect::{InspectOperation, InspectOptions};
-use crate::core::storage::{Storage, create_object_store};
+use crate::core::storage::create_object_store;
 use crate::core::{CatalogConfig, TableRef};
 use crate::error::Result;
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
@@ -110,10 +110,7 @@ impl InspectCommand {
 
     /// Execute physical layout inspection (new mode)
     async fn execute_physical_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
-        // 1. Create storage backend based on path
-        let storage = create_object_store(path_str).await?;
-
-        // 2. Build physical inspect options
+        // 1. Build physical inspect options
         let verbosity = if args.verbose {
             VerbosityLevel::Verbose
         } else {
@@ -127,11 +124,10 @@ impl InspectCommand {
             args.deep,
         );
 
-        // 3. Inspect physical layout (progress shown inside service)
-        let path = Path::new(path_str);
-        let result = self::inspect_physical_layout(path, storage, &options).await?;
+        // 2. Inspect physical layout (progress shown inside service)
+        let result = self::inspect_physical_layout(path_str, &options).await?;
 
-        // 4. Display result
+        // 3. Display result
         println!("{}", result);
 
         Ok(())
@@ -298,10 +294,9 @@ impl InspectCommand {
     }
 }
 
-/// Inspect physical layout of a file
+/// Inspect physical layout of a table
 async fn inspect_physical_layout(
-    path: &Path,
-    _storage: Storage,
+    path: &str,
     options: &PhysicalInspectOptions,
 ) -> Result<String> {
     // Use the new PhysicalInspectionService with dynamic inspector registry
