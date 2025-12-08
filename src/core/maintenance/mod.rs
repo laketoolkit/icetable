@@ -4,6 +4,7 @@
 //! These services use the MetadataService trait to work with both
 //! Delta Lake and Iceberg tables through a unified interface.
 
+mod manifest;
 mod optimize;
 mod partition_filter;
 mod refs;
@@ -11,6 +12,7 @@ mod repair;
 mod snapshot;
 mod vacuum;
 
+pub use manifest::{ManifestAnalysis, ManifestConfig, ManifestRewriteResult, ManifestService};
 pub use optimize::OptimizeService;
 pub use partition_filter::{matches_partition_filter, PartitionFilter};
 pub use refs::{RefConfig, RefResult, RefService};
