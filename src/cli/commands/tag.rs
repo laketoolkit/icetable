@@ -3,6 +3,7 @@
 //! Manages tags for Iceberg tables.
 
 use colored::Colorize;
+use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
 
 use super::common::{TableResolution, resolve_table};
 use crate::cli::parser::{TagArgs, TagCommands};
@@ -99,17 +100,26 @@ impl TagCommand {
                     .map_err(|e| Error::General(e.to_string()))?
             );
         } else {
-            println!("{} Iceberg tags at {}", "Listing".green(), ctx.path);
-            println!();
-            println!("{:<20} {:<20}", "TAG".cyan(), "SNAPSHOT ID".cyan());
-            println!("{}", "-".repeat(40));
-
             if tags.is_empty() {
                 println!("{}", "No tags found".dimmed());
             } else {
+                let mut table = comfy_table::Table::new();
+                table.load_preset(UTF8_FULL);
+                table.set_content_arrangement(ContentArrangement::Dynamic);
+
+                table.set_header(vec![
+                    Cell::new("Tag".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Snapshot ID".cyan().to_string()).set_alignment(CellAlignment::Right),
+                ]);
+
                 for tag in &tags {
-                    println!("{:<20} {:<20}", tag.name, tag.snapshot_id);
+                    table.add_row(vec![
+                        Cell::new(&tag.name).set_alignment(CellAlignment::Left),
+                        Cell::new(tag.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                    ]);
                 }
+
+                println!("{}", table);
             }
         }
 

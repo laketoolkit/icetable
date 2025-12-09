@@ -86,9 +86,25 @@ impl<T: ObjectStore> ObjectStoreExt for T {}
 
 /// Convert a string path to an object_store Path
 ///
-/// Expects relative paths. For storage with PrefixStore, pass paths
-/// relative to the prefix (e.g., "data/file.parquet" not "s3://bucket/table/data/file.parquet").
+/// Handles both relative paths and full URLs (s3://, gs://, az://, etc.).
+/// For full URLs, extracts the path component after the bucket.
 pub fn to_path(path: &str) -> Path {
+    // Handle full URLs (s3://bucket/path, gs://bucket/path, etc.)
+    if let Some(rest) = path
+        .strip_prefix("s3://")
+        .or_else(|| path.strip_prefix("s3a://"))
+        .or_else(|| path.strip_prefix("gs://"))
+        .or_else(|| path.strip_prefix("az://"))
+        .or_else(|| path.strip_prefix("abfs://"))
+        .or_else(|| path.strip_prefix("abfss://"))
+    {
+        // Skip the bucket name and get the rest of the path
+        if let Some(slash_pos) = rest.find('/') {
+            let relative_path = &rest[slash_pos + 1..];
+            return Path::from(relative_path);
+        }
+    }
+
     // Strip leading slash for relative paths
     let normalized = path.trim_start_matches('/');
     Path::from(normalized)

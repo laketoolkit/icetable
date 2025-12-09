@@ -1,12 +1,16 @@
 //! Inspect command implementation
 //!
 //! Shows detailed information about table structure, metadata, and statistics.
-//! Uses unified TableLoader for consistent table loading.
+//! Uses IcebergTableInspector from core::operations for the actual inspection logic.
 
 use colored::Colorize;
 
+use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use crate::cli::parser::InspectArgs;
-use crate::core::{CatalogConfig, TableExt, TableLoader};
+use crate::core::operations::inspect::{
+    IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
+};
+use crate::core::{format_bytes, CatalogConfig, TableLoader};
 use crate::error::Result;
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
@@ -16,17 +20,9 @@ pub struct InspectCommand;
 impl InspectCommand {
     /// Execute inspect command
     pub async fn execute(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // Apply timeout and cancellation from global resource limits
         with_timeout(async {
             with_cancellation(async {
-                // Estimate memory usage: depends on --deep flag and rows
-                let estimated_memory = if args.deep {
-                    512 * 1024 * 1024 // 512MB for deep inspection
-                } else {
-                    128 * 1024 * 1024 // 128MB for regular inspection
-                };
-                track_memory_usage(estimated_memory)?;
-
+                track_memory_usage(128 * 1024 * 1024)?;
                 Self::inspect_inner(args, catalog_config).await
             })
             .await
@@ -35,7 +31,6 @@ impl InspectCommand {
     }
 
     async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // Get table reference from args
         let table_input = args.path.as_ref().ok_or_else(|| {
             crate::error::Error::General("Table path or identifier required".to_string())
         })?;
@@ -43,137 +38,326 @@ impl InspectCommand {
         // Load table using unified TableLoader
         let table = TableLoader::load_table(table_input, catalog_config.as_ref()).await?;
 
-        // Execute inspection
-        Self::execute_inspect(&table, args).await
-    }
+        // Build inspection options from CLI args
+        let options = IcebergInspectOptions::from_cli(args.verbose);
 
-    /// Execute inspection on a loaded table
-    async fn execute_inspect(
-        table: &std::sync::Arc<iceberg::table::Table>,
-        args: InspectArgs,
-    ) -> Result<()> {
-        // Get metadata
-        let (metadata, version) = table.metadata_with_version();
-        
-        // Build output
-        let mut output = String::new();
-        
-        // Header
-        output.push_str(&format!("{}", "Iceberg Table Inspection".cyan().bold()));
-        output.push_str("\n\n");
-        
-        // Basic table info
-        output.push_str(&format!("{}: Iceberg v{}\n", "Format".bold(), version));
-        output.push_str(&format!("{}: {}\n", "Location".bold(), metadata.location()));
-        // Note: table_uuid is private in iceberg crate
-        // Skipping UUID display for now
-        
-        if let Some(current_snapshot_id) = metadata.current_snapshot_id() {
-            output.push_str(&format!("{}: {}\n", "Current Snapshot".bold(), current_snapshot_id));
-        } else {
-            output.push_str(&format!("{}: None\n", "Current Snapshot".bold()));
-        }
-        
-        output.push_str(&format!("{}: {}\n", "Snapshot Count".bold(), metadata.snapshots().len()));
-        // Note: last_updated_ms and last_column_id are private in iceberg crate
-        // Using available public information
-        output.push_str(&format!("{}: {}\n", "Format Version".bold(), metadata.format_version()));
-        
-        // Schema if requested or default
-        if args.schema || (!args.metadata && !args.stats && !args.preview && !args.layout) {
-            output.push('\n');
-            output.push_str(&format!("{}", "Schema:".cyan().bold()));
-            output.push('\n');
-            
-            let schema = metadata.current_schema();
-            output.push_str(&format!("  Schema ID: {}\n", schema.schema_id()));
-            
-            let struct_type = schema.as_struct();
-            output.push_str(&format!("  Fields: {}\n", struct_type.fields().len()));
-            
-            for field in struct_type.fields() {
-                let nullable = if field.required { "" } else { " (nullable)" };
-                output.push_str(&format!("  - {}: {:?}{}\n", field.name, field.field_type, nullable));
-            }
-        }
-        
-        // Partition spec if layout requested or default
-        if args.layout || (!args.metadata && !args.stats && !args.preview && !args.schema) {
-            output.push('\n');
-            output.push_str(&format!("{}", "Partition Spec:".cyan().bold()));
-            output.push('\n');
-            
-            let partition_spec = metadata.default_partition_spec();
-            // Note: spec_id and fields are private in iceberg crate
-            // Using available public information
-            output.push_str(&format!("  Partition Spec ID: {}\n", partition_spec.spec_id()));
-            output.push_str("  (Partition details require accessing private fields)\n");
-            
-            output.push_str(&format!("  Sort Order ID: {}\n", metadata.default_sort_order_id()));
-        }
-        
-        // Stats if requested
-        if args.stats {
-            output.push('\n');
-            output.push_str(&format!("{}", "Statistics:".cyan().bold()));
-            output.push('\n');
-            
-            if let Some(current_snapshot_id) = metadata.current_snapshot_id()
-                && let Some(snapshot) = metadata.snapshot_by_id(current_snapshot_id) {
-                    let summary = snapshot.summary();
-                    output.push_str(&format!("  Operation: {:?}\n", summary.operation));
-                    
-                    for (key, value) in &summary.additional_properties {
-                        if key.starts_with("added-") || key.starts_with("total-") || key.starts_with("deleted-") {
-                            output.push_str(&format!("  {}: {}\n", key, value));
-                        }
-                    }
-                }
-        }
-        
-        // Metadata if requested
-        if args.metadata {
-            output.push('\n');
-            output.push_str(&format!("{}", "Metadata:".cyan().bold()));
-            output.push('\n');
-            
-            // Note: properties is private in iceberg crate
-            output.push_str("  Properties: (requires accessing private field)\n");
-            
-            output.push_str(&format!("  Current Schema ID: {}\n", metadata.current_schema_id()));
-            output.push_str(&format!("  Schemas: {}\n", metadata.schemas_iter().count()));
-            output.push_str(&format!("  Partition Specs: {}\n", metadata.partition_specs_iter().count()));
-            output.push_str(&format!("  Sort Orders: {}\n", metadata.sort_orders_iter().count()));
-        }
-        
-        // Preview if requested
-        if args.preview {
-            output.push('\n');
-            output.push_str(&format!("{}", "Data Preview:".cyan().bold()));
-            output.push('\n');
-            output.push_str("  (Data preview requires scan implementation)\n");
-            // TODO: Implement data preview using table.scan()
-        }
-        
-        // Snapshots if verbose
-        if args.verbose {
-            output.push('\n');
-            output.push_str(&format!("{}", "Snapshots:".cyan().bold()));
-            output.push('\n');
-            
-            for snapshot in metadata.snapshots() {
-                let timestamp = chrono::DateTime::from_timestamp_millis(snapshot.timestamp_ms())
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                
-                output.push_str(&format!("  - ID: {}, Timestamp: {}, Operation: {:?}\n",
-                    snapshot.snapshot_id(), timestamp, snapshot.summary().operation));
-            }
-        }
-        
+        // Execute inspection using the core operation
+        let result = IcebergTableInspector::inspect(&table, &options)?;
+
+        // Format and display result
+        let output = Self::format_result(&result, &options);
         println!("{}", output);
+
         Ok(())
     }
+
+    /// Format inspection result for display
+    fn format_result(result: &IcebergInspectResult, options: &IcebergInspectOptions) -> String {
+        let layout = BoxLayout::new(100);
+        let renderer = BoxRenderer::new(layout);
+        let mut container = Box::titled("Iceberg Table Inspection");
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // TABLE INFORMATION
+        // ═══════════════════════════════════════════════════════════════════════
+        let key_width = 18;
+        let mut table_info = vec![
+            BoxItem::kv_aligned("Format", format!("Iceberg v{}", result.format_version), key_width),
+            BoxItem::kv_aligned("Location", &result.location, key_width),
+            BoxItem::kv_aligned("Table UUID", &result.table_uuid, key_width),
+            BoxItem::kv_aligned(
+                "Current Snapshot",
+                result
+                    .current_snapshot_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "None".to_string()),
+                key_width,
+            ),
+            BoxItem::kv_aligned("Snapshot Count", result.snapshot_count.to_string(), key_width),
+            BoxItem::kv_aligned("Last Updated", format_timestamp(result.last_updated_ms), key_width),
+        ];
+
+        // Add sequence number in verbose mode
+        if options.verbose {
+            table_info.push(BoxItem::kv_aligned(
+                "Last Sequence",
+                result.last_sequence_number.to_string(),
+                key_width,
+            ));
+        }
+
+        container = container.section(BoxSection::titled("Table Information").items(table_info));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // CURRENT STATE (records, files, delete files, size)
+        // Always show these fields even if some values are missing
+        // ═══════════════════════════════════════════════════════════════════════
+        let state = &result.current_state;
+        let mut state_items = Vec::new();
+
+        // Total Records
+        state_items.push(BoxItem::kv_aligned(
+            "Total Records",
+            state.total_records.map(format_number).unwrap_or_else(|| "-".to_string()),
+            16,
+        ));
+
+        // Data Files
+        state_items.push(BoxItem::kv_aligned(
+            "Data Files",
+            state.total_data_files.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+            16,
+        ));
+
+        // Delete Files - always show, highlight if > 0
+        let delete_files_str = match state.total_delete_files {
+            Some(v) if v > 0 => format!("{} {}", v, "(compaction recommended)".yellow()),
+            Some(v) => v.to_string(),
+            None => "0".to_string(),
+        };
+        state_items.push(BoxItem::kv_aligned("Delete Files", delete_files_str, 16));
+
+        // Total Size
+        state_items.push(BoxItem::kv_aligned(
+            "Total Size",
+            state.total_files_size.map(|v| format_bytes(v as u64)).unwrap_or_else(|| "-".to_string()),
+            16,
+        ));
+
+        container = container.section(BoxSection::titled("Current State").items(state_items));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // SCHEMA
+        // ═══════════════════════════════════════════════════════════════════════
+        let mut schema_items = vec![
+            BoxItem::kv_aligned("Schema ID", result.schema_id.to_string(), 12),
+            BoxItem::kv_aligned("Columns", result.fields.len().to_string(), 12),
+        ];
+
+        // Show identifier fields if any
+        if !result.identifier_field_ids.is_empty() {
+            let id_names: Vec<&str> = result
+                .fields
+                .iter()
+                .filter(|f| f.is_identifier)
+                .map(|f| f.name.as_str())
+                .collect();
+            schema_items.push(BoxItem::kv_aligned(
+                "Identifier",
+                id_names.join(", "),
+                12,
+            ));
+        }
+
+        // Add subsection header for fields
+        schema_items.push(BoxItem::Empty);
+        schema_items.push(BoxItem::text(format!(
+            "{} Fields {}",
+            "──".white(),
+            "─".repeat(80).white()
+        )));
+
+        // Calculate max field name width for alignment
+        let max_name_width = result.fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
+
+        for field in &result.fields {
+            let nullable_str = if field.required { "" } else { " (nullable)" };
+            let id_marker = if field.is_identifier { " [ID]" } else { "" };
+
+            if options.verbose {
+                // Verbose: show field ID after name
+                let name_with_id = format!("{} ({})", field.name, field.field_id);
+                let max_verbose_width = max_name_width + 6; // account for " (XX)"
+                schema_items.push(BoxItem::text(format!(
+                    "  {:<width$}  {}{}{}",
+                    name_with_id.white().bold(),
+                    field.field_type.cyan(),
+                    nullable_str.dimmed(),
+                    id_marker.yellow(),
+                    width = max_verbose_width
+                )));
+
+                // Show doc string if present
+                if let Some(ref doc) = field.doc {
+                    schema_items.push(BoxItem::text(format!(
+                        "    {} {}",
+                        "doc:".dimmed(),
+                        doc.dimmed()
+                    )));
+                }
+            } else {
+                // Normal mode: simpler format
+                schema_items.push(BoxItem::text(format!(
+                    "  {:<width$}  {}{}{}",
+                    field.name.white().bold(),
+                    field.field_type.cyan(),
+                    nullable_str.dimmed(),
+                    id_marker.yellow(),
+                    width = max_name_width
+                )));
+            }
+        }
+
+        container = container.section(BoxSection::titled("Schema").items(schema_items));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // PARTITION & SORT
+        // ═══════════════════════════════════════════════════════════════════════
+        let mut partition_items = Vec::new();
+
+        if result.partition_fields.is_empty() {
+            partition_items.push(BoxItem::kv_aligned("Partitioning", "Unpartitioned", 14));
+        } else {
+            partition_items.push(BoxItem::kv_aligned(
+                "Partition Spec",
+                format!("ID {}", result.partition_spec_id),
+                14,
+            ));
+            for (i, field) in result.partition_fields.iter().enumerate() {
+                let is_last = i == result.partition_fields.len() - 1;
+                let prefix = if is_last { "└" } else { "├" };
+                partition_items.push(BoxItem::text(format!(
+                    "{} {}: {}",
+                    prefix.bright_black(),
+                    field.name.white().bold(),
+                    field.transform.cyan()
+                )));
+            }
+        }
+
+        if result.sort_fields.is_empty() {
+            partition_items.push(BoxItem::kv_aligned("Sort Order", "Unsorted", 14));
+        } else {
+            partition_items.push(BoxItem::kv_aligned(
+                "Sort Order",
+                format!("ID {}", result.sort_order_id),
+                14,
+            ));
+            for (i, sf) in result.sort_fields.iter().enumerate() {
+                let is_last = i == result.sort_fields.len() - 1;
+                let prefix = if is_last { "└" } else { "├" };
+                partition_items.push(BoxItem::text(format!(
+                    "{} field {}: {} {}",
+                    prefix.bright_black(),
+                    sf.source_id,
+                    sf.direction.cyan(),
+                    sf.null_order.dimmed()
+                )));
+            }
+        }
+
+        container = container.section(BoxSection::titled("Partition & Sort").items(partition_items));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // PROPERTIES
+        // Normal mode: key properties only
+        // Verbose mode: all properties sorted
+        // ═══════════════════════════════════════════════════════════════════════
+        if !result.properties.is_empty() {
+            let mut prop_items = Vec::new();
+
+            if options.verbose {
+                // Show ALL properties sorted alphabetically
+                let mut sorted_props: Vec<_> = result.properties.iter().collect();
+                sorted_props.sort_by_key(|(k, _)| *k);
+                for (key, value) in sorted_props {
+                    prop_items.push(BoxItem::text(format!("{} = {}", key.cyan(), value)));
+                }
+            } else {
+                // Show only the most important properties
+                let key_properties = [
+                    "write.format.default",
+                    "write.parquet.compression-codec",
+                    "write.target-file-size-bytes",
+                    "write.delete.mode",
+                    "write.update.mode",
+                    "write.merge.mode",
+                ];
+
+                for key in &key_properties {
+                    if let Some(value) = result.properties.get(*key) {
+                        prop_items.push(BoxItem::text(format!("{} = {}", key.cyan(), value)));
+                    }
+                }
+            }
+
+            if !prop_items.is_empty() {
+                container = container.section(BoxSection::titled("Properties").items(prop_items));
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // REFS (branches and tags) - verbose mode only
+        // ═══════════════════════════════════════════════════════════════════════
+        if options.verbose && !result.refs.is_empty() {
+            let mut ref_items = Vec::new();
+            for r in &result.refs {
+                let type_str = if r.ref_type == "branch" {
+                    "branch".green()
+                } else {
+                    "tag".blue()
+                };
+                ref_items.push(BoxItem::text(format!(
+                    "{} ({}) → snapshot {}",
+                    r.name.white().bold(),
+                    type_str,
+                    r.snapshot_id
+                )));
+            }
+            container = container.section(BoxSection::titled("Refs").items(ref_items));
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // METADATA (verbose mode only)
+        // ═══════════════════════════════════════════════════════════════════════
+        if options.verbose {
+            let mut meta_items = vec![
+                BoxItem::kv_aligned("Schema Versions", result.schemas_count.to_string(), 20),
+                BoxItem::kv_aligned("Partition Specs", result.partition_specs_count.to_string(), 20),
+                BoxItem::kv_aligned("Sort Orders", result.sort_orders_count.to_string(), 20),
+            ];
+
+            if !result.metadata_log.is_empty() {
+                meta_items.push(BoxItem::kv_aligned(
+                    "Metadata Files",
+                    result.metadata_log.len().to_string(),
+                    20,
+                ));
+                // Show current metadata file location
+                if let Some(latest) = result.metadata_log.last() {
+                    meta_items.push(BoxItem::kv_aligned(
+                        "Current Metadata",
+                        &latest.metadata_file,
+                        20,
+                    ));
+                }
+            }
+
+            container = container.section(BoxSection::titled("Metadata").items(meta_items));
+        }
+
+        renderer.render(container)
+    }
+}
+
+/// Format timestamp in milliseconds to human-readable string
+fn format_timestamp(timestamp_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Format a number with thousands separators
+fn format_number(n: i64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
 }
 
 // Re-export common module

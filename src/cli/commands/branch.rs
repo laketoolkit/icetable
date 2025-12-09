@@ -3,6 +3,7 @@
 //! Manages branches for Iceberg tables.
 
 use colored::Colorize;
+use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
 
 use super::common::{TableResolution, resolve_table};
 use crate::cli::parser::{BranchArgs, BranchCommands};
@@ -114,29 +115,35 @@ impl BranchCommand {
                     .map_err(|e| Error::General(e.to_string()))?
             );
         } else {
-            println!("{} Iceberg branches at {}", "Listing".green(), ctx.path);
-            println!();
-            println!(
-                "{:<20} {:<20} {}",
-                "BRANCH".cyan(),
-                "SNAPSHOT ID".cyan(),
-                "".cyan()
-            );
-            println!("{}", "-".repeat(50));
-
             if branches.is_empty() {
                 println!("{}", "No branches found".dimmed());
             } else {
+                let mut table = comfy_table::Table::new();
+                table.load_preset(UTF8_FULL);
+                table.set_content_arrangement(ContentArrangement::Dynamic);
+
+                table.set_header(vec![
+                    Cell::new("Branch".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Snapshot ID".cyan().to_string()).set_alignment(CellAlignment::Right),
+                    Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+                ]);
+
                 for branch in &branches {
                     let is_main_current =
                         branch.name == "main" && Some(branch.snapshot_id) == current_snapshot_id;
-                    let marker = if is_main_current {
-                        "(current)".green().to_string()
+                    let status = if is_main_current {
+                        "● current".green().to_string()
                     } else {
                         "".to_string()
                     };
-                    println!("{:<20} {:<20} {}", branch.name, branch.snapshot_id, marker);
+                    table.add_row(vec![
+                        Cell::new(&branch.name).set_alignment(CellAlignment::Left),
+                        Cell::new(branch.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                        Cell::new(status).set_alignment(CellAlignment::Center),
+                    ]);
                 }
+
+                println!("{}", table);
             }
         }
 

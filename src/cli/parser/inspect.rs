@@ -9,57 +9,17 @@ pub struct InspectArgs {
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
 
-    /// Number of rows to show
-    #[arg(short = 'n', long, default_value = "10")]
-    pub rows: usize,
-
-    /// Only show schema
-    #[arg(short, long)]
-    pub schema: bool,
-
-    /// Show metadata
-    #[arg(short, long)]
-    pub metadata: bool,
-
-    /// Only show physical layout
-    #[arg(long)]
-    pub layout: bool,
-
-    /// Show statistics
-    #[arg(long)]
-    pub stats: bool,
-
-    /// Show data preview
-    #[arg(short, long)]
-    pub preview: bool,
-
-    /// Verbose mode (more detailed info)
+    /// Verbose mode - show snapshot history and manifest details
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Deep scan: check all snapshots for orphan detection (slower but accurate)
-    #[arg(long)]
-    pub deep: bool,
-
-    /// Force specific format
-    #[arg(short, long)]
-    pub format: Option<String>,
-
-    /// Output format (table, json, yaml)
+    /// Output format (table, json)
     #[arg(short, long, default_value = "table")]
     pub output: String,
 
-    /// Only show specific columns
-    #[arg(long, value_delimiter = ',')]
-    pub columns: Option<Vec<String>>,
-
-    /// Use random sampling instead of first rows
+    /// Read table at specific snapshot ID
     #[arg(long)]
-    pub sample: bool,
-
-    /// Read table at specific version (Delta) or snapshot ID (Iceberg)
-    #[arg(long)]
-    pub version: Option<i64>,
+    pub snapshot: Option<i64>,
 
     /// Read table as of a specific time (e.g., "7d", "24h", or "2024-01-15")
     #[arg(long)]

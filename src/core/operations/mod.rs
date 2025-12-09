@@ -17,6 +17,8 @@ pub use diff::DiffOperation;
 pub use generate::{
     GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
 };
-pub use inspect::InspectOperation;
+pub use inspect::{
+    IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector, InspectOperation,
+};
 pub use transform::{TransformConfig, apply_transforms};
 pub use validate::ValidateOperation;

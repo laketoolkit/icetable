@@ -74,7 +74,7 @@ impl StaticMetadataReader {
 #[async_trait]
 impl MetadataReader for StaticMetadataReader {
     async fn load(&self) -> Result<MetadataLoadResult> {
-        // Find latest metadata file
+        // Find latest metadata file (returns full path)
         let metadata_location = find_latest_metadata(&self.table_path, &self.storage).await?;
 
         // Use iceberg's StaticTable to load metadata properly

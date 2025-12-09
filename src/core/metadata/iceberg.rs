@@ -48,7 +48,9 @@ impl IcebergMetadataService {
     async fn load_static_table(table_path: &str, file_io: &FileIO, storage: &Storage) -> Result<StaticTable> {
         use iceberg::NamespaceIdent;
 
+        // find_latest_metadata returns full path (e.g., /path/to/table/metadata/00001-xxx.json)
         let metadata_file = find_latest_metadata(table_path, storage).await?;
+
         let table_ident = TableIdent::new(
             NamespaceIdent::new("iceberg".to_string()),
             "table".to_string(),

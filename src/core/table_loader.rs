@@ -77,17 +77,17 @@ impl TableLoader {
         // 2. Create FileIO for the storage backend
         // 3. Load using StaticTable::from_metadata_file
         
-        // First, find the latest metadata file
+        // Find the latest metadata file (returns full path)
         let metadata_location = Self::find_latest_metadata(&absolute_path).await?;
         log::debug!("Found metadata location: {}", metadata_location);
-        
+
         // Create FileIO for the storage backend
         let file_io = create_file_io(&absolute_path)?;
         log::debug!("Created FileIO for path: {}", absolute_path);
-        
+
         // Create table identifier (for static tables, namespace/name don't matter much)
         let table_ident = TableIdent::new(NamespaceIdent::new("static".to_string()), "table".to_string());
-        
+
         // Load using StaticTable::from_metadata_file
         log::debug!("Calling StaticTable::from_metadata_file with location: {}", metadata_location);
         let static_table = StaticTable::from_metadata_file(&metadata_location, table_ident, file_io)

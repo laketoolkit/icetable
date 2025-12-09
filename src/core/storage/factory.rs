@@ -26,7 +26,6 @@ use object_store::aws::AmazonS3Builder;
 use object_store::azure::MicrosoftAzureBuilder;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::local::LocalFileSystem;
-use object_store::prefix::PrefixStore;
 use url::Url;
 
 use crate::error::{Error, Result};
@@ -106,26 +105,8 @@ pub fn detect_storage_type(path: &str) -> &'static str {
     }
 }
 
-fn create_local_store(path: &str) -> Result<Storage> {
-    // LocalFileSystem operates on absolute paths
-    // We use PrefixStore to make it work relative to the table path
-    let local = LocalFileSystem::new();
-
-    // Normalize the path (remove trailing slashes, etc.)
-    let normalized = std::path::Path::new(path)
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from(path));
-
-    let prefix = normalized.to_string_lossy();
-
-    // If the path is root or empty, return the store directly
-    if prefix.is_empty() || prefix == "/" {
-        Ok(Arc::new(local))
-    } else {
-        // Strip leading slash for PrefixStore (it expects relative paths)
-        let prefix_str = prefix.trim_start_matches('/');
-        Ok(Arc::new(PrefixStore::new(local, prefix_str)))
-    }
+fn create_local_store(_path: &str) -> Result<Storage> {
+    Ok(Arc::new(LocalFileSystem::new()))
 }
 
 fn create_s3_store(path: &str) -> Result<Storage> {
@@ -136,8 +117,6 @@ fn create_s3_store(path: &str) -> Result<Storage> {
     let bucket = url.host_str().ok_or_else(|| Error::Configuration {
         message: "Missing bucket in S3 URL".to_string(),
     })?;
-
-    let prefix = url.path().trim_start_matches('/');
 
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
 
@@ -158,11 +137,7 @@ fn create_s3_store(path: &str) -> Result<Storage> {
         ),
     })?;
 
-    if prefix.is_empty() {
-        Ok(Arc::new(store))
-    } else {
-        Ok(Arc::new(PrefixStore::new(store, prefix)))
-    }
+    Ok(Arc::new(store))
 }
 
 fn create_gcs_store(path: &str) -> Result<Storage> {
@@ -173,8 +148,6 @@ fn create_gcs_store(path: &str) -> Result<Storage> {
     let bucket = url.host_str().ok_or_else(|| Error::Configuration {
         message: "Missing bucket in GCS URL".to_string(),
     })?;
-
-    let prefix = url.path().trim_start_matches('/');
 
     let store = GoogleCloudStorageBuilder::from_env()
         .with_bucket_name(bucket)
@@ -187,11 +160,7 @@ fn create_gcs_store(path: &str) -> Result<Storage> {
             ),
         })?;
 
-    if prefix.is_empty() {
-        Ok(Arc::new(store))
-    } else {
-        Ok(Arc::new(PrefixStore::new(store, prefix)))
-    }
+    Ok(Arc::new(store))
 }
 
 fn create_azure_store(path: &str) -> Result<Storage> {
@@ -210,8 +179,6 @@ fn create_azure_store(path: &str) -> Result<Storage> {
         message: "Missing container in Azure URL".to_string(),
     })?;
 
-    let prefix = url.path().trim_start_matches('/');
-
     let store = MicrosoftAzureBuilder::from_env()
         .with_container_name(container)
         .build()
@@ -223,11 +190,7 @@ fn create_azure_store(path: &str) -> Result<Storage> {
             ),
         })?;
 
-    if prefix.is_empty() {
-        Ok(Arc::new(store))
-    } else {
-        Ok(Arc::new(PrefixStore::new(store, prefix)))
-    }
+    Ok(Arc::new(store))
 }
 
 #[cfg(test)]

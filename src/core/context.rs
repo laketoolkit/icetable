@@ -42,7 +42,7 @@ impl TableContext {
     /// Create context from an explicit path string
     pub async fn new(path: &str) -> Result<Self> {
         let storage = create_object_store(path).await?;
-        let format = detect_format(&storage).await;
+        let format = detect_format(path, &storage).await;
 
         Ok(Self {
             path: path.to_string(),

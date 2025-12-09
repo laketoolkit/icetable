@@ -12,7 +12,7 @@ use crate::core::TableFormat;
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::{Storage, create_object_store};
-use crate::core::utils::detect_table_format_with_storage;
+use crate::core::utils::detect_format;
 use crate::core::{CatalogConfig, TableCommitter};
 use crate::error::{Error, Result};
 
@@ -64,7 +64,7 @@ impl SnapshotCommand {
         let storage = create_object_store(&path).await?;
 
         // Detect table format
-        let format = detect_table_format_with_storage(&path, &storage).await;
+        let format = detect_format(&path, &storage).await;
 
         match format {
             TableFormat::Delta => Self::execute_delta(args, &path, storage).await,

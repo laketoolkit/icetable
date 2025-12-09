@@ -39,7 +39,7 @@ pub use types::parse_data_type;
 // Core re-exports (for backward compatibility with crate::core::utils paths)
 pub use core::{
     ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, WriteMetadataResult,
-    detect_table_format, detect_table_format_async, detect_table_format_with_storage,
+    detect_format, detect_table_format, detect_table_format_async,
     determine_cutoff_timestamp, determine_snapshots_to_expire, extract_version_from_path,
     find_latest_metadata, format_bytes, generate_unique_id, metadata_location_filename,
     new_metadata_location, next_metadata_location, normalize_path, normalize_relative_path,

@@ -3,6 +3,7 @@
 //! Manages icetable configuration like kubectl config.
 
 use colored::Colorize;
+use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
 
 use crate::cli::parser::{
     ConfigAddArgs, ConfigAddCatalogArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs,
@@ -180,7 +181,7 @@ impl ConfigCommand {
         println!(
             "{}",
             format!(
-                "Use tables with: icectl inspect -t {}.namespace.table",
+                "Use tables with: icetable inspect -t {}.namespace.table",
                 args.name
             )
             .dimmed()
@@ -236,42 +237,69 @@ impl ConfigCommand {
                 None => println!("  {}", "(none)".dimmed()),
             }
 
-            // Show table aliases
+            // Show table aliases as table
             println!();
             println!("{}", "Table aliases:".bold());
             if config.tables.is_empty() {
                 println!("  {}", "(none)".dimmed());
             } else {
+                let mut table = comfy_table::Table::new();
+                table.load_preset(UTF8_FULL);
+                table.set_content_arrangement(ContentArrangement::Dynamic);
+
+                table.set_header(vec![
+                    Cell::new("".to_string()).set_alignment(CellAlignment::Center),
+                    Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Path".cyan().to_string()).set_alignment(CellAlignment::Left),
+                ]);
+
                 let mut names: Vec<_> = config.tables.keys().collect();
                 names.sort();
 
                 for name in names {
                     let path = &config.tables[name];
                     let is_current = config.get_current_context() == Some(name.as_str());
-                    let marker = if is_current { "→ " } else { "  " };
+                    let marker = if is_current { "●".green().to_string() } else { "".to_string() };
 
-                    println!("{}{} → {}", marker.green(), name.cyan(), path.dimmed());
+                    table.add_row(vec![
+                        Cell::new(marker).set_alignment(CellAlignment::Center),
+                        Cell::new(name).set_alignment(CellAlignment::Left),
+                        Cell::new(path).set_alignment(CellAlignment::Left),
+                    ]);
                 }
+
+                println!("{}", table);
             }
 
-            // Show catalogs
+            // Show catalogs as table
             println!();
             println!("{}", "Catalogs:".bold());
             if config.catalogs.is_empty() {
                 println!("  {}", "(none)".dimmed());
             } else {
+                let mut table = comfy_table::Table::new();
+                table.load_preset(UTF8_FULL);
+                table.set_content_arrangement(ContentArrangement::Dynamic);
+
+                table.set_header(vec![
+                    Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Type".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("URI".cyan().to_string()).set_alignment(CellAlignment::Left),
+                ]);
+
                 let mut names: Vec<_> = config.catalogs.keys().collect();
                 names.sort();
 
                 for name in names {
                     let cat = &config.catalogs[name];
-                    println!(
-                        "  {} ({}) → {}",
-                        name.cyan(),
-                        cat.catalog_type.to_string().dimmed(),
-                        cat.uri.dimmed()
-                    );
+                    table.add_row(vec![
+                        Cell::new(name).set_alignment(CellAlignment::Left),
+                        Cell::new(cat.catalog_type.to_string()).set_alignment(CellAlignment::Left),
+                        Cell::new(&cat.uri).set_alignment(CellAlignment::Left),
+                    ]);
                 }
+
+                println!("{}", table);
             }
 
             // Show config path

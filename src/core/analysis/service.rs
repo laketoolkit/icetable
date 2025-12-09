@@ -288,6 +288,16 @@ impl AnalyzeService {
         let metadata = table.metadata();
         let snapshots: Vec<_> = metadata.snapshots().collect();
 
+        // Helper to normalize paths - extract just the relative path after table location
+        let normalize_path = |path: &str| -> String {
+            // If path contains /data/, extract from /data/ onwards
+            if let Some(idx) = path.find("/data/") {
+                return path[idx + 1..].to_string(); // "data/..."
+            }
+            // Fallback: just the filename
+            path.rsplit('/').next().unwrap_or(path).to_string()
+        };
+
         // Collect all referenced files from all snapshots using native scan API
         let mut referenced: HashSet<String> = HashSet::new();
 
@@ -309,7 +319,8 @@ impl AnalyzeService {
             };
 
             for task in tasks {
-                referenced.insert(task.data_file_path().to_string());
+                let path = task.data_file_path().to_string();
+                referenced.insert(normalize_path(&path));
             }
         }
 
@@ -323,11 +334,14 @@ impl AnalyzeService {
         let on_storage: Vec<DataFileInfo> = all_objects
             .iter()
             .filter(|obj| obj.location.to_string().ends_with(".parquet"))
-            .map(|obj| DataFileInfo {
-                path: obj.location.to_string(),
-                size: obj.size,
-                record_count: 0,
-                partition: HashMap::new(),
+            .map(|obj| {
+                let path = obj.location.to_string();
+                DataFileInfo {
+                    path: normalize_path(&path),
+                    size: obj.size,
+                    record_count: 0,
+                    partition: HashMap::new(),
+                }
             })
             .collect();
 

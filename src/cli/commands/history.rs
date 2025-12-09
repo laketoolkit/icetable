@@ -8,6 +8,7 @@ use colored::Colorize;
 use std::sync::Arc;
 
 use crate::cli::parser::HistoryArgs;
+use crate::config::ResolvePath;
 use crate::core::{TableExt, TableLoader};
 use crate::error::{Error, Result};
 
@@ -32,16 +33,13 @@ pub struct HistoryCommand;
 impl HistoryCommand {
     /// Execute history command
     pub async fn execute(args: HistoryArgs) -> Result<()> {
-        // 1. Load table using unified TableLoader (uses iceberg::Table consistently)
-        let table_path = args.path.as_ref().ok_or_else(|| {
-            Error::MissingArgument {
-                argument: "path".to_string(),
-                description: "Table path is required".to_string(),
-            }
-        })?;
-        let table = TableLoader::load_table(table_path, None).await?;
+        // 1. Resolve path from args or config
+        let table_path = args.path.resolve()?;
 
-        // 2. Verify format (implicitly verified by TableLoader)
+        // 2. Load table using unified TableLoader
+        let table = TableLoader::load_table(&table_path, None).await?;
+
+        // 3. Verify format (implicitly verified by TableLoader)
         if let Some(ref fmt) = args.format
             && fmt.to_lowercase() != "iceberg"
         {
@@ -50,10 +48,10 @@ impl HistoryCommand {
                 });
         }
 
-        // 3. Get history from table
+        // 4. Get history from table
         let entries = Self::history(&table, &args).await?;
 
-        // 4. Output
+        // 5. Output
         Self::output(&entries, &args.output)
     }
 
@@ -114,60 +112,58 @@ impl HistoryCommand {
             return Ok(());
         }
 
-        // Snapshot IDs can be up to 19 digits (i64), use 20 char width
-        println!(
-            "    {:>20} | {:^19} | {:^10} | {}",
-            "Snapshot ID".bold(),
-            "Timestamp".bold(),
-            "Operation".bold(),
-            "Details".bold()
-        );
-        println!("{}", "─".repeat(105));
-
         for entry in entries {
-            let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
-            let details_str = Self::format_details(&entry.details);
             let marker = if entry.is_current {
-                "●".green().bold().to_string()
+                "●".yellow().bold()
             } else {
-                " ".to_string()
+                "○".dimmed()
+            };
+
+            let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
+
+            let op = match entry.operation.as_str() {
+                "Append" => "append".green(),
+                "Overwrite" => "overwrite".yellow(),
+                "Delete" => "delete".red(),
+                "Replace" => "replace".cyan(),
+                other => other.normal(),
             };
 
             println!(
-                " {}  {:>20} | {} | {:^10} | {}",
+                "{} {} - {} ({})",
                 marker,
-                entry.version.to_string().cyan(),
-                timestamp,
-                entry.operation.green(),
-                details_str.dimmed()
+                entry.version.to_string().cyan().bold(),
+                op,
+                timestamp.to_string().dimmed()
             );
+
+            // Details line
+            let mut details = Vec::new();
+            if let Some(added) = entry.details.get("added-records") {
+                details.push(format!("+{} records", added));
+            }
+            if let Some(deleted) = entry.details.get("deleted-records") {
+                details.push(format!("-{} records", deleted));
+            }
+            if let Some(files) = entry.details.get("added-data-files") {
+                details.push(format!("+{} files", files));
+            }
+            if let Some(files) = entry.details.get("deleted-data-files") {
+                details.push(format!("-{} files", files));
+            }
+            if let Some(total) = entry.details.get("total-records") {
+                details.push(format!("total: {} records", total));
+            }
+
+            if !details.is_empty() {
+                println!("  {}", details.join(", ").dimmed());
+            }
+            println!();
         }
 
-        println!();
-        println!("Total: {} entries", entries.len());
+        println!("{} snapshots", entries.len());
 
         Ok(())
-    }
-
-    /// Format details map into a string
-    fn format_details(details: &std::collections::HashMap<String, String>) -> String {
-        let interesting_keys = [
-            "added-data-files",
-            "added-records",
-            "total-records",
-            "total-data-files",
-        ];
-
-        let parts: Vec<String> = interesting_keys
-            .iter()
-            .filter_map(|k| details.get(*k).map(|v| format!("{}={}", k, v)))
-            .collect();
-
-        if parts.is_empty() {
-            "-".to_string()
-        } else {
-            parts.join(", ")
-        }
     }
 
     /// Output history as JSON

@@ -9,7 +9,7 @@ use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
 use crate::core::storage::create_object_store;
-use crate::core::utils::detect_table_format_with_storage;
+use crate::core::utils::detect_format;
 use crate::core::{CatalogConfig, TableFormat, format_bytes};
 use crate::error::{Error, Result};
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
@@ -70,7 +70,7 @@ impl RepairCommand {
                 _ => TableFormat::Unknown,
             }
         } else {
-            detect_table_format_with_storage(&table_path, &storage).await
+            detect_format(&table_path, &storage).await
         };
 
         // Determine repair options

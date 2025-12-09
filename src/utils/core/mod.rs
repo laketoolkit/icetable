@@ -10,7 +10,6 @@ pub mod snapshot;
 
 pub use format_detection::{
     TableFormat, detect_format, detect_table_format, detect_table_format_async,
-    detect_table_format_with_storage,
 };
 pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
 pub use iceberg::{

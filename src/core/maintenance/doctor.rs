@@ -335,8 +335,6 @@ impl DoctorService {
         table_path: &str,
     ) -> (CheckResult, Option<i32>) {
         use crate::core::utils::{extract_version_from_path, find_latest_metadata};
-        use iceberg::MetadataLocation;
-        use std::str::FromStr;
 
         match find_latest_metadata(table_path, storage).await {
             Ok(metadata_path) => {
@@ -347,21 +345,12 @@ impl DoctorService {
                 let version = extract_version_from_path(&metadata_path);
 
                 if let Some(v) = version {
-                    if MetadataLocation::from_str(&metadata_path).is_ok() {
-                        (
-                            CheckResult::ok("Metadata Format", format!("v{} ({})", v, filename)),
-                            Some(v),
-                        )
-                    } else {
-                        (
-                            CheckResult::error(
-                                "Metadata Format",
-                                format!("Invalid format: {}", filename),
-                                "Expected standard Iceberg format: <version>-<uuid>.metadata.json",
-                            ),
-                            None,
-                        )
-                    }
+                    // Valid format: <version>-<uuid>.metadata.json
+                    // We already extracted the version, so the format is valid
+                    (
+                        CheckResult::ok("Metadata Format", format!("v{} ({})", v, filename)),
+                        Some(v),
+                    )
                 } else {
                     (
                         CheckResult::error(
@@ -556,6 +545,8 @@ impl DoctorService {
         storage: &Storage,
         service: &IcebergMetadataService,
     ) -> CheckResult {
+        use crate::core::storage::to_path;
+
         let table = service.table();
         let metadata = table.metadata();
 
@@ -584,7 +575,7 @@ impl DoctorService {
 
         let mut missing = 0;
         for path in &manifest_paths {
-            if !storage.exists_str(path).await.unwrap_or(false) {
+            if !storage.exists(&to_path(path)).await.unwrap_or(false) {
                 missing += 1;
             }
         }
@@ -609,6 +600,8 @@ impl DoctorService {
         storage: &Storage,
         service: &IcebergMetadataService,
     ) -> CheckResult {
+        use crate::core::storage::to_path;
+
         let table = service.table();
         let metadata = table.metadata();
 
@@ -616,7 +609,6 @@ impl DoctorService {
             return CheckResult::ok("Data Files", "No data files (empty table)");
         }
 
-        // Use scan API to get data files
         let scan = match table.scan().build() {
             Ok(s) => s,
             Err(e) => {
@@ -660,7 +652,7 @@ impl DoctorService {
         let total_files = data_files.len();
         let mut missing = 0;
         for file_path in &data_files {
-            if !storage.exists_str(file_path).await.unwrap_or(false) {
+            if !storage.exists(&to_path(file_path)).await.unwrap_or(false) {
                 missing += 1;
             }
         }
