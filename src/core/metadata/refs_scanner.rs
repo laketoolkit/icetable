@@ -7,10 +7,10 @@ use std::collections::HashSet;
 
 use futures::stream::{self, StreamExt};
 use iceberg::io::FileIO;
-use iceberg::spec::{ManifestContentType, ManifestFile, ManifestList, ManifestStatus, TableMetadata};
+use iceberg::spec::{ManifestContentType, ManifestFile, ManifestStatus, TableMetadata};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Concurrency level for parallel manifest loading
 const MANIFEST_CONCURRENCY: usize = 10;
@@ -33,7 +33,7 @@ pub async fn scan_all_referenced_files(
     scan_manifests_for_files(file_io, manifest_entries).await
 }
 
-/// Collect all unique manifest entries from all snapshots
+/// Collect all unique manifest entries from all snapshots using native API
 async fn collect_manifest_entries(
     file_io: &FileIO,
     metadata: &TableMetadata,
@@ -42,22 +42,7 @@ async fn collect_manifest_entries(
     let mut manifest_entries: Vec<ManifestFile> = Vec::new();
 
     for snapshot in metadata.snapshots() {
-        let manifest_list_path = snapshot.manifest_list();
-
-        let manifest_list_content = match file_io
-            .new_input(manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-            .read()
-            .await
-        {
-            Ok(content) => content,
-            Err(_) => continue,
-        };
-
-        let manifest_list = match ManifestList::parse_with_version(
-            &manifest_list_content,
-            metadata.format_version(),
-        ) {
+        let manifest_list = match snapshot.load_manifest_list(file_io, metadata).await {
             Ok(ml) => ml,
             Err(_) => continue,
         };

@@ -25,7 +25,6 @@ parquet = { version = "55.2.0", features = ["arrow", "async", "object_store"] }
 deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"], optional = true }
 iceberg = { version = "0.7" }
 iceberg-catalog-rest = { version = "0.7", optional = true }
-apache-avro = { version = "0.18" }
 
 # Cloud storage abstraction
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
@@ -95,10 +94,6 @@ all = ["delta", "tui", "rest-catalog"]
 [[bin]]
 name = "icetable"
 path = "src/main.rs"
-
-[[bin]]
-name = "build_fixtures"
-path = "build_fixtures.rs"
 
 [lib]
 name = "icetable"

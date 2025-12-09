@@ -205,26 +205,18 @@ impl DiffCommand {
         )))
     }
 
-    /// Get manifest file paths from a snapshot
+    /// Get manifest file paths from a snapshot using native API
     async fn get_manifest_files(
         service: &IcebergMetadataService,
         snapshot: &iceberg::spec::Snapshot,
     ) -> Result<Vec<String>> {
         let file_io = service.file_io();
-        let manifest_list_path = snapshot.manifest_list();
+        let metadata = service.table().metadata();
 
-        let manifest_list_content = file_io
-            .new_input(manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to create input: {}", e)))?
-            .read()
+        let manifest_list = snapshot
+            .load_manifest_list(file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
-
-        let manifest_list = iceberg::spec::ManifestList::parse_with_version(
-            &manifest_list_content,
-            iceberg::spec::FormatVersion::V2,
-        )
-        .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
 
         Ok(manifest_list
             .entries()

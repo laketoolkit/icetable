@@ -324,7 +324,7 @@ impl FormatHandler for IcebergHandler {
     }
 
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>> {
-        use iceberg::spec::{ManifestContentType, ManifestList, ManifestStatus};
+        use iceberg::spec::{ManifestContentType, ManifestStatus};
         use std::collections::{HashMap, HashSet};
 
         let table = self.open_table().await?;
@@ -374,16 +374,10 @@ impl FormatHandler for IcebergHandler {
 
         let file_io = create_file_io(&self.path.to_string_lossy())?;
 
-        let content = file_io
-            .new_input(current_snapshot.manifest_list())
-            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-            .read()
+        let manifest_list = current_snapshot
+            .load_manifest_list(&file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
-
-        let manifest_list =
-            ManifestList::parse_with_version(&content, metadata.format_version())
-                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
 
         // Filter to data manifests only
         let data_entries: Vec<_> = manifest_list

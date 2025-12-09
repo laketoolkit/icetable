@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use iceberg::spec::{ManifestContentType, ManifestList, ManifestStatus, TableMetadata};
+use iceberg::spec::{ManifestContentType, ManifestStatus, TableMetadata};
 
 use super::types::{
     DataCompactionAnalysis, ManifestCompactionAnalysis, OrphanFilesAnalysis,
@@ -326,21 +326,7 @@ impl AnalyzeService {
         let mut referenced: HashSet<String> = HashSet::new();
 
         for snapshot in &snapshots {
-            let manifest_list_path = snapshot.manifest_list();
-            let manifest_list_content = match file_io
-                .new_input(manifest_list_path)
-                .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-                .read()
-                .await
-            {
-                Ok(content) => content,
-                Err(_) => continue,
-            };
-
-            let manifest_list = match ManifestList::parse_with_version(
-                &manifest_list_content,
-                metadata.format_version(),
-            ) {
+            let manifest_list = match snapshot.load_manifest_list(file_io, &metadata).await {
                 Ok(ml) => ml,
                 Err(_) => continue,
             };

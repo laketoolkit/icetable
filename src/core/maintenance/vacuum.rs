@@ -7,8 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::stream::{self, StreamExt};
-use iceberg::spec::ManifestList;
+use futures::TryStreamExt;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
 use crate::core::storage::{ObjectStoreExt, create_object_store};
@@ -62,68 +61,32 @@ impl VacuumService {
                 path: table_path.to_string(),
             })?;
 
-        let (metadata, _) = service.load_metadata().await?;
-        let file_io = service.file_io().clone();
+        let table = service.table();
+        let metadata = table.metadata();
 
-        // Step 1: Collect all referenced files from ALL snapshots
-        let snapshots: Vec<_> = metadata.snapshots().collect();
-        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
-        let mut manifest_entries: Vec<iceberg::spec::ManifestFile> = Vec::new();
-
-        for snapshot in &snapshots {
-            let manifest_list_path = snapshot.manifest_list();
-
-            let manifest_list_content = match file_io
-                .new_input(manifest_list_path)
-                .map_err(|e| Error::Manifest {
-                    message: format!("Failed to open manifest list: {}", e),
-                })?
-                .read()
-                .await
-            {
-                Ok(content) => content.to_vec(),
-                Err(_) => continue,
-            };
-
-            let manifest_list = match ManifestList::parse_with_version(
-                &manifest_list_content,
-                metadata.format_version(),
-            ) {
-                Ok(ml) => ml,
-                Err(_) => continue,
-            };
-
-            for entry in manifest_list.entries() {
-                if !seen_manifest_paths.contains(&entry.manifest_path) {
-                    seen_manifest_paths.insert(entry.manifest_path.clone());
-                    manifest_entries.push(entry.clone());
-                }
-            }
-        }
-
-        // Step 2: Load all manifests in parallel to get referenced data files
-        let manifest_results: Vec<Vec<String>> = stream::iter(manifest_entries.into_iter())
-            .map(|manifest_entry| {
-                let file_io = file_io.clone();
-                async move {
-                    if let Ok(manifest) = manifest_entry.load_manifest(&file_io).await {
-                        manifest
-                            .entries()
-                            .iter()
-                            .map(|e| e.file_path().to_string())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    }
-                }
-            })
-            .buffer_unordered(self.config.parallelism)
-            .collect()
-            .await;
-
+        // Step 1: Collect all referenced files from ALL snapshots using native scan API
         let mut referenced_files: HashSet<String> = HashSet::new();
-        for paths in manifest_results {
-            referenced_files.extend(paths);
+
+        for snapshot in metadata.snapshots() {
+            let scan = match table.scan()
+                .snapshot_id(snapshot.snapshot_id())
+                .build()
+            {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let tasks: Vec<_> = match scan.plan_files().await {
+                Ok(stream) => match stream.try_collect().await {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+
+            for task in tasks {
+                referenced_files.insert(task.data_file_path().to_string());
+            }
         }
 
         // Build filename lookup set for O(1) matching

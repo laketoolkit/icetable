@@ -6,19 +6,11 @@
 
 use std::collections::HashSet;
 
-use iceberg::spec::{FormatVersion, ManifestList};
+use futures::TryStreamExt;
 
+use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, detect_storage_type};
 use crate::error::Result;
-
-/// Convert format version integer to FormatVersion enum
-fn get_format_version(version: i64) -> FormatVersion {
-    if version >= 2 {
-        FormatVersion::V2
-    } else {
-        FormatVersion::V1
-    }
-}
 
 /// Check result status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,13 +306,22 @@ impl DoctorService {
         if let Some(ref meta) = metadata {
             checks.push(Self::check_snapshot_graph(meta));
             checks.push(Self::check_current_snapshot(meta));
-            checks.push(self.check_manifests_exist(&storage, table_path, meta).await);
 
-            if self.config.check_files {
-                checks.push(
-                    self.check_data_files_exist(&storage, table_path, meta)
-                        .await,
-                );
+            // Try to load native service for manifest/file checks
+            match IcebergMetadataService::new_async(table_path.to_string()).await {
+                Ok(service) => {
+                    checks.push(self.check_manifests_exist_native(&storage, &service).await);
+                    if self.config.check_files {
+                        checks.push(self.check_data_files_exist_native(&storage, &service).await);
+                    }
+                }
+                Err(e) => {
+                    checks.push(CheckResult::error(
+                        "Native API",
+                        format!("Cannot load table: {}", e),
+                        "Table metadata may be corrupted",
+                    ));
+                }
             }
         }
 
@@ -549,77 +550,28 @@ impl DoctorService {
         }
     }
 
-    /// Check that manifest files exist
-    async fn check_manifests_exist(
+    /// Check that manifest files exist using native API
+    async fn check_manifests_exist_native(
         &self,
         storage: &Storage,
-        table_path: &str,
-        metadata: &serde_json::Value,
+        service: &IcebergMetadataService,
     ) -> CheckResult {
-        let current_id = metadata
-            .get("current-snapshot-id")
-            .and_then(|id| id.as_i64())
-            .unwrap_or(-1);
+        let table = service.table();
+        let metadata = table.metadata();
 
-        if current_id == -1 {
-            return CheckResult::ok("Manifest Files", "No manifests (empty table)");
-        }
-
-        let snapshots = match metadata.get("snapshots").and_then(|s| s.as_array()) {
+        let current_snapshot = match metadata.current_snapshot() {
             Some(s) => s,
-            None => return CheckResult::ok("Manifest Files", "No snapshots"),
+            None => return CheckResult::ok("Manifest Files", "No manifests (empty table)"),
         };
 
-        let current_snapshot = snapshots
-            .iter()
-            .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id));
-
-        let table_location = metadata
-            .get("location")
-            .and_then(|l| l.as_str())
-            .unwrap_or(table_path);
-
-        let manifest_list_path = match current_snapshot
-            .and_then(|s| s.get("manifest-list"))
-            .and_then(|m| m.as_str())
-        {
-            Some(p) => Self::resolve_path(table_location, p),
-            None => {
-                return CheckResult::error(
-                    "Manifest Files",
-                    "No manifest-list in current snapshot",
-                    "Snapshot metadata is incomplete",
-                );
-            }
-        };
-
-        let manifest_list_bytes = match storage.get_bytes_str(&manifest_list_path).await {
-            Ok(b) => b,
-            Err(_) => {
-                return CheckResult::error(
-                    "Manifest Files",
-                    "Manifest list file not found",
-                    format!("Missing: {}", manifest_list_path),
-                );
-            }
-        };
-
-        // Get format version from metadata
-        let format_version = metadata
-            .get("format-version")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1);
-
-        let manifest_list = match ManifestList::parse_with_version(
-            &manifest_list_bytes,
-            get_format_version(format_version),
-        ) {
+        let file_io = service.file_io();
+        let manifest_list = match current_snapshot.load_manifest_list(file_io, &metadata).await {
             Ok(ml) => ml,
             Err(e) => {
                 return CheckResult::error(
                     "Manifest Files",
-                    format!("Cannot parse manifest list: {}", e),
-                    "Manifest list file is corrupted",
+                    format!("Cannot load manifest list: {}", e),
+                    "Manifest list file is corrupted or missing",
                 );
             }
         };
@@ -627,7 +579,7 @@ impl DoctorService {
         let manifest_paths: Vec<String> = manifest_list
             .entries()
             .iter()
-            .map(|entry| Self::resolve_path(table_location, entry.manifest_path.as_str()))
+            .map(|entry| entry.manifest_path.clone())
             .collect();
 
         let mut missing = 0;
@@ -651,87 +603,55 @@ impl DoctorService {
         }
     }
 
-    /// Check that data files exist (slow operation)
-    async fn check_data_files_exist(
+    /// Check that data files exist using native scan API
+    async fn check_data_files_exist_native(
         &self,
         storage: &Storage,
-        table_path: &str,
-        metadata: &serde_json::Value,
+        service: &IcebergMetadataService,
     ) -> CheckResult {
-        let current_id = metadata
-            .get("current-snapshot-id")
-            .and_then(|id| id.as_i64())
-            .unwrap_or(-1);
+        let table = service.table();
+        let metadata = table.metadata();
 
-        if current_id == -1 {
+        if metadata.current_snapshot().is_none() {
             return CheckResult::ok("Data Files", "No data files (empty table)");
         }
 
-        let snapshots = match metadata.get("snapshots").and_then(|s| s.as_array()) {
-            Some(s) => s,
-            None => return CheckResult::ok("Data Files", "No snapshots"),
+        // Use scan API to get data files
+        let scan = match table.scan().build() {
+            Ok(s) => s,
+            Err(e) => {
+                return CheckResult::error(
+                    "Data Files",
+                    format!("Cannot build scan: {}", e),
+                    "Table scan failed",
+                );
+            }
         };
 
-        let current_snapshot = snapshots
+        let tasks: Vec<_> = match scan.plan_files().await {
+            Ok(stream) => match stream.try_collect().await {
+                Ok(t) => t,
+                Err(e) => {
+                    return CheckResult::error(
+                        "Data Files",
+                        format!("Cannot plan files: {}", e),
+                        "File planning failed",
+                    );
+                }
+            },
+            Err(e) => {
+                return CheckResult::error(
+                    "Data Files",
+                    format!("Cannot scan table: {}", e),
+                    "Table scan failed",
+                );
+            }
+        };
+
+        let data_files: Vec<String> = tasks
             .iter()
-            .find(|s| s.get("snapshot-id").and_then(|id| id.as_i64()) == Some(current_id));
-
-        let table_location = metadata
-            .get("location")
-            .and_then(|l| l.as_str())
-            .unwrap_or(table_path);
-
-        let manifest_list_path = match current_snapshot
-            .and_then(|s| s.get("manifest-list"))
-            .and_then(|m| m.as_str())
-        {
-            Some(p) => Self::resolve_path(table_location, p),
-            None => return CheckResult::warning("Data Files", "No manifest-list to check", ""),
-        };
-
-        let manifest_list_bytes = match storage.get_bytes_str(&manifest_list_path).await {
-            Ok(b) => b,
-            Err(_) => return CheckResult::error("Data Files", "Cannot read manifest list", ""),
-        };
-
-        // Get format version from metadata
-        let format_version = metadata
-            .get("format-version")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1);
-
-        let manifest_list = match ManifestList::parse_with_version(
-            &manifest_list_bytes,
-            get_format_version(format_version),
-        ) {
-            Ok(ml) => ml,
-            Err(_) => return CheckResult::error("Data Files", "Cannot parse manifest list", ""),
-        };
-
-        // Create FileIO for loading manifests
-        let file_io = match crate::core::storage::create_file_io(table_path) {
-            Ok(io) => io,
-            Err(_) => return CheckResult::error("Data Files", "Cannot create FileIO", ""),
-        };
-
-        // Collect data files from manifests
-        let mut data_files = Vec::new();
-        for manifest_entry in manifest_list.entries() {
-            // Only check data manifests
-            if manifest_entry.content != iceberg::spec::ManifestContentType::Data {
-                continue;
-            }
-
-            let manifest = match manifest_entry.load_manifest(&file_io).await {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            for entry in manifest.entries() {
-                let file_path = entry.data_file().file_path().to_string();
-                data_files.push(Self::resolve_path(table_location, &file_path));
-            }
-        }
+            .map(|task| task.data_file_path().to_string())
+            .collect();
 
         if data_files.is_empty() {
             return CheckResult::ok("Data Files", "No data files in current snapshot");
@@ -753,24 +673,6 @@ impl DoctorService {
             )
         } else {
             CheckResult::ok("Data Files", format!("{} files verified", total_files))
-        }
-    }
-
-    /// Resolve a path that may be relative or absolute
-    fn resolve_path(table_location: &str, path: &str) -> String {
-        if path.starts_with("s3://")
-            || path.starts_with("gs://")
-            || path.starts_with("abfs://")
-            || path.starts_with("file://")
-            || path.starts_with('/')
-        {
-            path.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                table_location.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            )
         }
     }
 }
