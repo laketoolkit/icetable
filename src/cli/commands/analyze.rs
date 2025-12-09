@@ -94,10 +94,10 @@ impl AnalyzeCommand {
         let data_analysis = analyze_service.analyze_data_compaction(&service).await?;
         pb.finish_and_clear();
 
-        let (metadata, _) = service.load_metadata().await?;
         let manifest_analysis = analyze_service
-            .analyze_manifests(&metadata, &service)
+            .analyze_manifests(&service)
             .await?;
+        let (metadata, _) = service.load_metadata().await?;
         let snapshot_analysis = analyze_service.analyze_snapshots(&metadata);
 
         let orphan_analysis = if !args.skip_orphans {

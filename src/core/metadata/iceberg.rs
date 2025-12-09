@@ -499,8 +499,7 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>> {
-        let (metadata, _) = self.load_metadata().await?;
-        refs_scanner::scan_all_referenced_files(&self.file_io, &metadata).await
+        refs_scanner::scan_all_referenced_files(&self.table).await
     }
 
     async fn schema(&self) -> Result<Arc<arrow::datatypes::Schema>> {

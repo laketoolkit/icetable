@@ -10,7 +10,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use iceberg::spec::{ManifestContentType, ManifestStatus, TableMetadata};
+use futures::TryStreamExt;
+use iceberg::spec::TableMetadata;
 
 use super::types::{
     DataCompactionAnalysis, ManifestCompactionAnalysis, OrphanFilesAnalysis,
@@ -67,7 +68,7 @@ impl AnalyzeService {
         let (metadata, _) = service.load_metadata().await?;
 
         let data_compaction = self.analyze_data_compaction(service).await?;
-        let manifest_compaction = self.analyze_manifests(&metadata, service).await?;
+        let manifest_compaction = self.analyze_manifests(service).await?;
         let snapshot_expiration = self.analyze_snapshots(&metadata);
 
         let orphan_files = if self.config.skip_orphans {
@@ -92,77 +93,39 @@ impl AnalyzeService {
         &self,
         service: &IcebergMetadataService,
     ) -> Result<DataCompactionAnalysis> {
-        let (metadata, _) = service.load_metadata().await?;
-        let file_io = service.file_io();
+        let table = service.table();
+        let metadata = table.metadata();
 
-        let current_snapshot = match metadata.current_snapshot() {
-            Some(s) => s,
-            None => {
-                return Ok(DataCompactionAnalysis {
-                    total_files: 0,
-                    small_files: 0,
-                    groups_needing_compaction: 0,
-                    total_size: 0,
-                    small_files_size: 0,
-                    min_size_threshold: self.config.min_file_size,
-                    partitions: Vec::new(),
-                });
-            }
-        };
-
-        // Load manifest list
-        let manifest_list = current_snapshot
-            .load_manifest_list(file_io, &metadata)
-            .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
-
-        let data_manifests: Vec<_> = manifest_list
-            .entries()
-            .iter()
-            .filter(|e| e.content == ManifestContentType::Data)
-            .collect();
-
-        // Collect file information from manifests
-        let mut seen_paths: HashSet<String> = HashSet::new();
-        let mut deleted_paths: HashSet<String> = HashSet::new();
-        let mut files: Vec<DataFileInfo> = Vec::new();
-
-        // First pass: collect deleted paths
-        for manifest_entry in &data_manifests {
-            if let Ok(manifest) = manifest_entry.load_manifest(file_io).await {
-                for entry in manifest.entries() {
-                    if entry.status() == ManifestStatus::Deleted {
-                        deleted_paths.insert(entry.data_file().file_path().to_string());
-                    }
-                }
-            }
+        if metadata.current_snapshot().is_none() {
+            return Ok(DataCompactionAnalysis {
+                total_files: 0,
+                small_files: 0,
+                groups_needing_compaction: 0,
+                total_size: 0,
+                small_files_size: 0,
+                min_size_threshold: self.config.min_file_size,
+                partitions: Vec::new(),
+            });
         }
 
-        // Second pass: collect alive files
-        for manifest_entry in &data_manifests {
-            if let Ok(manifest) = manifest_entry.load_manifest(file_io).await {
-                for entry in manifest.entries() {
-                    if entry.status() == ManifestStatus::Deleted {
-                        continue;
-                    }
-                    let data_file = entry.data_file();
-                    let path = data_file.file_path().to_string();
+        // Use native scan API - automatically filters deleted files
+        let scan = table.scan().build()
+            .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
 
-                    if deleted_paths.contains(&path) || seen_paths.contains(&path) {
-                        continue;
-                    }
-                    seen_paths.insert(path.clone());
+        let tasks: Vec<_> = scan.plan_files().await
+            .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+            .try_collect().await
+            .map_err(|e| Error::General(format!("Failed to collect tasks: {}", e)))?;
 
-                    let partition = extract_partition_from_path(&path);
-                    files.push(DataFileInfo {
-                        path,
-                        size: data_file.file_size_in_bytes(),
-                        record_count: data_file.record_count(),
-                        partition,
-                    });
-                }
+        let files: Vec<DataFileInfo> = tasks.iter().map(|task| {
+            let path = task.data_file_path().to_string();
+            DataFileInfo {
+                path: path.clone(),
+                size: task.length,
+                record_count: task.record_count.unwrap_or(0),
+                partition: extract_partition_from_path(&path),
             }
-        }
+        }).collect();
 
         // Calculate statistics
         let total_files = files.len();
@@ -244,12 +207,16 @@ impl AnalyzeService {
     }
 
     /// Analyze manifests for compaction recommendations
+    ///
+    /// Note: StaticTable doesn't expose inspect() API, so we use load_manifest_list()
     pub async fn analyze_manifests(
         &self,
-        metadata: &Arc<TableMetadata>,
         service: &IcebergMetadataService,
     ) -> Result<ManifestCompactionAnalysis> {
-        let current_snapshot = match metadata.current_snapshot() {
+        let table = service.table();
+        let metadata = table.metadata();
+
+        let snapshot = match metadata.current_snapshot() {
             Some(s) => s,
             None => {
                 return Ok(ManifestCompactionAnalysis {
@@ -259,8 +226,9 @@ impl AnalyzeService {
             }
         };
 
-        let manifest_list = current_snapshot
-            .load_manifest_list(service.file_io(), metadata)
+        // Load manifest list using native API
+        let manifest_list = snapshot
+            .load_manifest_list(service.file_io(), metadata.as_ref())
             .await
             .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
 
@@ -316,37 +284,32 @@ impl AnalyzeService {
         &self,
         service: &IcebergMetadataService,
     ) -> Result<OrphanFilesAnalysis> {
-        let (metadata, _) = service.load_metadata().await?;
-        let file_io = service.file_io();
-
+        let table = service.table();
+        let metadata = table.metadata();
         let snapshots: Vec<_> = metadata.snapshots().collect();
 
-        // Collect all referenced files from all snapshots
-        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
+        // Collect all referenced files from all snapshots using native scan API
         let mut referenced: HashSet<String> = HashSet::new();
 
         for snapshot in &snapshots {
-            let manifest_list = match snapshot.load_manifest_list(file_io, &metadata).await {
-                Ok(ml) => ml,
+            let scan = match table.scan()
+                .snapshot_id(snapshot.snapshot_id())
+                .build()
+            {
+                Ok(s) => s,
                 Err(_) => continue,
             };
 
-            // Read manifests for this snapshot (skip already seen)
-            for entry in manifest_list.entries() {
-                if entry.content == ManifestContentType::Data {
-                    if seen_manifest_paths.contains(&entry.manifest_path) {
-                        continue;
-                    }
-                    seen_manifest_paths.insert(entry.manifest_path.clone());
+            let tasks: Vec<_> = match scan.plan_files().await {
+                Ok(stream) => match stream.try_collect().await {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
 
-                    if let Ok(manifest) = entry.load_manifest(file_io).await {
-                        for file_entry in manifest.entries() {
-                            if file_entry.status() != ManifestStatus::Deleted {
-                                referenced.insert(file_entry.data_file().file_path().to_string());
-                            }
-                        }
-                    }
-                }
+            for task in tasks {
+                referenced.insert(task.data_file_path().to_string());
             }
         }
 
