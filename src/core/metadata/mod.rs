@@ -19,7 +19,6 @@ mod traits;
 // New modular architecture
 mod reader;
 mod writer;
-mod data_files;
 
 // Iceberg-specific modules
 mod iceberg;

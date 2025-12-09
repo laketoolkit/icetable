@@ -24,7 +24,6 @@ use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, create_
 use crate::core::utils::{extract_version_from_path, find_latest_metadata};
 use crate::error::{Error, Result};
 
-use super::data_files;
 use super::iceberg_operations;
 use super::iceberg_partition;
 use super::refs::{self, RefInfo};
@@ -36,6 +35,8 @@ pub struct IcebergMetadataService {
     table_path: String,
     file_io: FileIO,
     storage: Storage,
+    /// The loaded Iceberg table (StaticTable for direct path access)
+    table: StaticTable,
     /// Target branch for operations (defaults to "main")
     target_branch: Option<String>,
     /// Optional committer for catalog-aware commits
@@ -43,15 +44,32 @@ pub struct IcebergMetadataService {
 }
 
 impl IcebergMetadataService {
+    /// Load StaticTable from path
+    async fn load_static_table(table_path: &str, file_io: &FileIO, storage: &Storage) -> Result<StaticTable> {
+        use iceberg::NamespaceIdent;
+
+        let metadata_file = find_latest_metadata(table_path, storage).await?;
+        let table_ident = TableIdent::new(
+            NamespaceIdent::new("iceberg".to_string()),
+            "table".to_string(),
+        );
+
+        StaticTable::from_metadata_file(&metadata_file, table_ident, file_io.clone())
+            .await
+            .map_err(|e| Error::General(format!("Failed to load table: {}", e)))
+    }
+
     /// Create a new Iceberg metadata service
     pub async fn new_async(table_path: String) -> Result<Self> {
         let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
+        let table = Self::load_static_table(&table_path, &file_io, &storage).await?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
+            table,
             target_branch: None,
             committer: None,
         })
@@ -61,11 +79,13 @@ impl IcebergMetadataService {
     pub async fn new_with_branch(table_path: String, branch: Option<String>) -> Result<Self> {
         let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
+        let table = Self::load_static_table(&table_path, &file_io, &storage).await?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
+            table,
             target_branch: branch,
             committer: None,
         })
@@ -79,14 +99,32 @@ impl IcebergMetadataService {
     ) -> Result<Self> {
         let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
+        let table = Self::load_static_table(&table_path, &file_io, &storage).await?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
+            table,
             target_branch: branch,
             committer: Some(committer),
         })
+    }
+
+    /// Refresh the table after modifications
+    pub async fn refresh(&mut self) -> Result<()> {
+        self.table = Self::load_static_table(&self.table_path, &self.file_io, &self.storage).await?;
+        Ok(())
+    }
+
+    /// Get access to the underlying table
+    pub fn table(&self) -> &StaticTable {
+        &self.table
+    }
+
+    /// Get table metadata
+    pub fn metadata(&self) -> Arc<TableMetadata> {
+        self.table.metadata()
     }
 
     /// Get the target branch name (defaults to "main" if not set)
@@ -95,19 +133,13 @@ impl IcebergMetadataService {
     }
 
     /// Load current table metadata
+    ///
+    /// Returns the cached metadata from the StaticTable. Call `refresh()`
+    /// after modifications to get updated metadata.
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
         let metadata_file = find_latest_metadata(&self.table_path, &self.storage).await?;
         let version = extract_version_from_path(&metadata_file).unwrap_or(0);
-
-        let table_ident = TableIdent::from_strs(["iceberg", "table"])
-            .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;
-
-        let static_table =
-            StaticTable::from_metadata_file(&metadata_file, table_ident, self.file_io.clone())
-                .await
-                .map_err(|e| Error::General(format!("Failed to load table metadata: {}", e)))?;
-
-        Ok((static_table.metadata(), version))
+        Ok((self.table.metadata(), version))
     }
 
     /// Get the FileIO for loading manifests
@@ -153,14 +185,36 @@ impl IcebergMetadataService {
         &self,
         snapshot_id: i64,
     ) -> Result<Vec<DataFileInfo>> {
-        let (metadata, _) = self.load_metadata().await?;
+        use futures::TryStreamExt;
 
-        let snapshot = metadata
-            .snapshots()
-            .find(|s| s.snapshot_id() == snapshot_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", snapshot_id)))?;
+        // Build scan targeting the specific snapshot
+        let scan = self.table
+            .scan()
+            .snapshot_id(snapshot_id)
+            .build()
+            .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
 
-        data_files::list_data_files_for_snapshot(&self.file_io, &metadata, snapshot).await
+        // Use plan_files() to get all data files
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+            .try_collect()
+            .await
+            .map_err(|e| Error::General(format!("Failed to collect file tasks: {}", e)))?;
+
+        // Convert FileScanTasks to DataFileInfo
+        let data_files = tasks
+            .iter()
+            .map(|task| DataFileInfo {
+                path: task.data_file_path().to_string(),
+                size: task.length,
+                record_count: task.record_count.unwrap_or(0),
+                partition: iceberg_partition::extract_partition_from_path_static(task.data_file_path()),
+            })
+            .collect();
+
+        Ok(data_files)
     }
 
     /// List data files for a branch (or current if None)
@@ -194,25 +248,44 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn list_data_files(&self) -> Result<Vec<DataFileInfo>> {
-        let (metadata, _) = self.load_metadata().await?;
+        use futures::TryStreamExt;
 
-        // Use the target branch snapshot, or current snapshot if not set/not found
-        let current_snapshot = if let Some(ref branch) = self.target_branch {
-            match metadata.snapshot_for_ref(branch) {
-                Some(s) => s,
-                None => match metadata.current_snapshot() {
-                    Some(s) => s,
-                    None => return Ok(Vec::new()),
-                },
-            }
-        } else {
-            match metadata.current_snapshot() {
-                Some(s) => s,
-                None => return Ok(Vec::new()),
-            }
-        };
+        // Build scan, optionally targeting a specific branch/snapshot
+        let mut scan_builder = self.table.scan();
 
-        data_files::list_data_files_parallel(&self.file_io, &metadata, current_snapshot, 10).await
+        // If targeting a specific branch, get its snapshot ID
+        if let Some(ref branch) = self.target_branch {
+            let metadata = self.table.metadata();
+            if let Some(snapshot) = metadata.snapshot_for_ref(branch) {
+                scan_builder = scan_builder.snapshot_id(snapshot.snapshot_id());
+            }
+        }
+
+        let scan = scan_builder
+            .build()
+            .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
+
+        // Use plan_files() to get all data files
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+            .try_collect()
+            .await
+            .map_err(|e| Error::General(format!("Failed to collect file tasks: {}", e)))?;
+
+        // Convert FileScanTasks to DataFileInfo
+        let data_files = tasks
+            .iter()
+            .map(|task| DataFileInfo {
+                path: task.data_file_path().to_string(),
+                size: task.length,
+                record_count: task.record_count.unwrap_or(0),
+                partition: iceberg_partition::extract_partition_from_path_static(task.data_file_path()),
+            })
+            .collect();
+
+        Ok(data_files)
     }
 
     async fn list_snapshots(&self, limit: Option<usize>) -> Result<Vec<SnapshotInfo>> {
