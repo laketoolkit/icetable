@@ -6,6 +6,7 @@
 pub mod analysis;
 pub mod arrow_compat;
 pub mod catalog;
+pub mod commit;
 pub mod context;
 pub mod formats;
 pub mod inspection;
@@ -29,3 +30,4 @@ pub use table_loader::{TableExt, TableLoader};
 pub use utils::{
     TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
 };
+pub use commit::{CommitResult, SnapshotCommitter, DirectCommitter};

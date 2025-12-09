@@ -13,7 +13,6 @@ pub use format_detection::{
     detect_table_format_with_storage,
 };
 pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
-pub use iceberg::iceberg_to_arrow_type;
 pub use iceberg::{
     extract_version_from_path, find_latest_metadata, metadata_location_filename,
     new_metadata_location, next_metadata_location,

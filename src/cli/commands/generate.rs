@@ -137,7 +137,7 @@ impl GenerateCommand {
                 "v".green(),
                 file.path.split('/').next_back().unwrap_or(&file.path),
                 file.record_count,
-                file.file_size
+                file.size
             );
         }
 

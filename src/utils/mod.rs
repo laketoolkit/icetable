@@ -41,7 +41,7 @@ pub use core::{
     ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, detect_table_format,
     detect_table_format_async, detect_table_format_with_storage, determine_cutoff_timestamp,
     determine_snapshots_to_expire, extract_version_from_path, find_latest_metadata, format_bytes,
-    generate_unique_id, iceberg_to_arrow_type, metadata_location_filename, new_metadata_location,
+    generate_unique_id, metadata_location_filename, new_metadata_location,
     next_metadata_location, normalize_path, normalize_relative_path, parse_bytes,
     read_parquet_record_count, scan_parquet_files, sizes,
 };

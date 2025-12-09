@@ -86,12 +86,10 @@ impl<T: ObjectStore> ObjectStoreExt for T {}
 
 /// Convert a string path to an object_store Path
 ///
-/// Handles both absolute paths (starting with /) and relative paths.
-/// For object stores with prefixes, the path should be relative to the prefix.
+/// Expects relative paths. For storage with PrefixStore, pass paths
+/// relative to the prefix (e.g., "data/file.parquet" not "s3://bucket/table/data/file.parquet").
 pub fn to_path(path: &str) -> Path {
-    // object_store::Path expects paths without leading slash for cloud storage
-    // but with leading slash for local filesystem
-    // PrefixStore handles this by stripping the prefix
+    // Strip leading slash for relative paths
     let normalized = path.trim_start_matches('/');
     Path::from(normalized)
 }
@@ -106,9 +104,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_path() {
+    fn test_to_path_relative() {
         assert_eq!(to_path("data/file.parquet").as_ref(), "data/file.parquet");
         assert_eq!(to_path("/data/file.parquet").as_ref(), "data/file.parquet");
+        assert_eq!(to_path("metadata/v1.json").as_ref(), "metadata/v1.json");
     }
 
     #[test]

@@ -18,12 +18,10 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::core::metadata::IcebergSnapshotWriter;
-use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, to_path};
+use crate::core::metadata::{DataFileInfo, SnapshotWriter};
+use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, create_file_io, to_path};
 use crate::error::{Error, Result};
 use crate::utils::track_memory_usage;
-
-use iceberg::io::FileIOBuilder;
 use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct, Summary};
 
 /// Configuration for data generation
@@ -64,16 +62,6 @@ pub struct GenerateResult {
     pub snapshot_id: i64,
 }
 
-/// Information about a generated data file
-#[derive(Debug, Clone)]
-pub struct DataFileInfo {
-    /// Path to the data file
-    pub path: String,
-    /// Size of the file in bytes
-    pub file_size: u64,
-    /// Number of records in the file
-    pub record_count: u64,
-}
 
 /// Operation for generating synthetic Iceberg tables
 pub struct GenerateOperation;
@@ -83,9 +71,6 @@ impl GenerateOperation {
     pub async fn execute(config: GenerateConfig) -> Result<GenerateResult> {
         let storage = create_object_store(&config.path).await?;
         let base_path = config.path.trim_end_matches('/').to_string();
-
-        let metadata_path = format!("{}/metadata", base_path);
-        let data_path = format!("{}/data", base_path);
 
         let rows_per_file = (config.rows / config.files as u64).max(1);
         let mut data_files = Vec::new();
@@ -110,20 +95,25 @@ impl GenerateOperation {
                     .wrapping_add(file_idx as u64)
             );
             let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
-            let file_path = format!("{}/{}", data_path, file_name);
+
+            // Relative path for storage (PrefixStore adds the table prefix)
+            let storage_path = format!("data/{}", file_name);
+            // Absolute path for Iceberg metadata
+            let iceberg_path = format!("{}/data/{}", base_path, file_name);
 
             let parquet_bytes = Self::write_parquet_bytes(&batch)?;
             let file_size = parquet_bytes.len() as u64;
             total_bytes += file_size;
 
             storage
-                .put_bytes(&to_path(&file_path), Bytes::from(parquet_bytes))
+                .put_bytes(&to_path(&storage_path), Bytes::from(parquet_bytes))
                 .await?;
 
             data_files.push(DataFileInfo {
-                path: file_path,
-                file_size,
+                path: iceberg_path,
+                size: file_size,
                 record_count: file_rows,
+                partition: HashMap::new(),
             });
         }
 
@@ -131,7 +121,6 @@ impl GenerateOperation {
         let (metadata_file_path, snapshot_id) = Self::create_complete_iceberg_table(
             &storage,
             &base_path,
-            &metadata_path,
             &config.schema,
             &data_files,
             &config.partition_columns,
@@ -153,7 +142,6 @@ impl GenerateOperation {
     async fn create_complete_iceberg_table(
         storage: &Storage,
         base_path: &str,
-        metadata_path: &str,
         arrow_schema: &Schema,
         data_files: &[DataFileInfo],
         partition_cols: &[String],
@@ -223,11 +211,10 @@ impl GenerateOperation {
             .as_nanos();
 
         // Create FileIO for writing manifests
-        let file_io = Self::create_file_io(base_path)?;
+        let file_io = create_file_io(base_path)?;
 
         // Create snapshot writer
-        let snapshot_writer =
-            IcebergSnapshotWriter::new(base_path.to_string(), file_io, storage.clone());
+        let snapshot_writer = SnapshotWriter::new(base_path.to_string(), file_io);
 
         // Convert our DataFileInfo to Iceberg DataFile
         let iceberg_data_files: Vec<iceberg::spec::DataFile> = data_files
@@ -240,7 +227,7 @@ impl GenerateOperation {
                     .partition(Struct::empty())
                     .partition_spec_id(partition_spec.spec_id())
                     .record_count(df.record_count)
-                    .file_size_in_bytes(df.file_size)
+                    .file_size_in_bytes(df.size)
                     .build()
                     .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))
             })
@@ -270,7 +257,7 @@ impl GenerateOperation {
 
         // Calculate summary statistics
         let total_records: u64 = data_files.iter().map(|f| f.record_count).sum();
-        let total_size: u64 = data_files.iter().map(|f| f.file_size).sum();
+        let total_size: u64 = data_files.iter().map(|f| f.size).sum();
 
         let summary = Summary {
             operation: iceberg::spec::Operation::Append,
@@ -293,7 +280,8 @@ impl GenerateOperation {
             initial_metadata.current_schema().schema_id(),
         );
 
-        // Update metadata with snapshot
+        // Update metadata with snapshot - need new version
+        let _initial_location = new_metadata_location(base_path);
         let metadata_location = new_metadata_location(base_path);
         let metadata_with_snapshot = iceberg::spec::TableMetadataBuilder::new_from_metadata(
             initial_metadata,
@@ -311,57 +299,19 @@ impl GenerateOperation {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         let metadata_filename = metadata_location_filename(&metadata_location);
-        let metadata_file_path = format!("{}/{}", metadata_path, metadata_filename);
+        // Relative path for storage
+        let storage_metadata_path = format!("metadata/{}", metadata_filename);
+        // Absolute path for result
+        let iceberg_metadata_path = format!("{}/metadata/{}", base_path, metadata_filename);
 
         storage
-            .put_bytes(&to_path(&metadata_file_path), Bytes::from(metadata_json))
+            .put_bytes(&to_path(&storage_metadata_path), Bytes::from(metadata_json))
             .await?;
 
-        // Write version-hint.text
-        let version_hint_path = format!("{}/version-hint.text", metadata_path);
-        storage
-            .put_bytes(&to_path(&version_hint_path), Bytes::from("0"))
-            .await?;
+        // Note: We do NOT write version-hint.text as it's Hadoop legacy format
+        // Standard Iceberg format uses metadata/00000-<uuid>.metadata.json naming
 
-        Ok((metadata_file_path, snapshot_id))
-    }
-
-    /// Create FileIO based on path scheme
-    fn create_file_io(base_path: &str) -> Result<iceberg::io::FileIO> {
-        let scheme = if base_path.starts_with("s3://") {
-            "s3"
-        } else if base_path.starts_with("gs://") {
-            "gs"
-        } else if base_path.starts_with("az://") || base_path.starts_with("abfs://") {
-            "az"
-        } else {
-            "file"
-        };
-
-        let mut builder = FileIOBuilder::new(scheme);
-
-        if scheme == "s3" {
-            // For S3, pass through environment variables
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-                builder = builder.with_prop("s3.endpoint", endpoint);
-            }
-            if let Ok(region) = std::env::var("AWS_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            }
-            if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                builder = builder.with_prop("s3.access-key-id", access_key);
-            }
-            if let Ok(secret_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                builder = builder.with_prop("s3.secret-access-key", secret_key);
-            }
-            if std::env::var("AWS_ALLOW_HTTP").is_ok() {
-                builder = builder.with_prop("s3.allow-http", "true");
-            }
-        }
-
-        builder
-            .build()
-            .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
+        Ok((iceberg_metadata_path, snapshot_id))
     }
 
     /// Generate a record batch with synthetic data

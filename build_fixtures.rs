@@ -836,12 +836,12 @@ fn generate_iceberg_table() -> Result<(), Box<dyn std::error::Error>> {
         "metadata-log": []
     });
 
-    let metadata_path = format!("{}/metadata/00001-6a8c4b2a-7e4d-4f9a-b1c3-d5e6f7a8b9c0.metadata.json", table_dir);
+    let metadata_path = format!(
+        "{}/metadata/00001-6a8c4b2a-7e4d-4f9a-b1c3-d5e6f7a8b9c0.metadata.json",
+        table_dir
+    );
     let mut metadata_file = File::create(&metadata_path)?;
     metadata_file.write_all(serde_json::to_string_pretty(&metadata)?.as_bytes())?;
-
-    // 5. Iceberg estándar no usa version-hint.text (es legacy Hadoop)
-    // Eliminado: NO LEGACY
 
     println!("Created: {}", table_dir);
     println!(

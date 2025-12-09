@@ -6,10 +6,9 @@
 use std::sync::Arc;
 
 use iceberg::table::{StaticTable, Table};
-use iceberg::io::{FileIO, FileIOBuilder};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
 
-use crate::core::storage::create_object_store;
+use crate::core::storage::{create_object_store, create_file_io};
 use crate::core::utils::find_latest_metadata;
 use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
@@ -83,7 +82,7 @@ impl TableLoader {
         log::debug!("Found metadata location: {}", metadata_location);
         
         // Create FileIO for the storage backend
-        let file_io = Self::create_file_io(&absolute_path)?;
+        let file_io = create_file_io(&absolute_path)?;
         log::debug!("Created FileIO for path: {}", absolute_path);
         
         // Create table identifier (for static tables, namespace/name don't matter much)
@@ -182,11 +181,10 @@ impl TableLoader {
                     }
                     
                     // Add credentials if provided
-                    if let Some(credential) = &config.credential {
-                        if let Ok(Some(token)) = credential.resolve() {
+                    if let Some(credential) = &config.credential
+                        && let Ok(Some(token)) = credential.resolve() {
                             props.insert("token".to_string(), token);
                         }
-                    }
                     
                     // Add any additional properties
                     for (k, v) in &config.properties {
@@ -222,53 +220,6 @@ impl TableLoader {
         find_latest_metadata(path, &storage).await
     }
 
-    /// Create FileIO based on path scheme
-    fn create_file_io(path: &str) -> Result<FileIO> {
-        if path.starts_with("s3://") || path.starts_with("s3a://") {
-            let mut builder = FileIOBuilder::new("s3");
-
-            if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                builder = builder.with_prop("s3.access-key-id", key);
-            }
-            if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                builder = builder.with_prop("s3.secret-access-key", secret);
-            }
-            if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
-                builder = builder.with_prop("s3.session-token", token);
-            }
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-                builder = builder.with_prop("s3.endpoint", endpoint);
-            }
-            if let Ok(region) = std::env::var("AWS_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else {
-                builder = builder.with_prop("s3.region", "us-east-1");
-            }
-            builder = builder.with_prop("s3.path-style-access", "true");
-
-            builder
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
-        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
-            FileIOBuilder::new("gcs")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
-        } else if path.starts_with("az://")
-            || path.starts_with("abfs://")
-            || path.starts_with("abfss://")
-        {
-            FileIOBuilder::new("azblob")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
-        } else {
-            FileIOBuilder::new_fs_io()
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
-        }
-    }
-
     /// Create a new Iceberg table
     ///
     /// Uses iceberg's TableCreation API instead of custom metadata building
@@ -297,7 +248,7 @@ pub trait TableExt {
     fn snapshots(&self) -> Vec<Arc<iceberg::spec::Snapshot>>;
     
     /// Get data files for current snapshot
-    async fn current_data_files(&self) -> Result<Vec<iceberg::spec::DataFile>>;
+    fn current_data_files(&self) -> impl std::future::Future<Output = Result<Vec<iceberg::spec::DataFile>>> + Send;
 }
 
 impl TableExt for Table {

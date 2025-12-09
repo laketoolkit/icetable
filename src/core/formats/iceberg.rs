@@ -6,18 +6,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+use arrow::datatypes::Schema as ArrowSchema;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::StreamExt;
 use iceberg::TableIdent;
-use iceberg::io::FileIOBuilder;
 use iceberg::table::StaticTable;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
-use crate::core::metadata::{DataFileInfo, IcebergSnapshotWriter};
-use crate::core::storage::{Storage, detect_storage_type};
+use crate::core::metadata::{DataFileInfo, SnapshotWriter};
+use crate::core::storage::{Storage, detect_storage_type, create_file_io};
 use crate::error::{Error, Result};
 
 /// Handler for Apache Iceberg tables
@@ -135,7 +134,7 @@ impl IcebergHandler {
         let metadata_location = self.find_metadata_location(&table_path).await?;
 
         // Create FileIO based on path scheme
-        let file_io = Self::create_file_io(&table_path)?;
+        let file_io = create_file_io(&table_path)?;
 
         // Create a table identifier (just for identification purposes)
         let table_ident = TableIdent::from_strs(["iceberg", "table"])
@@ -155,66 +154,6 @@ impl IcebergHandler {
         Ok(table)
     }
 
-    /// Create FileIO based on path scheme
-    fn create_file_io(path: &str) -> Result<iceberg::io::FileIO> {
-        if path.starts_with("s3://") || path.starts_with("s3a://") {
-            // For S3, build FileIO with s3 scheme
-            // Read credentials and config from environment
-            let mut builder = FileIOBuilder::new("s3");
-
-            // S3 credentials
-            if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                builder = builder.with_prop("s3.access-key-id", key);
-            }
-            if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                builder = builder.with_prop("s3.secret-access-key", secret);
-            }
-            if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
-                builder = builder.with_prop("s3.session-token", token);
-            }
-
-            // S3 endpoint (for MinIO or other S3-compatible storage)
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-                builder = builder.with_prop("s3.endpoint", endpoint);
-            }
-
-            // S3 region
-            if let Ok(region) = std::env::var("AWS_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else {
-                // Default region for MinIO/local S3
-                builder = builder.with_prop("s3.region", "us-east-1");
-            }
-
-            // Enable path-style access for MinIO
-            builder = builder.with_prop("s3.path-style-access", "true");
-
-            builder
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
-        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
-            // For GCS
-            FileIOBuilder::new("gcs")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
-        } else if path.starts_with("az://")
-            || path.starts_with("abfs://")
-            || path.starts_with("abfss://")
-        {
-            // For Azure
-            FileIOBuilder::new("azblob")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
-        } else {
-            // Local filesystem
-            FileIOBuilder::new_fs_io()
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
-        }
-    }
-
     /// Find the metadata file location for an Iceberg table
     ///
     /// Uses standard Iceberg format: `<version>-<uuid>.metadata.json`
@@ -226,72 +165,6 @@ impl IcebergHandler {
 
         // Use the centralized find_latest_metadata utility
         crate::core::utils::find_latest_metadata(table_path, &self.storage).await
-    }
-
-    /// Convert Iceberg schema to Arrow schema
-    fn iceberg_schema_to_arrow(iceberg_schema: &iceberg::spec::Schema) -> Result<ArrowSchema> {
-        // Get the struct representation of the schema
-        let struct_type = iceberg_schema.as_struct();
-
-        // Convert each field
-        let fields: Result<Vec<Field>> = struct_type
-            .fields()
-            .iter()
-            .map(|field| {
-                // Convert the iceberg field to an arrow field
-                // Note: Iceberg's `required` means NOT nullable, so we invert it
-                let data_type = Self::iceberg_type_to_arrow(&field.field_type)?;
-                Ok(Field::new(field.name.clone(), data_type, !field.required))
-            })
-            .collect();
-
-        Ok(ArrowSchema::new(Fields::from(fields?)))
-    }
-
-    /// Convert Iceberg type to Arrow DataType
-    fn iceberg_type_to_arrow(iceberg_type: &iceberg::spec::Type) -> Result<DataType> {
-        use iceberg::spec::PrimitiveType;
-
-        match iceberg_type {
-            iceberg::spec::Type::Primitive(prim) => match prim {
-                PrimitiveType::Boolean => Ok(DataType::Boolean),
-                PrimitiveType::Int => Ok(DataType::Int32),
-                PrimitiveType::Long => Ok(DataType::Int64),
-                PrimitiveType::Float => Ok(DataType::Float32),
-                PrimitiveType::Double => Ok(DataType::Float64),
-                PrimitiveType::Date => Ok(DataType::Date32),
-                PrimitiveType::Time => Ok(DataType::Time64(TimeUnit::Microsecond)),
-                PrimitiveType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-                PrimitiveType::Timestamptz => Ok(DataType::Timestamp(
-                    TimeUnit::Microsecond,
-                    Some("UTC".into()),
-                )),
-                PrimitiveType::TimestampNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-                PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(
-                    TimeUnit::Nanosecond,
-                    Some("UTC".into()),
-                )),
-                PrimitiveType::String => Ok(DataType::Utf8),
-                PrimitiveType::Uuid => Ok(DataType::FixedSizeBinary(16)),
-                PrimitiveType::Fixed(size) => Ok(DataType::FixedSizeBinary(*size as i32)),
-                PrimitiveType::Binary => Ok(DataType::Binary),
-                PrimitiveType::Decimal { precision, scale } => {
-                    Ok(DataType::Decimal128(*precision as u8, *scale as i8))
-                }
-            },
-            iceberg::spec::Type::Struct(_) => {
-                // For complex types, we'll return a placeholder for now
-                Err(Error::UnsupportedFeature {
-                    feature: "Nested struct types in Iceberg not yet fully supported".to_string(),
-                })
-            }
-            iceberg::spec::Type::List(_) => Err(Error::UnsupportedFeature {
-                feature: "List types in Iceberg not yet fully supported".to_string(),
-            }),
-            iceberg::spec::Type::Map(_) => Err(Error::UnsupportedFeature {
-                feature: "Map types in Iceberg not yet fully supported".to_string(),
-            }),
-        }
     }
 }
 
@@ -333,7 +206,8 @@ impl FormatHandler for IcebergHandler {
         let metadata = table.metadata().clone();
         let iceberg_schema = metadata.current_schema();
 
-        let arrow_schema = Self::iceberg_schema_to_arrow(iceberg_schema)?;
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema)
+            .map_err(|e| Error::General(format!("Failed to convert schema: {}", e)))?;
         Ok(Arc::new(arrow_schema))
     }
 
@@ -498,7 +372,7 @@ impl FormatHandler for IcebergHandler {
             None => return Ok(build_result(&null_counts, &min_values, &max_values)),
         };
 
-        let file_io = Self::create_file_io(&self.path.to_string_lossy())?;
+        let file_io = create_file_io(&self.path.to_string_lossy())?;
 
         let content = file_io
             .new_input(current_snapshot.manifest_list())
@@ -699,10 +573,9 @@ impl FormatHandler for IcebergHandler {
             .map_err(|e| Error::General(format!("Failed to get file size: {}", e)))?
             .len();
 
-        // Use IcebergSnapshotWriter for manifest/snapshot/metadata operations
-        let file_io = Self::create_file_io(&table_path)?;
-        let snapshot_writer =
-            IcebergSnapshotWriter::new(table_path.clone(), file_io, self.storage.clone());
+        // Use SnapshotWriter for manifest/snapshot/metadata operations
+        let file_io = create_file_io(&table_path)?;
+        let snapshot_writer = SnapshotWriter::with_storage(table_path.clone(), file_io, self.storage.clone());
 
         // Create DataFileInfo
         let data_file_info = DataFileInfo {

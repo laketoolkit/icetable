@@ -318,7 +318,7 @@ async fn test_minio_generate_with_seed_reproducibility() {
 
     // File sizes should be identical with the same seed
     assert_eq!(
-        result1.data_files[0].file_size, result2.data_files[0].file_size,
+        result1.data_files[0].size, result2.data_files[0].size,
         "Same seed should produce same file sizes"
     );
 

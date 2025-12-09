@@ -81,9 +81,9 @@ impl InspectCommand {
         
         // Schema if requested or default
         if args.schema || (!args.metadata && !args.stats && !args.preview && !args.layout) {
-            output.push_str("\n");
+            output.push('\n');
             output.push_str(&format!("{}", "Schema:".cyan().bold()));
-            output.push_str("\n");
+            output.push('\n');
             
             let schema = metadata.current_schema();
             output.push_str(&format!("  Schema ID: {}\n", schema.schema_id()));
@@ -99,9 +99,9 @@ impl InspectCommand {
         
         // Partition spec if layout requested or default
         if args.layout || (!args.metadata && !args.stats && !args.preview && !args.schema) {
-            output.push_str("\n");
+            output.push('\n');
             output.push_str(&format!("{}", "Partition Spec:".cyan().bold()));
-            output.push_str("\n");
+            output.push('\n');
             
             let partition_spec = metadata.default_partition_spec();
             // Note: spec_id and fields are private in iceberg crate
@@ -114,12 +114,12 @@ impl InspectCommand {
         
         // Stats if requested
         if args.stats {
-            output.push_str("\n");
+            output.push('\n');
             output.push_str(&format!("{}", "Statistics:".cyan().bold()));
-            output.push_str("\n");
+            output.push('\n');
             
-            if let Some(current_snapshot_id) = metadata.current_snapshot_id() {
-                if let Some(snapshot) = metadata.snapshot_by_id(current_snapshot_id) {
+            if let Some(current_snapshot_id) = metadata.current_snapshot_id()
+                && let Some(snapshot) = metadata.snapshot_by_id(current_snapshot_id) {
                     let summary = snapshot.summary();
                     output.push_str(&format!("  Operation: {:?}\n", summary.operation));
                     
@@ -129,14 +129,13 @@ impl InspectCommand {
                         }
                     }
                 }
-            }
         }
         
         // Metadata if requested
         if args.metadata {
-            output.push_str("\n");
+            output.push('\n');
             output.push_str(&format!("{}", "Metadata:".cyan().bold()));
-            output.push_str("\n");
+            output.push('\n');
             
             // Note: properties is private in iceberg crate
             output.push_str("  Properties: (requires accessing private field)\n");
@@ -149,18 +148,18 @@ impl InspectCommand {
         
         // Preview if requested
         if args.preview {
-            output.push_str("\n");
+            output.push('\n');
             output.push_str(&format!("{}", "Data Preview:".cyan().bold()));
-            output.push_str("\n");
+            output.push('\n');
             output.push_str("  (Data preview requires scan implementation)\n");
             // TODO: Implement data preview using table.scan()
         }
         
         // Snapshots if verbose
         if args.verbose {
-            output.push_str("\n");
+            output.push('\n');
             output.push_str(&format!("{}", "Snapshots:".cyan().bold()));
-            output.push_str("\n");
+            output.push('\n');
             
             for snapshot in metadata.snapshots() {
                 let timestamp = chrono::DateTime::from_timestamp_millis(snapshot.timestamp_ms())

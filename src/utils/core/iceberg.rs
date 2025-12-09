@@ -5,7 +5,6 @@
 use std::str::FromStr;
 
 use iceberg::MetadataLocation;
-use iceberg::spec::{PrimitiveType, Type};
 
 use crate::core::storage::{ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
@@ -97,33 +96,4 @@ pub fn next_metadata_location(current_path: &str) -> Result<MetadataLocation> {
 /// Creates the initial MetadataLocation (version 0) for a new table.
 pub fn new_metadata_location(table_location: &str) -> MetadataLocation {
     MetadataLocation::new_with_table_location(table_location)
-}
-
-/// Convert Iceberg type to Arrow type (simplified)
-///
-/// This provides a basic mapping from Iceberg primitive types to Arrow data types.
-/// Complex types (structs, lists, maps) are currently mapped to UTF8 strings as a fallback.
-pub fn iceberg_to_arrow_type(iceberg_type: &Type) -> arrow::datatypes::DataType {
-    use arrow::datatypes::DataType;
-
-    match iceberg_type {
-        Type::Primitive(p) => match p {
-            PrimitiveType::Boolean => DataType::Boolean,
-            PrimitiveType::Int => DataType::Int32,
-            PrimitiveType::Long => DataType::Int64,
-            PrimitiveType::Float => DataType::Float32,
-            PrimitiveType::Double => DataType::Float64,
-            PrimitiveType::String => DataType::Utf8,
-            PrimitiveType::Binary => DataType::Binary,
-            PrimitiveType::Date => DataType::Date32,
-            PrimitiveType::Timestamp => {
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
-            }
-            PrimitiveType::Timestamptz => {
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into()))
-            }
-            _ => DataType::Utf8, // Fallback for other types
-        },
-        _ => arrow::datatypes::DataType::Utf8, // Fallback for complex types
-    }
 }

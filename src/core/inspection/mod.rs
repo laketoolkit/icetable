@@ -19,7 +19,6 @@ pub mod view_builder;
 pub mod delta;
 
 pub mod iceberg;
-pub mod iceberg_metadata_extractor;
 
 // Re-export commonly used types
 pub use formatters::*;

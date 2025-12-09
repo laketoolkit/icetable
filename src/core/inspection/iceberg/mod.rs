@@ -5,20 +5,15 @@
 //! orphan file detection.
 
 mod factory;
-mod layout;
-mod manifest;
-mod metadata_bridge;
-mod orphan;
 
 pub use factory::IcebergInspectorFactory;
-pub use metadata_bridge::{MetadataBridge, PartitionFieldInfo};
 
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::inspection::traits::{
-    ColumnInfo, ColumnStatistics, FileBasedLayout, FileInfo, LayoutInfo, OrphanFileEntry,
+    ColumnInfo, ColumnStatistics, FileBasedLayout, FileInfo, LayoutInfo,
     OrphanFilesInfo, PhysicalInspectOptions, PhysicalInspector, PhysicalMetadata, SchemaInfo,
     StatisticsInfo, VerbosityLevel,
 };
@@ -66,13 +61,12 @@ where
 /// Iceberg table inspector using TableLoader
 pub struct IcebergInspector {
     path: PathBuf,
-    storage: Storage,
 }
 
 impl IcebergInspector {
     /// Create a new Iceberg inspector
-    pub fn new(path: PathBuf, storage: Storage) -> Self {
-        Self { path, storage }
+    pub fn new(path: PathBuf, _storage: Storage) -> Self {
+        Self { path }
     }
 
     /// Get the table path as a string
@@ -85,64 +79,58 @@ impl IcebergInspector {
         TableLoader::load_table(self.table_path(), None).await
     }
 
-    /// Extract file info from table using MetadataBridge
+    /// Extract file info from table using iceberg API directly
     async fn extract_file_info_from_table(
         &self,
         table: &iceberg::table::Table,
     ) -> Result<FileInfo> {
-        let mut bridge = MetadataBridge::from_table_with_path(table, self.table_path());
-        
-        // Load raw metadata for private fields
-        bridge.ensure_raw_metadata().await?;
-        
+        let metadata = table.metadata();
+
         // Get metadata file size
         let metadata_size = self.get_metadata_size().await.unwrap_or(0);
-        
+
         let mut file_metadata = HashMap::new();
-        file_metadata.insert("format_version".to_string(), bridge.format_version().to_string());
-        file_metadata.insert("current_schema_id".to_string(), bridge.current_schema_id().to_string());
-        file_metadata.insert("default_sort_order_id".to_string(), bridge.default_sort_order_id().to_string());
-        
-        // Get table UUID (private field)
-        if let Ok(table_uuid) = bridge.table_uuid() {
-            file_metadata.insert("table_uuid".to_string(), table_uuid.to_string());
-        }
-        
-        // Get location (private field)
-        if let Ok(location) = bridge.location() {
-            file_metadata.insert("location".to_string(), location.to_string());
-        }
-        
+        file_metadata.insert("format_version".to_string(), (metadata.format_version() as i32).to_string());
+        file_metadata.insert("current_schema_id".to_string(), metadata.current_schema_id().to_string());
+        file_metadata.insert("default_sort_order_id".to_string(), (metadata.default_sort_order_id() as i32).to_string());
+
+        // Get table UUID (public in iceberg 0.7)
+        file_metadata.insert("table_uuid".to_string(), metadata.uuid().to_string());
+
+        // Get location (public in iceberg 0.7)
+        file_metadata.insert("location".to_string(), metadata.location().to_string());
+
         // Get snapshot count
-        let snapshot_count = bridge.snapshots().count();
+        let snapshot_count = metadata.snapshots().count();
         file_metadata.insert("snapshot_count".to_string(), snapshot_count.to_string());
-        
+
         // Get current snapshot ID if available
-        if let Some(current_snapshot_id) = bridge.current_snapshot_id() {
+        if let Some(current_snapshot_id) = metadata.current_snapshot_id() {
             file_metadata.insert("current_snapshot_id".to_string(), current_snapshot_id.to_string());
         }
-        
-        // Get properties
-        let properties = bridge.properties();
+
+        // Get properties (public in iceberg 0.7)
+        let properties = metadata.properties();
         if !properties.is_empty() {
             for (key, value) in properties {
-                file_metadata.insert(format!("property.{}", key), value);
+                file_metadata.insert(format!("property.{}", key), value.clone());
             }
         }
+
+        // Get created_by from properties
+        let created_by = properties.get("created-by").cloned();
 
         Ok(FileInfo {
             path: self.table_path().to_string(),
             file_size: metadata_size,
-            format_version: bridge.format_version().to_string(),
-            created_by: bridge.created_by(),
+            format_version: (metadata.format_version() as i32).to_string(),
+            created_by,
             metadata: file_metadata,
         })
     }
 
     /// Get metadata file size
     async fn get_metadata_size(&self) -> Result<u64> {
-        use object_store::ObjectStore;
-        
         let metadata_dir = self.path.join("metadata");
         if metadata_dir.exists() {
             // Find latest metadata file
@@ -152,16 +140,13 @@ impl IcebergInspector {
             for entry in std::fs::read_dir(metadata_dir)? {
                 let entry = entry?;
                 let path = entry.path();
-                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                    if let Some(version_str) = file_name.split('-').next() {
-                        if let Ok(version) = version_str.parse::<u64>() {
-                            if version > max_version {
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                    && let Some(version_str) = file_name.split('-').next()
+                        && let Ok(version) = version_str.parse::<u64>()
+                            && version > max_version {
                                 max_version = version;
                                 latest_file = Some(path);
                             }
-                        }
-                    }
-                }
             }
             
             if let Some(file_path) = latest_file {
@@ -196,54 +181,45 @@ impl IcebergInspector {
         })
     }
 
-    /// Extract layout info from table using MetadataBridge
+    /// Extract layout info from table using iceberg API directly
     async fn extract_layout_from_table(
         &self,
         table: &iceberg::table::Table,
         _options: &PhysicalInspectOptions,
     ) -> Result<LayoutInfo> {
-        let mut bridge = MetadataBridge::from_table_with_path(table, self.table_path());
-        
-        // Load raw metadata for partition fields
-        bridge.ensure_raw_metadata().await?;
-        
+        let metadata = table.metadata();
+
         let mut details = HashMap::new();
-        details.insert("format_version".to_string(), bridge.format_version().to_string());
-        
-        // Get table UUID (private field)
-        if let Ok(table_uuid) = bridge.table_uuid() {
-            details.insert("table_uuid".to_string(), table_uuid.to_string());
-        }
-        
-        details.insert("current_schema_id".to_string(), bridge.current_schema_id().to_string());
-        
-        // Get partition spec info with fields (private in iceberg crate)
-        let partition_spec = bridge.default_partition_spec();
+        details.insert("format_version".to_string(), (metadata.format_version() as i32).to_string());
+
+        // Get table UUID (public in iceberg 0.7)
+        details.insert("table_uuid".to_string(), metadata.uuid().to_string());
+
+        details.insert("current_schema_id".to_string(), metadata.current_schema_id().to_string());
+
+        // Get partition spec info (public in iceberg 0.7)
+        let partition_spec = metadata.default_partition_spec();
         details.insert("partition_spec_id".to_string(), partition_spec.spec_id().to_string());
-        
-        // Get partition fields from raw JSON
-        let partition_fields = bridge.partition_spec_fields();
+
+        // Get partition fields (public in iceberg 0.7 - PartitionField has public fields)
+        let partition_fields = partition_spec.fields();
         if !partition_fields.is_empty() {
             let fields_display: Vec<String> = partition_fields
                 .iter()
-                .map(|f| f.display())
+                .map(|f| format!("{}: {:?}", f.name, f.transform))
                 .collect();
             details.insert("partition_fields".to_string(), fields_display.join(", "));
         }
-        
+
         // Get sort order
-        details.insert("default_sort_order_id".to_string(), bridge.default_sort_order_id().to_string());
-        
-        // Get last updated timestamp if available
-        if let Some(last_updated_ms) = bridge.last_updated_ms() {
-            details.insert("last_updated_ms".to_string(), last_updated_ms.to_string());
-        }
-        
-        // Get last column ID if available
-        if let Some(last_column_id) = bridge.last_column_id() {
-            details.insert("last_column_id".to_string(), last_column_id.to_string());
-        }
-        
+        details.insert("default_sort_order_id".to_string(), (metadata.default_sort_order_id() as i32).to_string());
+
+        // Get last updated timestamp (public in iceberg 0.7)
+        details.insert("last_updated_ms".to_string(), metadata.last_updated_ms().to_string());
+
+        // Get last column ID (public in iceberg 0.7)
+        details.insert("last_column_id".to_string(), metadata.last_column_id().to_string());
+
         // For now, return basic file-based layout
         // In a real implementation, we would scan manifests to get actual file counts
         Ok(LayoutInfo::FileBased(FileBasedLayout {

@@ -84,12 +84,22 @@ pub fn parse_storage_url(path: &str) -> Result<(String, String)> {
 }
 
 /// Detect storage type from a path
+///
+/// Supports various URL schemes:
+/// - S3: `s3://`, `s3a://`
+/// - GCS: `gs://`, `gcs://`
+/// - Azure: `az://`, `azure://`, `abfs://`, `abfss://`
+/// - Local: everything else (including `file://`)
 pub fn detect_storage_type(path: &str) -> &'static str {
-    if path.starts_with("s3://") {
+    if path.starts_with("s3://") || path.starts_with("s3a://") {
         "s3"
-    } else if path.starts_with("gs://") {
+    } else if path.starts_with("gs://") || path.starts_with("gcs://") {
         "gcs"
-    } else if path.starts_with("az://") || path.starts_with("azure://") {
+    } else if path.starts_with("az://")
+        || path.starts_with("azure://")
+        || path.starts_with("abfs://")
+        || path.starts_with("abfss://")
+    {
         "azure"
     } else {
         "local"

@@ -4,8 +4,7 @@
 //! All errors implement std::error::Error and are designed to provide actionable
 //! error messages to users.
 
-use regex;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// The main error type for TableTools operations
@@ -325,16 +324,52 @@ impl Error {
 
     /// Get a user-friendly error message with suggestions
     pub fn user_message(&self) -> String {
-        self.to_string()
+        let base_message = self.to_string();
+
+        let suggestions = match self {
+            Error::FileNotFound { path } => {
+                let path_str = path.display();
+                Some(format!(
+                    "\n\nPossible solutions:\n\
+                     - Check if the path '{}' exists\n\
+                     - Verify you have read permissions\n\
+                     - Ensure the table path is correct",
+                    path_str
+                ))
+            }
+            Error::PermissionDenied { .. } => Some(
+                "\n\nPossible solutions:\n\
+                 - Check file/directory permissions\n\
+                 - Run with appropriate privileges\n\
+                 - Verify cloud credentials are configured"
+                    .to_string(),
+            ),
+            Error::Configuration { .. } => Some(
+                "\n\nPossible solutions:\n\
+                 - Check environment variables (AWS_*, GOOGLE_*, AZURE_*)\n\
+                 - Verify configuration file syntax\n\
+                 - See documentation for required settings"
+                    .to_string(),
+            ),
+            Error::Network { .. } => Some(
+                "\n\nPossible solutions:\n\
+                 - Check network connectivity\n\
+                 - Verify endpoint URL is correct\n\
+                 - Check firewall settings"
+                    .to_string(),
+            ),
+            _ => None,
+        };
+
+        match suggestions {
+            Some(s) => format!("{}{}", base_message, s),
+            None => base_message,
+        }
     }
 
     /// Check if the error is recoverable (can be retried)
     pub fn is_recoverable(&self) -> bool {
-        match self {
-            Error::Timeout { .. } => true,
-            Error::Network { .. } => true,
-            _ => false,
-        }
+        matches!(self, Error::Timeout { .. } | Error::Network { .. })
     }
 }
 
@@ -379,7 +414,10 @@ mod tests {
 
     #[test]
     fn test_recoverable() {
-        let err = Error::timeout("read file", 30);
+        let err = Error::Timeout {
+            operation: "read file".to_string(),
+            seconds: 30,
+        };
         assert!(err.is_recoverable());
 
         let err = Error::FileNotFound {
