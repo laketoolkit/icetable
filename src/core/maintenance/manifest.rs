@@ -13,11 +13,7 @@ use iceberg::spec::{
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{ObjectStoreExt, create_object_store};
-use crate::core::utils::{
-    extract_version_from_path, metadata_location_filename, new_metadata_location,
-    next_metadata_location,
-};
+use crate::core::storage::create_object_store;
 use crate::error::{Error, Result};
 
 /// Configuration for manifest rewrite operations
@@ -561,30 +557,13 @@ impl ManifestService {
     async fn write_metadata_direct(
         &self,
         table_path: &str,
-        metadata_dir: &str,
-        metadata_file_path: &str,
+        _metadata_dir: &str,      // Kept for API compatibility
+        _metadata_file_path: &str, // Kept for API compatibility
         new_metadata: &TableMetadata,
     ) -> Result<u32> {
         let storage = create_object_store(table_path).await?;
-
-        let next_location = next_metadata_location(metadata_file_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
-        let new_metadata_path = format!(
-            "{}/{}",
-            metadata_dir,
-            metadata_location_filename(&next_location)
-        );
-
-        let new_metadata_bytes = serde_json::to_vec_pretty(new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        storage
-            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
-            .await?;
-
-        Ok(new_version)
+        let result = crate::core::utils::write_metadata_file(table_path, new_metadata, &storage).await?;
+        Ok(result.version as u32)
     }
 }
 

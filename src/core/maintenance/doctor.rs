@@ -6,8 +6,19 @@
 
 use std::collections::HashSet;
 
+use iceberg::spec::{FormatVersion, ManifestList};
+
 use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, detect_storage_type};
 use crate::error::Result;
+
+/// Convert format version integer to FormatVersion enum
+fn get_format_version(version: i64) -> FormatVersion {
+    if version >= 2 {
+        FormatVersion::V2
+    } else {
+        FormatVersion::V1
+    }
+}
 
 /// Check result status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -593,8 +604,17 @@ impl DoctorService {
             }
         };
 
-        let manifest_reader = match apache_avro::Reader::new(&manifest_list_bytes[..]) {
-            Ok(r) => r,
+        // Get format version from metadata
+        let format_version = metadata
+            .get("format-version")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+
+        let manifest_list = match ManifestList::parse_with_version(
+            &manifest_list_bytes,
+            get_format_version(format_version),
+        ) {
+            Ok(ml) => ml,
             Err(e) => {
                 return CheckResult::error(
                     "Manifest Files",
@@ -604,23 +624,11 @@ impl DoctorService {
             }
         };
 
-        let mut manifest_paths = Vec::new();
-        for value_result in manifest_reader {
-            if let Ok(apache_avro::types::Value::Record(fields)) = value_result
-                && let Some(path) = fields
-                    .iter()
-                    .find(|(name, _)| name == "manifest-path" || name == "manifest_path")
-                    .and_then(|(_, v)| {
-                        if let apache_avro::types::Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-            {
-                manifest_paths.push(Self::resolve_path(table_location, &path));
-            }
-        }
+        let manifest_paths: Vec<String> = manifest_list
+            .entries()
+            .iter()
+            .map(|entry| Self::resolve_path(table_location, entry.manifest_path.as_str()))
+            .collect();
 
         let mut missing = 0;
         for path in &manifest_paths {
@@ -686,67 +694,42 @@ impl DoctorService {
             Err(_) => return CheckResult::error("Data Files", "Cannot read manifest list", ""),
         };
 
-        let manifest_reader = match apache_avro::Reader::new(&manifest_list_bytes[..]) {
-            Ok(r) => r,
+        // Get format version from metadata
+        let format_version = metadata
+            .get("format-version")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+
+        let manifest_list = match ManifestList::parse_with_version(
+            &manifest_list_bytes,
+            get_format_version(format_version),
+        ) {
+            Ok(ml) => ml,
             Err(_) => return CheckResult::error("Data Files", "Cannot parse manifest list", ""),
         };
 
-        let mut manifest_paths = Vec::new();
-        for value_result in manifest_reader {
-            if let Ok(apache_avro::types::Value::Record(fields)) = value_result
-                && let Some(path) = fields
-                    .iter()
-                    .find(|(name, _)| name == "manifest-path" || name == "manifest_path")
-                    .and_then(|(_, v)| {
-                        if let apache_avro::types::Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-            {
-                manifest_paths.push(Self::resolve_path(table_location, &path));
-            }
-        }
+        // Create FileIO for loading manifests
+        let file_io = match crate::core::storage::create_file_io(table_path) {
+            Ok(io) => io,
+            Err(_) => return CheckResult::error("Data Files", "Cannot create FileIO", ""),
+        };
 
         // Collect data files from manifests
         let mut data_files = Vec::new();
-        for manifest_path in &manifest_paths {
-            let manifest_bytes = match storage.get_bytes_str(manifest_path).await {
-                Ok(b) => b,
+        for manifest_entry in manifest_list.entries() {
+            // Only check data manifests
+            if manifest_entry.content != iceberg::spec::ManifestContentType::Data {
+                continue;
+            }
+
+            let manifest = match manifest_entry.load_manifest(&file_io).await {
+                Ok(m) => m,
                 Err(_) => continue,
             };
 
-            let manifest_reader = match apache_avro::Reader::new(&manifest_bytes[..]) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-
-            for value_result in manifest_reader {
-                if let Ok(apache_avro::types::Value::Record(fields)) = value_result
-                    && let Some(data_file) = fields
-                        .iter()
-                        .find(|(name, _)| name == "data_file")
-                        .and_then(|(_, v)| {
-                            if let apache_avro::types::Value::Record(df_fields) = v {
-                                Some(df_fields)
-                            } else {
-                                None
-                            }
-                        })
-                    && let Some(file_path) = data_file
-                        .iter()
-                        .find(|(name, _)| name == "file_path")
-                        .and_then(|(_, v)| {
-                            if let apache_avro::types::Value::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                {
-                    data_files.push(Self::resolve_path(table_location, &file_path));
-                }
+            for entry in manifest.entries() {
+                let file_path = entry.data_file().file_path().to_string();
+                data_files.push(Self::resolve_path(table_location, &file_path));
             }
         }
 

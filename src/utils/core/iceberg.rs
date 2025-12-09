@@ -97,3 +97,45 @@ pub fn next_metadata_location(current_path: &str) -> Result<MetadataLocation> {
 pub fn new_metadata_location(table_location: &str) -> MetadataLocation {
     MetadataLocation::new_with_table_location(table_location)
 }
+
+/// Result of writing metadata file
+pub struct WriteMetadataResult {
+    /// Path to the new metadata file
+    pub path: String,
+    /// Version number of the new metadata
+    pub version: i64,
+}
+
+/// Write metadata file using standard Iceberg naming convention
+///
+/// This is the canonical function for writing metadata files.
+/// It handles version numbering and path generation.
+///
+/// Returns both the path and version number of the new metadata file.
+pub async fn write_metadata_file(
+    table_path: &str,
+    metadata: &iceberg::spec::TableMetadata,
+    storage: &Storage,
+) -> Result<WriteMetadataResult> {
+    let table_path = table_path.trim_end_matches('/');
+    let metadata_dir = format!("{}/metadata", table_path);
+
+    // Find current metadata to derive next version
+    let current_metadata_path = find_latest_metadata(table_path, storage).await?;
+
+    // Generate next metadata location with standard naming
+    let next_location = next_metadata_location(&current_metadata_path)
+        .unwrap_or_else(|_| new_metadata_location(table_path));
+
+    let version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
+    let path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+
+    let metadata_bytes = serde_json::to_vec_pretty(metadata)
+        .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+
+    storage
+        .put_bytes_str(&path, bytes::Bytes::from(metadata_bytes))
+        .await?;
+
+    Ok(WriteMetadataResult { path, version })
+}
