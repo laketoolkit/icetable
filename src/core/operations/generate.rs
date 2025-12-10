@@ -161,8 +161,8 @@ impl GenerateOperation {
                     .iter()
                     .find(|f| f.name == *col)
                     .map(|f| f.id)
-                    .ok_or_else(|| {
-                        Error::General(format!("Partition column '{}' not found in schema", col))
+                    .ok_or_else(|| Error::ColumnNotFound {
+                        column: col.clone(),
                     })?;
 
                 unbound_fields.push(
@@ -177,10 +177,14 @@ impl GenerateOperation {
             iceberg::spec::UnboundPartitionSpec::builder()
                 .with_spec_id(0)
                 .add_partition_fields(unbound_fields)
-                .map_err(|e| Error::General(format!("Failed to add partition fields: {}", e)))?
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to add partition fields: {}", e),
+                })?
                 .build()
                 .bind(iceberg_schema.clone())
-                .map_err(|e| Error::General(format!("Failed to build partition spec: {}", e)))?
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to build partition spec: {}", e),
+                })?
         } else {
             iceberg::spec::PartitionSpec::unpartition_spec()
         };
@@ -196,9 +200,13 @@ impl GenerateOperation {
             iceberg::spec::FormatVersion::V2,
             HashMap::new(),
         )
-        .map_err(|e| Error::General(format!("Failed to create metadata builder: {}", e)))?
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to create metadata builder: {}", e),
+        })?
         .build()
-        .map_err(|e| Error::General(format!("Failed to build table metadata: {}", e)))?;
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to build table metadata: {}", e),
+        })?;
 
         let initial_metadata = build_result.metadata;
 
@@ -229,7 +237,9 @@ impl GenerateOperation {
                     .record_count(df.record_count)
                     .file_size_in_bytes(df.size)
                     .build()
-                    .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))
+                    .map_err(|e| Error::Metadata {
+                        message: format!("Failed to build DataFile: {}", e),
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -288,15 +298,21 @@ impl GenerateOperation {
             Some(metadata_location_filename(&metadata_location)),
         )
         .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
-        .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to set snapshot: {}", e),
+        })?
         .build()
-        .map_err(|e| Error::General(format!("Failed to build metadata with snapshot: {}", e)))?;
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to build metadata with snapshot: {}", e),
+        })?;
 
         let final_metadata = metadata_with_snapshot.metadata;
 
         // Serialize and write final metadata
         let metadata_json = serde_json::to_string_pretty(&final_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         let metadata_filename = metadata_location_filename(&metadata_location);
         // Relative path for storage
@@ -420,8 +436,7 @@ impl GenerateOperation {
             columns.push(array);
         }
 
-        let batch = RecordBatch::try_new(schema.clone(), columns)
-            .map_err(|e| Error::General(format!("Failed to create record batch: {}", e)))?;
+        let batch = RecordBatch::try_new(schema.clone(), columns)?;
 
         // Release memory tracking for batch generation (actual memory will be tracked by Arrow)
         crate::utils::resources::release_memory(estimated_memory);
@@ -493,16 +508,9 @@ impl GenerateOperation {
             .set_max_row_group_size(100_000)
             .build();
 
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))
-            .map_err(|e| Error::General(format!("Failed to create parquet writer: {}", e)))?;
-
-        writer
-            .write(batch)
-            .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
-
-        writer
-            .close()
-            .map_err(|e| Error::General(format!("Failed to close parquet writer: {}", e)))?;
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))?;
+        writer.write(batch)?;
+        writer.close()?;
 
         // Release memory tracking for parquet writing
         crate::utils::resources::release_memory(estimated_memory);
@@ -542,7 +550,9 @@ impl GenerateOperation {
         iceberg::spec::Schema::builder()
             .with_fields(fields)
             .build()
-            .map_err(|e| Error::General(format!("Failed to build Iceberg schema: {}", e)))
+            .map_err(|e| Error::SchemaValidation {
+                message: format!("Failed to build Iceberg schema: {}", e),
+            })
     }
 }
 
@@ -637,11 +647,8 @@ pub fn parse_schema_string(schema_str: &str) -> Result<Schema> {
 
     for part in schema_str.split(',') {
         let part = part.trim();
-        let (name, type_str) = part.split_once(':').ok_or_else(|| {
-            Error::General(format!(
-                "Invalid schema format '{}'. Expected 'name:type'",
-                part
-            ))
+        let (name, type_str) = part.split_once(':').ok_or_else(|| Error::SchemaValidation {
+            message: format!("Invalid schema format '{}'. Expected 'name:type'", part),
         })?;
 
         let data_type = parse_arrow_type(type_str.trim())?;
@@ -649,9 +656,9 @@ pub fn parse_schema_string(schema_str: &str) -> Result<Schema> {
     }
 
     if fields.is_empty() {
-        return Err(Error::General(
-            "Schema must have at least one column".to_string(),
-        ));
+        return Err(Error::SchemaValidation {
+            message: "Schema must have at least one column".to_string(),
+        });
     }
 
     Ok(Schema::new(fields))
@@ -668,9 +675,11 @@ pub fn parse_arrow_type(type_str: &str) -> Result<DataType> {
         "bool" | "boolean" => Ok(DataType::Boolean),
         "timestamp" | "datetime" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         "date" => Ok(DataType::Date32),
-        _ => Err(Error::General(format!(
-            "Unsupported type '{}'. Supported: int, long, float, double, string, bool, timestamp, date",
-            type_str
-        ))),
+        _ => Err(Error::UnsupportedFeature {
+            feature: format!(
+                "Type '{}'. Supported: int, long, float, double, string, bool, timestamp, date",
+                type_str
+            ),
+        }),
     }
 }

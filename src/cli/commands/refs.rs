@@ -17,11 +17,14 @@ use crate::error::Result;
 /// Reference type (branch or tag)
 #[derive(Clone, Copy)]
 pub enum RefType {
+    /// A branch reference (mutable, can be updated)
     Branch,
+    /// A tag reference (immutable snapshot marker)
     Tag,
 }
 
 impl RefType {
+    /// Returns the capitalized name of the reference type
     pub fn name(&self) -> &'static str {
         match self {
             RefType::Branch => "Branch",
@@ -29,6 +32,7 @@ impl RefType {
         }
     }
 
+    /// Returns the lowercase name of the reference type
     pub fn name_lower(&self) -> &'static str {
         match self {
             RefType::Branch => "branch",
@@ -36,6 +40,7 @@ impl RefType {
         }
     }
 
+    /// Returns the filter string used to match refs of this type
     pub fn filter_type(&self) -> &'static str {
         self.name_lower()
     }
@@ -341,6 +346,7 @@ use crate::utils::with_resource_limits;
 pub struct BranchCommand;
 
 impl BranchCommand {
+    /// Execute the branch command with the given arguments
     pub async fn execute(args: BranchArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
@@ -391,6 +397,7 @@ use crate::cli::parser::{TagArgs, TagCommands};
 pub struct TagCommand;
 
 impl TagCommand {
+    /// Execute the tag command with the given arguments
     pub async fn execute(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await

@@ -26,33 +26,15 @@ pub struct ResourceLimits {
 impl ResourceLimits {
     /// Parse memory string (e.g., "2GB", "512MB", "1024KB") to bytes
     pub fn parse_memory(s: &str) -> Result<u64> {
-        let s = s.trim().to_uppercase();
-
+        let s = s.trim();
+        
         if s == "0" || s.is_empty() {
             return Ok(0);
         }
 
-        let (num_str, multiplier) = if s.ends_with("GB") {
-            (&s[..s.len() - 2], 1024 * 1024 * 1024u64)
-        } else if s.ends_with("MB") {
-            (&s[..s.len() - 2], 1024 * 1024u64)
-        } else if s.ends_with("KB") {
-            (&s[..s.len() - 2], 1024u64)
-        } else if s.ends_with("B") {
-            (&s[..s.len() - 1], 1u64)
-        } else {
-            // Assume bytes if no suffix
-            (s.as_str(), 1u64)
-        };
-
-        let num: u64 = num_str.trim().parse().map_err(|_| {
-            Error::General(format!(
-                "Invalid memory format: '{}'. Use format like '2GB', '512MB', or '1024KB'",
-                s
-            ))
-        })?;
-
-        Ok(num * multiplier)
+        // Use the shared parse_bytes function but convert error type
+        crate::utils::core::parse_bytes(s)
+            .map_err(|e| Error::General(format!("Invalid memory format: {}", e)))
     }
 
     /// Create limits from CLI arguments

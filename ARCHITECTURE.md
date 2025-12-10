@@ -33,7 +33,35 @@ This document describes the high-level architecture of icetable, a CLI tool for 
 
 ## Design Principles
 
-### 1. Thin CLI, Fat Core
+### 1. Service vs Operation Naming Convention
+
+The codebase uses two naming patterns for core logic:
+
+**`*Service`** - Stateful, configurable components:
+- Have configuration structs (e.g., `DoctorConfig`, `VacuumConfig`)
+- Created with `::new()` or `::with_config()`
+- Maintain internal state between method calls
+- Examples: `DoctorService`, `VacuumService`, `OptimizeService`, `SnapshotService`
+
+**`*Operation`** - Stateless, one-shot functions:
+- Pure functions or simple structs without configuration
+- Execute immediately with all parameters passed to the method
+- No internal state to manage
+- Examples: `GenerateOperation`, `ValidateOperation`, `ConvertOperation`
+
+```rust
+// Service pattern: configured, then executed
+let service = VacuumService::with_config(config);
+let result = service.analyze(&metadata_service).await?;
+
+// Operation pattern: executed directly
+let result = GenerateOperation::execute(schema, output_path, options).await?;
+```
+
+This distinction helps developers understand whether a component needs configuration
+and state management (Service) or is a simple stateless transformation (Operation).
+
+### 2. Thin CLI, Fat Core
 
 The CLI layer (`src/cli/`) is intentionally thin. It handles:
 - Argument parsing (clap)
@@ -46,7 +74,7 @@ All business logic lives in `src/core/`. This enables:
 - Potential future use as a library
 - Clear separation of concerns
 
-### 2. Trait-Based Abstractions
+### 3. Trait-Based Abstractions
 
 Key abstractions use traits for extensibility:
 
@@ -74,7 +102,7 @@ trait MetadataService {
 }
 ```
 
-### 3. Format-Agnostic Design
+### 4. Format-Agnostic Design
 
 The inspection system uses a format-agnostic intermediate representation:
 
