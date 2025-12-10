@@ -31,7 +31,6 @@ impl StatsCommand {
 
         // 2. Build config and delegate to service
         let config = StatsConfig {
-            format: args.format.clone(),
             partition: args.partition.clone(),
         };
 

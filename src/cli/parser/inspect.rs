@@ -96,10 +96,6 @@ pub struct StatsArgs {
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
 
-    /// Table format (delta, iceberg) - auto-detected if not specified
-    #[arg(short, long, value_parser = ["delta", "iceberg"])]
-    pub format: Option<String>,
-
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
@@ -139,10 +135,6 @@ pub struct HistoryArgs {
     /// Path to table (uses default from config if not provided)
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
-
-    /// Table format (delta, iceberg) - auto-detected if not specified
-    #[arg(short, long, value_parser = ["delta", "iceberg"])]
-    pub format: Option<String>,
 
     /// Maximum number of versions to show
     #[arg(short = 'n', long, default_value = "10")]

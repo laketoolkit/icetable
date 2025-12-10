@@ -10,7 +10,7 @@ use crate::cli::parser::HistoryArgs;
 use crate::config::ResolvePath;
 use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
 use crate::core::TableLoader;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::utils::with_resource_limits;
 
 /// Handler for history command
@@ -30,16 +30,7 @@ impl HistoryCommand {
         // 2. Load table using unified TableLoader
         let table = TableLoader::load_table(&table_path, None).await?;
 
-        // 3. Verify format
-        if let Some(ref fmt) = args.format
-            && fmt.to_lowercase() != "iceberg"
-        {
-            return Err(Error::UnsupportedFeature {
-                feature: "Only Iceberg tables are supported. Use 'icetable import delta' to convert Delta tables.".to_string(),
-            });
-        }
-
-        // 4. Build config and delegate to service
+        // 3. Build config and delegate to service
         let config = HistoryConfig {
             limit: Some(args.limit),
             all: args.all,

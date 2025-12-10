@@ -5,7 +5,7 @@
 
 use colored::Colorize;
 
-use super::common::{TableResolution, create_committer, create_table, print_dry_run_header, print_json, resolve_table};
+use super::common::{TableResolution, create_committer, create_table, format_timestamp, print_dry_run_header, print_json, resolve_table};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
@@ -270,9 +270,7 @@ impl SnapshotCommand {
                 .iter()
                 .filter(|s| expire_set.contains(&s.snapshot_id()))
             {
-                let ts = chrono::DateTime::from_timestamp_millis(snap.timestamp_ms())
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_else(|| snap.timestamp_ms().to_string());
+                let ts = format_timestamp(snap.timestamp_ms());
                 println!("  - {} ({})", snap.snapshot_id(), ts);
             }
         }
@@ -418,9 +416,7 @@ impl SnapshotCommand {
             };
 
             for entry in result.entries.iter().take(display_count) {
-                let ts_str = chrono::DateTime::from_timestamp_millis(entry.timestamp_ms)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_else(|| entry.timestamp_ms.to_string());
+                let ts_str = format_timestamp(entry.timestamp_ms);
 
                 let status = if entry.is_current {
                     "● current".green().to_string()
@@ -451,9 +447,7 @@ impl SnapshotCommand {
 
                 // Show root in a separate mini-table
                 if let Some(root) = result.entries.last() {
-                    let ts_str = chrono::DateTime::from_timestamp_millis(root.timestamp_ms)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| root.timestamp_ms.to_string());
+                    let ts_str = format_timestamp(root.timestamp_ms);
 
                     let mut root_table = create_table();
                     root_table.set_header(vec![

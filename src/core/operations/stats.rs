@@ -18,8 +18,6 @@ use crate::error::Result;
 /// Configuration for stats retrieval
 #[derive(Debug, Clone, Default)]
 pub struct StatsConfig {
-    /// Optional format override (iceberg, delta, parquet)
-    pub format: Option<String>,
     /// Optional partition filter for detailed stats
     pub partition: Option<String>,
 }
@@ -86,12 +84,8 @@ impl StatsService {
         // Create storage backend
         let storage = create_object_store(table_path).await?;
 
-        // Get format handler
-        let handler = if let Some(format) = &config.format {
-            FormatHandlerFactory::create_handler_for_format(format, path, storage).await?
-        } else {
-            FormatHandlerFactory::create_handler(path, storage).await?
-        };
+        // Get format handler (auto-detect)
+        let handler = FormatHandlerFactory::create_handler(path, storage).await?;
 
         let format_name = handler.format_name().to_string();
         let table_name = Self::extract_table_name(table_path);
