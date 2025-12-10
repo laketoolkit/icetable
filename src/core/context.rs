@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::config::ResolvePath;
 use crate::core::TableFormat;
 use crate::core::storage::{Storage, create_object_store};
-use crate::core::utils::detect_format;
+use crate::utils::core::detect_format;
 use crate::error::{Error, Result};
 
 use crate::core::metadata::IcebergMetadataService;
@@ -54,11 +54,6 @@ impl TableContext {
     /// Check if the table is Iceberg format
     pub fn is_iceberg(&self) -> bool {
         matches!(self.format, TableFormat::Iceberg)
-    }
-
-    /// Check if the table is Delta format
-    pub fn is_delta(&self) -> bool {
-        matches!(self.format, TableFormat::Delta)
     }
 
     /// Require Iceberg format, return error if not
@@ -109,7 +104,6 @@ impl TableContextBuilder {
     /// Override the detected format
     pub fn format(mut self, format: &str) -> Self {
         self.format_override = Some(match format.to_lowercase().as_str() {
-            "delta" => TableFormat::Delta,
             "iceberg" => TableFormat::Iceberg,
             _ => TableFormat::Unknown,
         });

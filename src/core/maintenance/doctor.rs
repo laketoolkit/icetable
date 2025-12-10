@@ -334,7 +334,7 @@ impl DoctorService {
         storage: &Storage,
         table_path: &str,
     ) -> (CheckResult, Option<i32>) {
-        use crate::core::utils::{extract_version_from_path, find_latest_metadata};
+        use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 
         match find_latest_metadata(table_path, storage).await {
             Ok(metadata_path) => {
@@ -380,7 +380,7 @@ impl DoctorService {
         table_path: &str,
         _version: Option<i32>,
     ) -> (CheckResult, Option<serde_json::Value>) {
-        use crate::core::utils::find_latest_metadata;
+        use crate::utils::core::find_latest_metadata;
 
         let metadata_path = match find_latest_metadata(table_path, storage).await {
             Ok(path) => path,

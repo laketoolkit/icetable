@@ -146,7 +146,7 @@ impl GenerateOperation {
         data_files: &[DataFileInfo],
         partition_cols: &[String],
     ) -> Result<(String, i64)> {
-        use crate::core::utils::{metadata_location_filename, new_metadata_location};
+        use crate::utils::core::{metadata_location_filename, new_metadata_location};
 
         // Convert Arrow schema to Iceberg schema
         let iceberg_schema = Self::arrow_to_iceberg_schema(arrow_schema)?;

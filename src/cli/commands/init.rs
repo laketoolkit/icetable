@@ -16,16 +16,6 @@ pub struct InitCommand;
 impl InitCommand {
     /// Execute init command
     pub async fn execute(args: InitArgs) -> Result<()> {
-        // Only Iceberg is supported
-        if args.format != "iceberg" {
-            return Err(Error::UnsupportedFeature {
-                feature: format!(
-                    "Only Iceberg tables are supported. Use 'icetable init iceberg {}' instead.",
-                    args.path
-                ),
-            });
-        }
-
         // Parse schema if provided
         let schema = if let Some(schema_path) = &args.schema {
             Some(Self::load_schema(schema_path)?)
@@ -182,7 +172,7 @@ impl InitCommand {
             .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
 
         // Write metadata file with standard Iceberg naming: 00000-<uuid>.metadata.json
-        use crate::core::utils::{metadata_location_filename, new_metadata_location};
+        use crate::utils::core::{metadata_location_filename, new_metadata_location};
         let initial_location = new_metadata_location(&location);
         let metadata_file = metadata_dir.join(metadata_location_filename(&initial_location));
         fs::write(&metadata_file, metadata_json)

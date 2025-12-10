@@ -1,18 +1,15 @@
 //! Snapshot command implementation
 //!
-//! Manages snapshots for Delta Lake and Iceberg tables.
+//! Manages snapshots for Iceberg tables.
 //! Subcommands: list, create, expire, set, cherrypick
 
 use colored::Colorize;
 
-use super::common::{TableResolution, resolve_table};
+use super::common::{TableResolution, create_committer, create_table, print_json, resolve_table};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
-use crate::core::TableFormat;
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{Storage, create_object_store};
-use crate::core::utils::detect_format;
 use crate::core::{CatalogConfig, TableCommitter};
 use crate::error::{Error, Result};
 
@@ -60,53 +57,8 @@ impl SnapshotCommand {
         let resolution = resolve_table(subcommand_path, catalog_config.as_ref()).await?;
         let path = resolution.location();
 
-        // Create storage backend
-        let storage = create_object_store(&path).await?;
-
-        // Detect table format
-        let format = detect_format(&path, &storage).await;
-
-        match format {
-            TableFormat::Delta => Self::execute_delta(args, &path, storage).await,
-            TableFormat::Iceberg => {
-                Self::execute_iceberg(args, &path, catalog_config, &resolution).await
-            }
-            TableFormat::Unknown => Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                path
-            ))),
-        }
+        Self::execute_iceberg(args, &path, catalog_config, &resolution).await
     }
-
-    // =========================================================================
-    // Delta Lake implementation (limited to import functionality)
-    // =========================================================================
-
-    #[cfg(feature = "delta")]
-    async fn execute_delta(
-        _args: SnapshotArgs,
-        _table_path: &str,
-        _storage: Storage,
-    ) -> Result<()> {
-        Err(Error::General(
-            "Delta Lake snapshot management is not supported. Use 'icetable import delta' to convert Delta tables to Iceberg.".to_string(),
-        ))
-    }
-
-    #[cfg(not(feature = "delta"))]
-    async fn execute_delta(
-        _args: SnapshotArgs,
-        _table_path: &str,
-        _storage: Storage,
-    ) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Delta Lake support not enabled".to_string(),
-        })
-    }
-
-    // =========================================================================
-    // Iceberg implementation
-    // =========================================================================
 
     async fn execute_iceberg(
         args: SnapshotArgs,
@@ -115,7 +67,7 @@ impl SnapshotCommand {
         resolution: &TableResolution,
     ) -> Result<()> {
         // Create committer based on catalog config and table resolution
-        let committer = Self::create_committer(catalog_config.as_ref(), resolution);
+        let committer = create_committer(catalog_config.as_ref(), resolution);
 
         match args.command {
             SnapshotCommands::List(a) => {
@@ -156,33 +108,6 @@ impl SnapshotCommand {
             SnapshotCommands::Lineage(a) => {
                 let limit = if a.all { None } else { Some(a.limit) };
                 Self::iceberg_lineage(table_path, a.snapshot_id, limit, &a.output).await
-            }
-        }
-    }
-
-    /// Create a TableCommitter based on catalog config and table resolution
-    fn create_committer(
-        catalog_config: Option<&CatalogConfig>,
-        resolution: &TableResolution,
-    ) -> Option<TableCommitter> {
-        // Only create committer if we have catalog config AND the table came from a catalog
-        match (catalog_config, resolution) {
-            (
-                Some(config),
-                TableResolution::CatalogTable {
-                    namespace, name, ..
-                },
-            ) => {
-                // Use the actual namespace and name from catalog resolution
-                Some(TableCommitter::with_catalog(
-                    config.clone(),
-                    namespace.clone(),
-                    name.clone(),
-                ))
-            }
-            _ => {
-                // No catalog or table is from direct path - use direct mode (no committer)
-                None
             }
         }
     }
@@ -499,19 +424,14 @@ impl SnapshotCommand {
                 "lineage": json_lineage,
                 "total": total_count,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
-            use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
+            use comfy_table::{Cell, CellAlignment};
 
             println!("{} snapshot lineage at {}", "Showing".green(), path);
             println!();
 
-            let mut table = comfy_table::Table::new();
-            table.load_preset(UTF8_FULL);
-            table.set_content_arrangement(ContentArrangement::Dynamic);
+            let mut table = create_table();
 
             table.set_header(vec![
                 Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
@@ -568,9 +488,7 @@ impl SnapshotCommand {
                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                         .unwrap_or_else(|| ts.to_string());
 
-                    let mut root_table = comfy_table::Table::new();
-                    root_table.load_preset(UTF8_FULL);
-                    root_table.set_content_arrangement(ContentArrangement::Dynamic);
+                    let mut root_table = create_table();
                     root_table.set_header(vec![
                         Cell::new("Snapshot".cyan().to_string())
                             .set_alignment(CellAlignment::Center),

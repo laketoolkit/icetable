@@ -2,7 +2,7 @@
 //!
 //! Provides high-level services for table maintenance operations.
 //! These services use the MetadataService trait to work with both
-//! Delta Lake and Iceberg tables through a unified interface.
+//! Iceberg tables through a unified interface.
 
 mod doctor;
 mod manifest;
@@ -28,7 +28,7 @@ pub use vacuum::{OrphanFile, VacuumAnalysis, VacuumConfig, VacuumResult, VacuumS
 use std::collections::HashMap;
 
 use crate::core::metadata::DataFileInfo;
-use crate::core::utils::sizes;
+use crate::utils::core::sizes;
 
 /// Common configuration for maintenance operations
 #[derive(Debug, Clone)]

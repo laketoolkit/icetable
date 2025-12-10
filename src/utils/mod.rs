@@ -14,7 +14,7 @@ pub mod text;
 pub mod time;
 pub mod types;
 
-// Core/domain utilities (previously in crate::core::utils)
+// Core/domain utilities
 pub mod core;
 
 // CLI re-exports
@@ -36,7 +36,7 @@ pub use text::{strip_ansi_codes, visual_width, wrap_line};
 pub use time::{parse_relative_duration, parse_timestamp};
 pub use types::parse_data_type;
 
-// Core re-exports (for backward compatibility with crate::core::utils paths)
+// Core re-exports
 pub use core::{
     ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, WriteMetadataResult,
     detect_format, detect_table_format, detect_table_format_async,

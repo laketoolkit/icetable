@@ -21,7 +21,7 @@ use object_store::ObjectStore;
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
 use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, create_file_io};
-use crate::core::utils::{extract_version_from_path, find_latest_metadata};
+use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 use crate::error::{Error, Result};
 
 use super::iceberg_operations;
@@ -341,7 +341,7 @@ impl MetadataService for IcebergMetadataService {
 
         // Generate IDs
         let snapshot_id = chrono::Utc::now().timestamp_millis();
-        let timestamp_nanos = crate::core::utils::generate_unique_id();
+        let timestamp_nanos = crate::utils::core::generate_unique_id();
 
         // Get existing files (if replacing/repairing, we need to include unchanged files)
         let mut all_files: Vec<DataFile> = Vec::new();

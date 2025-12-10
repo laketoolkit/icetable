@@ -3,14 +3,13 @@
 //! Manages tags for Iceberg tables.
 
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
+use comfy_table::{Cell, CellAlignment};
 
-use super::common::{TableResolution, resolve_table};
+use super::common::{create_committer, create_table, print_json, resolve_table};
 use crate::cli::parser::{TagArgs, TagCommands};
-use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{RefConfig, RefService};
-use crate::core::{CatalogConfig, TableContext};
-use crate::error::{Error, Result};
+use crate::core::{CatalogConfig, TableCommitter, TableContext};
+use crate::error::Result;
 
 /// Handler for tag command
 pub struct TagCommand;
@@ -29,7 +28,7 @@ impl TagCommand {
                 let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
                 let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
-                let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
+                let committer = create_committer(catalog_config.as_ref(), &resolution);
                 Self::create(
                     &ctx,
                     &a.name,
@@ -44,36 +43,16 @@ impl TagCommand {
                 let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
                 let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
-                let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
+                let committer = create_committer(catalog_config.as_ref(), &resolution);
                 Self::delete(&ctx, &a.name, a.dry_run, &a.output, committer).await
             }
             TagCommands::Rename(a) => {
                 let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
                 let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
                 ctx.require_iceberg()?;
-                let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
+                let committer = create_committer(catalog_config.as_ref(), &resolution);
                 Self::rename(&ctx, &a.old_name, &a.new_name, &a.output, committer).await
             }
-        }
-    }
-
-    /// Create a TableCommitter if catalog is configured
-    fn create_committer(
-        catalog_config: Option<&CatalogConfig>,
-        resolution: &TableResolution,
-    ) -> Option<TableCommitter> {
-        match (catalog_config, resolution) {
-            (
-                Some(config),
-                TableResolution::CatalogTable {
-                    namespace, name, ..
-                },
-            ) => Some(TableCommitter::with_catalog(
-                config.clone(),
-                namespace.clone(),
-                name.clone(),
-            )),
-            _ => None,
         }
     }
 
@@ -94,18 +73,12 @@ impl TagCommand {
                     })
                 })
                 .collect();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&tag_json)
-                    .map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&tag_json)?;
         } else {
             if tags.is_empty() {
                 println!("{}", "No tags found".dimmed());
             } else {
-                let mut table = comfy_table::Table::new();
-                table.load_preset(UTF8_FULL);
-                table.set_content_arrangement(ContentArrangement::Dynamic);
+                let mut table = create_table();
 
                 table.set_header(vec![
                     Cell::new("Tag".cyan().to_string()).set_alignment(CellAlignment::Left),
@@ -150,10 +123,7 @@ impl TagCommand {
                 "snapshot_id": result.snapshot_id,
                 "new_version": result.new_version,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} Created tag '{}' at snapshot {}",
@@ -189,10 +159,7 @@ impl TagCommand {
                 "new_version": result.new_version,
                 "dry_run": result.dry_run,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else if result.dry_run {
             println!("{}", "DRY RUN - No changes made".yellow().bold());
             println!();
@@ -238,10 +205,7 @@ impl TagCommand {
                 "snapshot_id": result.snapshot_id,
                 "new_version": result.new_version,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} Renamed tag '{}' to '{}'",

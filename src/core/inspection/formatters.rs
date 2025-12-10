@@ -3,7 +3,7 @@
 use std::path::Path;
 
 // Re-export format_bytes from central location
-pub use crate::core::utils::format_bytes;
+pub use crate::utils::core::format_bytes;
 
 /// Alias for format_bytes (backwards compatibility)
 pub fn format_size(bytes: u64) -> String {
@@ -24,6 +24,17 @@ pub fn format_number(n: i64) -> String {
     }
 
     result
+}
+
+/// Format count in compact form (e.g., 1.5K, 2.3M)
+pub fn format_count(count: usize) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}K", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
 }
 
 /// Format percentage

@@ -6,7 +6,7 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io;
 
-use super::common::resolve_table_path;
+use super::common::{print_json, resolve_table_path};
 use crate::cli::parser::VacuumArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;
@@ -75,14 +75,12 @@ impl VacuumCommand {
 
     /// Print header message
     fn print_header(table_path: &str, args: &VacuumArgs) {
+        let action = if args.dry_run { "Analyzing" } else { "Vacuuming" };
+
         if let Some(ref branch) = args.branch {
             println!(
                 "{} Iceberg table at {} (branch: {})",
-                if args.dry_run {
-                    "Analyzing".yellow()
-                } else {
-                    "Vacuuming".green()
-                },
+                action,
                 table_path,
                 branch.cyan()
             );
@@ -91,15 +89,7 @@ impl VacuumCommand {
                 "Note: Vacuum always considers all snapshots for safety".dimmed()
             );
         } else {
-            println!(
-                "{} Iceberg table at {}",
-                if args.dry_run {
-                    "Analyzing".yellow()
-                } else {
-                    "Vacuuming".green()
-                },
-                table_path
-            );
+            println!("{} Iceberg table at {}", action, table_path);
         }
     }
 
@@ -109,48 +99,34 @@ impl VacuumCommand {
         if !args.dry_run && !args.force {
             println!();
             println!(
-                "{}",
-                "⚠ WARNING: This will delete orphan files".yellow().bold()
+                "{} {}",
+                "⚠".yellow(),
+                "This will permanently delete orphan files.".yellow().bold()
             );
-            println!("  Use --dry-run first to see what would be deleted");
-            println!("  Add --force to proceed without this warning");
             println!();
 
             // Ask for confirmation
-            println!(
-                "{}",
-                "Type 'yes' to continue, anything else to cancel:".cyan()
-            );
+            print!("Continue? [y/N] ");
+            io::Write::flush(&mut io::stdout()).ok();
+
             let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_err() || input.trim().to_lowercase() != "yes" {
-                println!("{}", "Vacuum cancelled".yellow());
+            if io::stdin().read_line(&mut input).is_err()
+                || !matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+            {
+                println!("{}", "Cancelled.".dimmed());
                 return Ok(false);
             }
-            println!();
-        } else if args.force && !args.dry_run {
-            println!();
-            println!(
-                "{}",
-                "⚠ WARNING: Running vacuum with --force".yellow().bold()
-            );
-            println!("  Orphan files will be deleted without confirmation");
             println!();
         }
 
         // Warning for low retention period
         if args.retention_hours < 24 && !args.force {
-            println!();
             println!(
-                "{}",
-                "⚠ WARNING: Retention period is less than 24 hours"
-                    .yellow()
-                    .bold()
+                "{} {} {}",
+                "⚠".yellow(),
+                "Retention period is less than 24 hours.".yellow(),
+                format!("Files newer than {} hours will be kept.", args.retention_hours).dimmed()
             );
-            println!(
-                "  Files newer than {} hours will be kept",
-                args.retention_hours
-            );
-            println!("  Add --force if you're sure this is safe");
             println!();
         }
 
@@ -210,11 +186,7 @@ impl VacuumCommand {
                 "bytes_to_free": analysis.orphan_bytes,
                 "retention_hours": analysis.retention_hours,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json)
-                    .map_err(|e| crate::error::Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!();
             println!("{}", "Would delete the following files:".cyan());
@@ -260,11 +232,7 @@ impl VacuumCommand {
                 "bytes_freed": result.deleted_bytes,
                 "errors": result.errors.len(),
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json)
-                    .map_err(|e| crate::error::Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!();
             println!(

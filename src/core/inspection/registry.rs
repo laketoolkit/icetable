@@ -1,4 +1,4 @@
-//! Registry for physical inspectors (Delta Lake, Iceberg)
+//! Registry for physical inspectors (Iceberg)
 
 use super::traits::PhysicalInspector;
 use crate::core::storage::Storage;
@@ -21,7 +21,7 @@ pub trait PhysicalInspectorFactory: Send + Sync {
     }
 }
 
-/// Registry for managing physical inspectors (Delta Lake, Iceberg)
+/// Registry for managing physical inspectors (Iceberg)
 pub struct PhysicalInspectorRegistry {
     factories: Vec<Box<dyn PhysicalInspectorFactory>>,
 }
@@ -37,10 +37,6 @@ impl PhysicalInspectorRegistry {
     /// Create a registry with default inspectors for table formats
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
-
-        // Register Delta Lake inspector (priority 80)
-        #[cfg(feature = "delta")]
-        registry.register(super::delta::DeltaInspectorFactory);
 
         // Register Iceberg inspector (priority 75)
         registry.register(super::iceberg::IcebergInspectorFactory);

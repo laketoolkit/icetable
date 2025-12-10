@@ -281,7 +281,7 @@ impl TableCommitter {
         snapshot_ids: &[i64],
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::core::utils::{
+        use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,
         };
@@ -332,7 +332,7 @@ impl TableCommitter {
         snapshot_id: i64,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::core::utils::{
+        use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,
         };
@@ -462,7 +462,7 @@ impl TableCommitter {
         reference: SnapshotReference,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::core::utils::{
+        use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,
         };
@@ -510,7 +510,7 @@ impl TableCommitter {
         ref_name: &str,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::core::utils::{
+        use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,
         };
@@ -606,7 +606,7 @@ impl TableCommitter {
         reference: SnapshotReference,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::core::utils::{
+        use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,
         };

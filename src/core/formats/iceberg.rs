@@ -164,7 +164,7 @@ impl IcebergHandler {
         }
 
         // Use the centralized find_latest_metadata utility
-        crate::core::utils::find_latest_metadata(table_path, &self.storage).await
+        crate::utils::core::find_latest_metadata(table_path, &self.storage).await
     }
 }
 

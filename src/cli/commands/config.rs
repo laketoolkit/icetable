@@ -3,8 +3,9 @@
 //! Manages icetable configuration like kubectl config.
 
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
+use comfy_table::{Cell, CellAlignment};
 
+use super::common::create_table;
 use crate::cli::parser::{
     ConfigAddArgs, ConfigAddCatalogArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs,
     ConfigListArgs, ConfigRemoveArgs, ConfigRemoveCatalogArgs, ConfigUnsetArgs, ConfigUseArgs,
@@ -243,9 +244,7 @@ impl ConfigCommand {
             if config.tables.is_empty() {
                 println!("  {}", "(none)".dimmed());
             } else {
-                let mut table = comfy_table::Table::new();
-                table.load_preset(UTF8_FULL);
-                table.set_content_arrangement(ContentArrangement::Dynamic);
+                let mut table = create_table();
 
                 table.set_header(vec![
                     Cell::new("".to_string()).set_alignment(CellAlignment::Center),
@@ -277,9 +276,7 @@ impl ConfigCommand {
             if config.catalogs.is_empty() {
                 println!("  {}", "(none)".dimmed());
             } else {
-                let mut table = comfy_table::Table::new();
-                table.load_preset(UTF8_FULL);
-                table.set_content_arrangement(ContentArrangement::Dynamic);
+                let mut table = create_table();
 
                 table.set_header(vec![
                     Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),

@@ -7,8 +7,9 @@
 //! 2. Table integrity check (with --table): Validates Iceberg table structure
 
 use colored::Colorize;
-use comfy_table::{Cell, Color, ContentArrangement, Table, presets::UTF8_FULL};
+use comfy_table::{Cell, Color};
 
+use super::common::create_table;
 use crate::cli::parser::DoctorArgs;
 use crate::core::maintenance::{
     CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
@@ -311,9 +312,7 @@ impl DoctorCommand {
 
     /// Display results as a table
     fn display_table(checks: &[CheckResult]) {
-        let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
+        let mut table = create_table();
 
         table.set_header(vec![
             Cell::new("Status")

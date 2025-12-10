@@ -10,7 +10,7 @@ use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate};
 use crate::core::operations::generate::{
     GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
 };
-use crate::core::utils::format_bytes;
+use crate::utils::core::format_bytes;
 use crate::error::Result;
 use crate::utils::{temp_dir_with_cleanup, track_memory_usage, with_cancellation, with_timeout};
 

@@ -14,7 +14,7 @@
 //!        ┌─────────────────────┼─────────────────────┐
 //!        │                     │                     │
 //! ┌──────┴──────┐      ┌───────┴───────┐     ┌───────┴───────┐
-//! │ParquetInsp. │      │ IcebergInsp.  │     │  DeltaInsp.   │
+//! │ParquetInsp. │      │ IcebergInsp.  │     │  IcebergInsp.   │
 //! └─────────────┘      └───────────────┘     └───────────────┘
 //! ```
 //!
@@ -197,7 +197,7 @@ pub enum LayoutInfo {
     RowGroupBased(RowGroupLayout),
     /// Batch-based layout (Arrow IPC)
     BatchBased(BatchLayout),
-    /// File-based layout (Delta Lake, Iceberg)
+    /// File-based layout (Iceberg, Iceberg)
     FileBased(FileBasedLayout),
     /// Unstructured layout (CSV, JSON)
     Unstructured(UnstructuredLayout),
@@ -264,7 +264,7 @@ pub struct BatchMetadata {
     pub body_length: u64,
 }
 
-/// File-based layout (Delta/Iceberg)
+/// File-based layout (Iceberg)
 #[derive(Debug, Clone)]
 pub struct FileBasedLayout {
     /// Number of data files
@@ -320,7 +320,7 @@ pub struct ColumnStatistics {
 ///
 /// This trait defines the interface that all format inspectors must implement.
 /// It enables icetable to work uniformly with different table formats (Parquet,
-/// Iceberg, Delta Lake, etc.) while allowing each implementation to handle
+/// Iceberg, Iceberg, etc.) while allowing each implementation to handle
 /// format-specific details.
 ///
 /// # Required Methods
@@ -387,7 +387,7 @@ pub trait PhysicalInspector: Send + Sync {
     /// Get format name
     ///
     /// Returns a human-readable name for the format (e.g., "Apache Iceberg",
-    /// "Apache Parquet", "Delta Lake").
+    /// "Apache Parquet", "Iceberg").
     fn format_name(&self) -> &str;
 
     /// Quick detection (fast, based on extension/magic bytes)

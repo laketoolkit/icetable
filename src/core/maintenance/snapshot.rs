@@ -15,7 +15,7 @@ use iceberg::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMeta
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::create_object_store;
-use crate::core::utils::snapshot::{
+use crate::utils::core::snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
 };
 use crate::error::{Error, Result};
@@ -355,7 +355,7 @@ impl SnapshotService {
     /// which can be useful before destructive operations.
     pub async fn create_metadata_backup(&self, table_path: &str) -> Result<CreateBackupResult> {
         use crate::core::storage::create_object_store;
-        use crate::core::utils::{extract_version_from_path, find_latest_metadata};
+        use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 
         let storage = create_object_store(table_path).await?;
 
@@ -531,7 +531,7 @@ impl SnapshotService {
         _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
         let storage = create_object_store(table_path).await?;
-        let result = crate::core::utils::write_metadata_file(table_path, metadata, &storage).await?;
+        let result = crate::utils::core::write_metadata_file(table_path, metadata, &storage).await?;
         Ok(result.version)
     }
 }

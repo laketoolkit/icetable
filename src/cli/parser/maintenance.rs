@@ -38,10 +38,6 @@ pub struct RepairArgs {
     #[arg(short = 't', long = "table")]
     pub path: Option<String>,
 
-    /// Table format (delta, iceberg) - auto-detected if not specified
-    #[arg(short, long, value_parser = ["delta", "iceberg"])]
-    pub format: Option<String>,
-
     /// Dry run - show what would be repaired without making changes
     #[arg(long)]
     pub dry_run: bool,
@@ -90,10 +86,6 @@ pub struct DoctorArgs {
 /// Arguments for init command
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Table format: delta or iceberg
-    #[arg(value_parser = ["delta", "iceberg"])]
-    pub format: String,
-
     /// Path where the table will be created
     pub path: String,
 

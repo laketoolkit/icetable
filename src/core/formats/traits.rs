@@ -1,8 +1,7 @@
 //! Core traits for format handlers
 //!
 //! Defines the FormatHandler trait that all format implementations must satisfy.
-//! This provides a unified interface for working with table formats
-//! (Delta Lake, Iceberg).
+//! This provides a unified interface for working with Apache Iceberg tables.
 
 use crate::core::storage::{Storage, detect_storage_type};
 use arrow::datatypes::Schema;
@@ -16,7 +15,7 @@ use crate::error::Result;
 /// Options for time-travel queries
 #[derive(Debug, Clone, Default)]
 pub struct TimeTravelOptions {
-    /// Specific version number (Delta) or snapshot ID (Iceberg)
+    /// Specific snapshot ID
     pub version: Option<i64>,
 
     /// Timestamp for as-of queries (format: "2024-01-15" or "2024-01-15T10:30:00")
@@ -328,7 +327,7 @@ pub trait FormatHandler: Send + Sync {
     /// Detect if this handler can process the given path
     async fn can_handle(&self, path: &Path) -> Result<bool>;
 
-    /// Get the format name (e.g., "Delta Lake", "Iceberg")
+    /// Get the format name (e.g., "Apache Iceberg")
     fn format_name(&self) -> &str;
 
     /// Read the schema without loading data
@@ -369,112 +368,52 @@ pub trait FormatHandler: Send + Sync {
     }
 }
 
-/// Factory for creating table format handlers (Delta Lake, Iceberg)
+/// Factory for creating Iceberg format handlers
 pub struct FormatHandlerFactory;
 
 impl FormatHandlerFactory {
-    /// Create a handler for a specific format (bypasses auto-detection)
+    /// Create a handler for Iceberg format
     pub async fn create_handler_for_format(
         format: &str,
         path: &Path,
         storage: Storage,
     ) -> Result<Box<dyn FormatHandler>> {
         match format.to_lowercase().as_str() {
-            "delta" => {
-                #[cfg(feature = "delta")]
-                {
-                    let handler = crate::core::formats::DeltaHandler::new(path, storage)?;
-                    return Ok(Box::new(handler));
-                }
-                #[cfg(not(feature = "delta"))]
-                {
-                    let _ = (path, storage); // Suppress unused warnings when delta feature disabled
-                    Err(crate::error::Error::General(
-                        "Delta Lake support not enabled".to_string(),
-                    ))
-                }
-            }
             "iceberg" => {
                 let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
                 Ok(Box::new(handler))
             }
             _ => Err(crate::error::Error::InvalidFormat {
-                message: format!("Unknown format: {}", format),
+                message: format!("Unsupported format: {}. Only 'iceberg' is supported.", format),
             }),
         }
     }
+
     /// Detect the table format and create an appropriate handler
     pub async fn create_handler(path: &Path, storage: Storage) -> Result<Box<dyn FormatHandler>> {
-        // Use storage-based detection that works with cloud storage
         let path_str = path.to_str().unwrap_or("");
 
         // For cloud storage, use listing-based detection
         if detect_storage_type(path_str) != "local" {
-            // Check for Delta Lake (_delta_log directory)
-            if Self::check_delta_exists(path_str, &storage).await {
-                #[cfg(feature = "delta")]
-                {
-                    let handler = crate::core::formats::DeltaHandler::new(path, storage)?;
-                    return Ok(Box::new(handler));
-                }
-            }
-
-            // Check for Iceberg (metadata directory with .metadata.json files)
             if Self::check_iceberg_exists(path_str, &storage).await {
-                {
-                    let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
-                    return Ok(Box::new(handler));
-                }
+                let handler = crate::core::formats::IcebergHandler::new(path, storage)?;
+                return Ok(Box::new(handler));
             }
 
             return Err(crate::error::Error::InvalidFormat {
-                message: format!("Could not detect table format for path: {}", path.display()),
+                message: format!("Could not detect Iceberg table at path: {}", path.display()),
             });
         }
 
-        // For local storage, use the existing can_handle approach
-        // Try Delta Lake first
-        #[cfg(feature = "delta")]
-        {
-            let delta_handler = crate::core::formats::DeltaHandler::new(path, storage.clone())?;
-            if delta_handler.can_handle(path).await? {
-                return Ok(Box::new(delta_handler));
-            }
-        }
-
-        // Try Iceberg
-        {
-            let iceberg_handler = crate::core::formats::IcebergHandler::new(path, storage)?;
-            if iceberg_handler.can_handle(path).await? {
-                return Ok(Box::new(iceberg_handler));
-            }
+        // For local storage, use can_handle
+        let iceberg_handler = crate::core::formats::IcebergHandler::new(path, storage)?;
+        if iceberg_handler.can_handle(path).await? {
+            return Ok(Box::new(iceberg_handler));
         }
 
         Err(crate::error::Error::InvalidFormat {
-            message: format!("Could not detect table format for path: {}", path.display()),
+            message: format!("Could not detect Iceberg table at path: {}", path.display()),
         })
-    }
-
-    /// Check if Delta Lake table exists using storage backend
-    async fn check_delta_exists(path_str: &str, storage: &Storage) -> bool {
-        // Extract the path without scheme for listing
-        let clean_path = Self::extract_storage_path(path_str);
-
-        let delta_log_prefix = if clean_path.is_empty() {
-            "_delta_log/".to_string()
-        } else {
-            format!("{}/_delta_log/", clean_path)
-        };
-
-        use crate::core::storage::to_path;
-        use futures::TryStreamExt;
-
-        // Try to list the _delta_log directory
-        let prefix_path = to_path(&delta_log_prefix);
-        let mut stream = storage.list(Some(&prefix_path));
-
-        // Check if we can get at least one item
-        matches!(stream.try_next().await, Ok(Some(_)))
     }
 
     /// Check if Iceberg table exists using storage backend
@@ -482,7 +421,6 @@ impl FormatHandlerFactory {
         use crate::core::storage::to_path;
         use futures::TryStreamExt;
 
-        // Extract the path without scheme for listing
         let clean_path = Self::extract_storage_path(path_str);
 
         let metadata_prefix = if clean_path.is_empty() {
@@ -494,7 +432,6 @@ impl FormatHandlerFactory {
         let prefix_path = to_path(&metadata_prefix);
         let stream = storage.list(Some(&prefix_path));
 
-        // Collect up to 5 items and look for .metadata.json
         match stream.try_collect::<Vec<_>>().await {
             Ok(items) => items
                 .iter()
@@ -508,7 +445,6 @@ impl FormatHandlerFactory {
     fn extract_storage_path(path_str: &str) -> String {
         if let Some(pos) = path_str.find("://") {
             let after_scheme = &path_str[pos + 3..];
-            // For cloud storage, strip the bucket/container name
             if let Some(slash_pos) = after_scheme.find('/') {
                 after_scheme[slash_pos + 1..].to_string()
             } else {

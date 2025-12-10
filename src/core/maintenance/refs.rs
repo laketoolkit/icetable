@@ -466,7 +466,7 @@ impl RefService {
         name: &str,
         target: &str, // snapshot ID or ref name
     ) -> Result<RefResult> {
-        use crate::core::utils::snapshot::is_ancestor;
+        use crate::utils::core::snapshot::is_ancestor;
 
         let (metadata, current_version) = service.load_metadata().await?;
 
@@ -553,7 +553,7 @@ impl RefService {
         _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
         let storage = create_object_store(table_path).await?;
-        let result = crate::core::utils::write_metadata_file(table_path, metadata, &storage).await?;
+        let result = crate::utils::core::write_metadata_file(table_path, metadata, &storage).await?;
         Ok(result.version)
     }
 }

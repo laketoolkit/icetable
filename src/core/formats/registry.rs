@@ -1,7 +1,7 @@
 //! Format handler registry for dynamic format registration
 //!
 //! Provides a plugin-style system for registering table format handlers.
-//! Supports Delta Lake and Iceberg.
+//! Supports Apache Iceberg tables.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -16,7 +16,7 @@ use super::traits::TimeTravelOptions;
 pub type FormatHandlerFactoryFn =
     Arc<dyn Fn(&Path, Storage) -> Result<Box<dyn FormatHandler>> + Send + Sync>;
 
-/// Registry for table format handlers (Delta Lake, Iceberg)
+/// Registry for table format handlers (Iceberg)
 ///
 /// Format handlers are checked in priority order (highest first) until one
 /// successfully handles the given path.
@@ -114,24 +114,10 @@ impl FormatHandlerRegistry {
         storage: Storage,
         time_travel: TimeTravelOptions,
     ) -> Result<Box<dyn FormatHandler>> {
-        // Try Delta Lake first
-        #[cfg(feature = "delta")]
-        {
-            let handler =
-                super::DeltaHandler::with_time_travel(path, storage.clone(), time_travel.clone())?;
-            if handler.can_handle(path).await? {
-                return Ok(Box::new(handler));
-            }
-        }
-
         // Try Iceberg
-        {
-            #[cfg(not(feature = "delta"))]
-            let _ = &time_travel; // Used by Delta above when feature enabled
-            let handler = super::IcebergHandler::with_time_travel(path, storage, time_travel)?;
-            if handler.can_handle(path).await? {
-                return Ok(Box::new(handler));
-            }
+        let handler = super::IcebergHandler::with_time_travel(path, storage, time_travel)?;
+        if handler.can_handle(path).await? {
+            return Ok(Box::new(handler));
         }
 
         Err(crate::error::Error::InvalidFormat {
@@ -141,13 +127,7 @@ impl FormatHandlerRegistry {
 
     /// Register built-in table formats
     fn register_builtin_formats(&self) {
-        // Delta Lake (feature-gated)
-        #[cfg(feature = "delta")]
-        self.register("delta", 80, |path, storage| {
-            Ok(Box::new(super::DeltaHandler::new(path, storage)?))
-        });
-
-        // Iceberg (feature-gated)
+        // Iceberg
         self.register("iceberg", 80, |path, storage| {
             Ok(Box::new(super::IcebergHandler::new(path, storage)?))
         });

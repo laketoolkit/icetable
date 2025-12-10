@@ -63,7 +63,7 @@ impl ViewItem {
 /// Complete inspection view
 #[derive(Debug, Clone)]
 pub struct InspectionView {
-    /// Format name (e.g., "Apache Iceberg", "Delta Lake")
+    /// Format name (e.g., "Apache Iceberg", "Iceberg")
     pub format_name: String,
     /// View sections
     pub sections: Vec<ViewSection>,
@@ -335,7 +335,7 @@ impl InspectionViewBuilder {
         self
     }
 
-    /// Add file-based layout (Delta/Iceberg)
+    /// Add file-based layout (Iceberg)
     fn add_file_layout(mut self, files: &FileBasedLayout) -> Self {
         let mut items = vec![
             ViewItem::kv("Data Files", format_number(files.num_files as i64)),

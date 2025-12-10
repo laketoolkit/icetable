@@ -4,6 +4,7 @@
 
 use colored::Colorize;
 
+use super::common::print_json;
 use crate::cli::parser::DiffArgs;
 use crate::core::TableContext;
 use crate::core::metadata::IcebergMetadataService;
@@ -54,11 +55,7 @@ impl DiffCommand {
                     "base": base_id,
                     "identical": true,
                 });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json)
-                        .map_err(|e| Error::General(e.to_string()))?
-                );
+                print_json(&json)?;
             } else {
                 println!("{}", "References point to the same snapshot".yellow());
             }
@@ -120,10 +117,7 @@ impl DiffCommand {
                     "removed_paths": removed,
                 }
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} {} (base: {})",

@@ -4,18 +4,18 @@
 //! The business logic is delegated to AnalyzeService in core::analysis.
 
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
+use comfy_table::{Cell, CellAlignment};
 
-use super::common::resolve_table_path;
+use super::common::{create_table, print_json, resolve_table_path};
 use crate::cli::parser::AnalyzeArgs;
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
 };
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::utils::format_bytes;
-use crate::core::{CatalogConfig, TableFormat, detect_table_format_async};
-use crate::error::{Error, Result};
+use crate::core::inspection::{format_bytes, format_count};
+use crate::core::CatalogConfig;
+use crate::error::Result;
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
 /// Handler for analyze command
@@ -33,24 +33,7 @@ impl AnalyzeCommand {
                 let estimated_memory = 128 * 1024 * 1024; // 128MB for analysis
                 track_memory_usage(estimated_memory)?;
 
-                // Detect table format
-                let format = detect_table_format_async(&table_path).await;
-
-                match format {
-                    TableFormat::Delta => {
-                        println!(
-                            "{}",
-                            "Delta Lake analysis is not supported. Use 'icetable import delta' to convert to Iceberg."
-                                .yellow()
-                        );
-                        Ok(())
-                    }
-                    TableFormat::Iceberg => Self::analyze_iceberg(&table_path, &args).await,
-                    TableFormat::Unknown => Err(Error::General(format!(
-                        "Path '{}' is not a Delta Lake or Iceberg table",
-                        table_path
-                    ))),
-                }
+                Self::analyze_iceberg(&table_path, &args).await
             }).await
         }).await
     }
@@ -141,9 +124,7 @@ impl AnalyzeCommand {
         }
 
         // Build summary table
-        let mut table = comfy_table::Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
+        let mut table = create_table();
 
         table.set_header(vec![
             Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Center),
@@ -352,22 +333,8 @@ impl AnalyzeCommand {
             })),
         });
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-        );
+        print_json(&json)?;
 
         Ok(())
-    }
-}
-
-/// Format a count with thousands separators
-fn format_count(count: usize) -> String {
-    if count >= 1_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else if count >= 1_000 {
-        format!("{:.1}K", count as f64 / 1_000.0)
-    } else {
-        count.to_string()
     }
 }

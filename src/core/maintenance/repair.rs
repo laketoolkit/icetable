@@ -1,6 +1,6 @@
 //! Repair service for fixing table metadata
 //!
-//! This service handles metadata repair operations for both Delta Lake and Iceberg tables
+//! This service handles metadata repair operations for both Iceberg tables
 //! by detecting orphan files and missing metadata entries.
 
 use std::collections::{HashMap, HashSet};

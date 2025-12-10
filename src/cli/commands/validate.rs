@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::common::resolve_table_path;
+use super::common::{print_json, resolve_table_path};
 use crate::cli::parser::ValidateArgs;
 use crate::core::CatalogConfig;
 use crate::core::formats::FormatHandlerRegistry;
@@ -145,11 +145,7 @@ impl ValidateCommand {
                 });
             }
 
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_output)
-                    .map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json_output)?;
         } else {
             use colored::Colorize;
 

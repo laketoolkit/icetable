@@ -8,15 +8,15 @@
 
 use colored::Colorize;
 
-use super::common::{TableResolution, resolve_table};
+use super::common::{create_committer, print_json, resolve_table};
 use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
 use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{
     MaintenanceConfig, ManifestConfig, ManifestService, OptimizeService,
 };
 use crate::core::metadata::MaintenanceResult;
-use crate::core::utils::parse_bytes;
-use crate::core::{CatalogConfig, TableFormat, detect_table_format_async, format_bytes};
+use crate::utils::core::parse_bytes;
+use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
@@ -45,8 +45,7 @@ impl OptimizeCommand {
         let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
         let table_path = resolution.location().to_string();
 
-        let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
-        let format = detect_table_format_async(&table_path).await;
+        let committer = create_committer(catalog_config.as_ref(), &resolution);
 
         let max_bytes = args
             .max_bytes
@@ -73,22 +72,13 @@ impl OptimizeCommand {
                 let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
                 track_memory_usage(estimated_memory)?;
 
-                match format {
-                    TableFormat::Delta => Self::optimize_delta_data(&args, &service).await,
-                    TableFormat::Iceberg => {
-                        Self::optimize_iceberg_data(
-                            &table_path,
-                            &service,
-                            args.branch.as_deref(),
-                            committer,
-                        )
-                        .await
-                    }
-                    TableFormat::Unknown => Err(Error::General(format!(
-                        "Path '{}' is not a Delta Lake or Iceberg table",
-                        table_path
-                    ))),
-                }
+                Self::optimize_iceberg_data(
+                    &table_path,
+                    &service,
+                    args.branch.as_deref(),
+                    committer,
+                )
+                .await
             })
             .await
         })
@@ -96,26 +86,6 @@ impl OptimizeCommand {
 
         Self::output_data_result(&result, &args.output)?;
         Ok(())
-    }
-
-    /// Create a TableCommitter if catalog is configured
-    fn create_committer(
-        catalog_config: Option<&CatalogConfig>,
-        resolution: &TableResolution,
-    ) -> Option<TableCommitter> {
-        match (catalog_config, resolution) {
-            (
-                Some(config),
-                TableResolution::CatalogTable {
-                    namespace, name, ..
-                },
-            ) => Some(TableCommitter::with_catalog(
-                config.clone(),
-                namespace.clone(),
-                name.clone(),
-            )),
-            _ => None,
-        }
     }
 
     /// Execute optimize manifests subcommand
@@ -126,45 +96,18 @@ impl OptimizeCommand {
         let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
         let table_path = resolution.location().to_string();
 
-        let committer = Self::create_committer(catalog_config.as_ref(), &resolution);
-        let format = detect_table_format_async(&table_path).await;
+        let committer = create_committer(catalog_config.as_ref(), &resolution);
 
         with_timeout(async {
             with_cancellation(async {
                 let estimated_memory = args.target_size * 2;
                 track_memory_usage(estimated_memory)?;
 
-                match format {
-                    TableFormat::Delta => {
-                        println!(
-                            "{}",
-                            "Delta Lake does not use manifest files. Use 'optimize data' instead."
-                                .yellow()
-                        );
-                        Ok(())
-                    }
-                    TableFormat::Iceberg => {
-                        Self::rewrite_iceberg_manifests(&table_path, &args, committer).await
-                    }
-                    TableFormat::Unknown => Err(Error::General(format!(
-                        "Path '{}' is not a Delta Lake or Iceberg table",
-                        table_path
-                    ))),
-                }
+                Self::rewrite_iceberg_manifests(&table_path, &args, committer).await
             })
             .await
         })
         .await
-    }
-
-    /// Optimize Delta Lake data files - not supported
-    async fn optimize_delta_data(
-        _args: &OptimizeDataArgs,
-        _service: &OptimizeService,
-    ) -> Result<MaintenanceResult> {
-        Err(Error::UnsupportedFeature {
-            feature: "Delta Lake optimize is not supported. Use 'icetable import delta' to convert to Iceberg.".to_string(),
-        })
     }
 
     /// Optimize Iceberg data files
@@ -303,10 +246,7 @@ impl OptimizeCommand {
                 "total_entries": analysis.total_entries,
                 "estimated_after": analysis.estimated_after,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         }
 
         Ok(())
@@ -337,10 +277,7 @@ impl OptimizeCommand {
                 "snapshot_id": result.snapshot_id,
                 "metadata_version": result.metadata_version,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         }
 
         Ok(())
@@ -367,11 +304,7 @@ impl OptimizeCommand {
                     "records_affected": result.records_affected,
                     "details": result.details,
                 });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json)
-                        .map_err(|e| Error::General(format!("Failed to serialize: {}", e)))?
-                );
+                print_json(&json)?;
             }
             _ => {
                 println!();

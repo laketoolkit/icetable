@@ -1,7 +1,7 @@
 //! Common utilities for CLI commands
 
 use crate::config::{ResolveTableRef, ResolvedTable};
-use crate::core::{CatalogClient, CatalogConfig, TableRef};
+use crate::core::{CatalogClient, CatalogConfig, TableCommitter, TableRef};
 use crate::error::{Error, Result};
 use iceberg::table::Table;
 
@@ -121,4 +121,45 @@ pub async fn resolve_table_path(
 ) -> Result<String> {
     let resolution = resolve_table(table_ref, cli_catalog).await?;
     Ok(resolution.location())
+}
+
+/// Print JSON to stdout, converting serialization errors to our Error type
+pub fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| Error::General(format!("JSON serialization failed: {}", e)))?;
+    println!("{}", json);
+    Ok(())
+}
+
+/// Create a styled comfy_table::Table with standard icetable appearance
+///
+/// Uses UTF8_FULL preset and Dynamic content arrangement
+pub fn create_table() -> comfy_table::Table {
+    use comfy_table::{ContentArrangement, presets::UTF8_FULL};
+    let mut table = comfy_table::Table::new();
+    table.load_preset(UTF8_FULL);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table
+}
+
+/// Create a TableCommitter if the table was resolved from a catalog
+///
+/// Returns None if the table is a direct path (not from catalog)
+pub fn create_committer(
+    catalog_config: Option<&CatalogConfig>,
+    resolution: &TableResolution,
+) -> Option<TableCommitter> {
+    match (catalog_config, resolution) {
+        (
+            Some(config),
+            TableResolution::CatalogTable {
+                namespace, name, ..
+            },
+        ) => Some(TableCommitter::with_catalog(
+            config.clone(),
+            namespace.clone(),
+            name.clone(),
+        )),
+        _ => None,
+    }
 }

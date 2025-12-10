@@ -11,7 +11,7 @@ use futures::TryStreamExt;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
 use crate::core::storage::{ObjectStoreExt, create_object_store};
-use crate::core::utils::{format_bytes, sizes};
+use crate::utils::core::{format_bytes, sizes};
 use crate::error::{Error, Result};
 
 /// Service for vacuuming tables (removing unreferenced files)

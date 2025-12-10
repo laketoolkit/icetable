@@ -9,7 +9,7 @@ use iceberg::table::{StaticTable, Table};
 use iceberg::{Catalog, CatalogBuilder, NamespaceIdent, TableIdent};
 
 use crate::core::storage::{create_object_store, create_file_io};
-use crate::core::utils::find_latest_metadata;
+use crate::utils::core::find_latest_metadata;
 use crate::core::CatalogConfig;
 use crate::error::{Error, Result};
 

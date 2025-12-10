@@ -7,6 +7,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use colored::Colorize;
 use std::sync::Arc;
 
+use super::common::print_json;
 use crate::cli::parser::HistoryArgs;
 use crate::config::ResolvePath;
 use crate::core::{TableExt, TableLoader};
@@ -181,11 +182,7 @@ impl HistoryCommand {
             })
             .collect();
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json_entries)
-                .map_err(|e| Error::General(format!("Failed to serialize: {}", e)))?
-        );
+        print_json(&json_entries)?;
 
         Ok(())
     }

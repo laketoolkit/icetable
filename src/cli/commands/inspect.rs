@@ -11,6 +11,7 @@ use crate::config::ResolvePath;
 use crate::core::operations::inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
 };
+use crate::core::inspection::format_number;
 use crate::core::{format_bytes, CatalogConfig, TableLoader};
 use crate::error::Result;
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
@@ -345,19 +346,6 @@ fn format_timestamp(timestamp_ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(timestamp_ms)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Format a number with thousands separators
-fn format_number(n: i64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
 }
 
 // Re-export common module

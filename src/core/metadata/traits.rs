@@ -99,7 +99,7 @@ impl std::fmt::Display for OperationType {
 /// Information about a snapshot/version (format-agnostic)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotInfo {
-    /// Snapshot ID (version number for Delta, snapshot_id for Iceberg)
+    /// Snapshot ID snapshot ID
     pub id: i64,
     /// Timestamp in milliseconds
     pub timestamp_ms: i64,
@@ -218,5 +218,5 @@ impl MaintenanceResult {
 
 /// Re-export utility functions from the shared utils module for backward compatibility
 pub mod utils {
-    pub use crate::core::utils::{format_bytes, generate_unique_id};
+    pub use crate::utils::core::{format_bytes, generate_unique_id};
 }

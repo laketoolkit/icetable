@@ -6,9 +6,9 @@
 use std::path::Path;
 
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
+use comfy_table::{Cell, CellAlignment};
 
-use super::common::resolve_table_path;
+use super::common::{create_table, resolve_table_path};
 use crate::cli::parser::StatsArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;
@@ -133,9 +133,7 @@ impl StatsCommand {
         println!();
 
         // Build table with stats
-        let mut table = comfy_table::Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
+        let mut table = create_table();
 
         table.set_header(vec![
             Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Left),

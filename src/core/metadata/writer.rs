@@ -370,7 +370,7 @@ impl SnapshotWriter {
         metadata: &TableMetadata,
         current_metadata_path: &str,
     ) -> Result<String> {
-        use crate::core::utils::{
+        use crate::utils::core::{
             extract_version_from_path, metadata_location_filename, next_metadata_location,
         };
 

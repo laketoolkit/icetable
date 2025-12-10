@@ -1,4 +1,4 @@
-//! Physical inspection subsystem for table formats (Delta Lake, Iceberg)
+//! Physical inspection subsystem for Apache Iceberg tables
 //!
 //! This module provides a clean separation between metadata extraction (core)
 //! and presentation (CLI). It defines:
@@ -14,9 +14,6 @@ pub mod registry;
 pub mod service;
 pub mod traits;
 pub mod view_builder;
-
-#[cfg(feature = "delta")]
-pub mod delta;
 
 pub mod iceberg;
 

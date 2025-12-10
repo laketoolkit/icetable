@@ -12,7 +12,7 @@ use iceberg::table::StaticTable;
 use iceberg::{NamespaceIdent, TableIdent};
 
 use crate::core::storage::{Storage, create_object_store, create_file_io};
-use crate::core::utils::find_latest_metadata;
+use crate::utils::core::find_latest_metadata;
 use crate::error::{Error, Result};
 
 /// Result of loading metadata

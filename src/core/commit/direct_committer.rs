@@ -11,7 +11,7 @@ use iceberg::spec::{Snapshot, TableMetadata, TableMetadataBuilder};
 
 use super::traits::{CommitResult, SnapshotCommitter};
 use crate::core::storage::{ObjectStoreExt, Storage, to_path};
-use crate::core::utils::{extract_version_from_path, find_latest_metadata, metadata_location_filename, next_metadata_location};
+use crate::utils::core::{extract_version_from_path, find_latest_metadata, metadata_location_filename, next_metadata_location};
 use crate::error::{Error, Result};
 
 /// Committer for static tables (without catalog)

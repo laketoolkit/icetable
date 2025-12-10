@@ -562,7 +562,7 @@ impl ManifestService {
         new_metadata: &TableMetadata,
     ) -> Result<u32> {
         let storage = create_object_store(table_path).await?;
-        let result = crate::core::utils::write_metadata_file(table_path, new_metadata, &storage).await?;
+        let result = crate::utils::core::write_metadata_file(table_path, new_metadata, &storage).await?;
         Ok(result.version as u32)
     }
 }

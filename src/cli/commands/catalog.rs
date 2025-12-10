@@ -6,6 +6,7 @@ use colored::Colorize;
 use iceberg::spec::Schema;
 use std::collections::HashMap;
 
+use super::common::print_json;
 use crate::cli::parser::{
     CatalogArgs, CatalogCommands, CatalogCreateNamespaceArgs, CatalogCreateTableArgs,
     CatalogDropNamespaceArgs, CatalogDropTableArgs, CatalogNamespacesArgs,
@@ -93,10 +94,7 @@ impl CatalogCommand {
                 "parent": args.parent,
                 "namespaces": namespaces.iter().map(|n| n.join(".")).collect::<Vec<_>>(),
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             // Tree-style format
             println!("{}", catalog_name.bold());
@@ -160,10 +158,7 @@ impl CatalogCommand {
                 "namespace": namespace,
                 "tables": all_tables,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             // Tree-style format
             println!("{}", catalog_name.bold());
@@ -220,10 +215,7 @@ impl CatalogCommand {
                 "warehouse": config.warehouse,
                 "connected": true,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             // Clean info format
             println!("{} {}", catalog_name.bold(), "●".green());
@@ -258,10 +250,7 @@ impl CatalogCommand {
                 "catalog": catalog_name,
                 "namespace": args.namespace,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} Created namespace {}.{}",
@@ -304,10 +293,7 @@ impl CatalogCommand {
                 "catalog": catalog_name,
                 "namespace": args.namespace,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} Dropped namespace {}.{}",
@@ -363,10 +349,7 @@ impl CatalogCommand {
                 "table": args.name,
                 "full_name": format!("{}.{}.{}", catalog_name, args.namespace, args.name),
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} Created table {}.{}.{}",
@@ -403,10 +386,7 @@ impl CatalogCommand {
                 "table": args.name,
                 "purged": args.purge,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!(
                 "{} Dropped table {}.{}.{}",

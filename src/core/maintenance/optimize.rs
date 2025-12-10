@@ -1,6 +1,6 @@
 //! Optimize service for compacting small files
 //!
-//! This service handles file compaction for both Delta Lake and Iceberg tables
+//! This service handles file compaction for both Iceberg tables
 //! by using the MetadataService trait for transactional operations.
 //!
 //! Features:
@@ -33,7 +33,7 @@ use super::{FileGroup, MaintenanceConfig, group_files_by_partition};
 use crate::core::metadata::{
     DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
-use crate::core::utils::{format_bytes, generate_unique_id, normalize_relative_path};
+use crate::utils::core::{format_bytes, generate_unique_id, normalize_relative_path};
 use crate::error::{Error, Result};
 use crate::utils::register_cleanup_handler;
 

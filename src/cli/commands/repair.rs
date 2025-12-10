@@ -1,6 +1,6 @@
 //! Repair command implementation
 //!
-//! Thin wrapper that delegates to RepairService for both Delta Lake and Iceberg tables.
+//! Thin wrapper that delegates to RepairService for Iceberg tables.
 
 use colored::Colorize;
 
@@ -8,9 +8,7 @@ use super::common::resolve_table_path;
 use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
-use crate::core::storage::create_object_store;
-use crate::core::utils::detect_format;
-use crate::core::{CatalogConfig, TableFormat, format_bytes};
+use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
 use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
 
@@ -59,20 +57,6 @@ impl RepairCommand {
             ));
         }
 
-        // Create storage backend (supports local and cloud)
-        let storage = create_object_store(&table_path).await?;
-
-        // Detect table format (use explicit format if provided, otherwise auto-detect)
-        let format = if let Some(format_str) = &args.format {
-            match format_str.as_str() {
-                "delta" => TableFormat::Delta,
-                "iceberg" => TableFormat::Iceberg,
-                _ => TableFormat::Unknown,
-            }
-        } else {
-            detect_format(&table_path, &storage).await
-        };
-
         // Determine repair options
         let options = RepairOptions {
             add_orphans: args.add_orphans || args.sync_metadata,
@@ -87,27 +71,7 @@ impl RepairCommand {
 
         let service = RepairService::with_config(config);
 
-        match format {
-            TableFormat::Delta => Self::repair_delta(&args, &service, options).await,
-            TableFormat::Iceberg => {
-                Self::repair_iceberg(&args, &service, options, &table_path).await
-            }
-            TableFormat::Unknown => Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                table_path
-            ))),
-        }
-    }
-
-    /// Repair Delta Lake table - not supported, use Iceberg instead
-    async fn repair_delta(
-        _args: &RepairArgs,
-        _service: &RepairService,
-        _options: RepairOptions,
-    ) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Delta Lake repair is not supported. Use 'icetable import delta' to convert to Iceberg.".to_string(),
-        })
+        Self::repair_iceberg(&args, &service, options, &table_path).await
     }
 
     /// Repair Iceberg table
