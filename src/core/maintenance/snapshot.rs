@@ -109,6 +109,34 @@ pub struct CreateBackupResult {
     pub size_bytes: u64,
 }
 
+/// Entry in a snapshot lineage chain
+#[derive(Debug, Clone)]
+pub struct LineageEntry {
+    /// Snapshot ID
+    pub snapshot_id: i64,
+    /// Parent snapshot ID (None for root)
+    pub parent_id: Option<i64>,
+    /// Timestamp when the snapshot was created (milliseconds since epoch)
+    pub timestamp_ms: i64,
+    /// Operation that created this snapshot
+    pub operation: String,
+    /// Whether this is the current snapshot
+    pub is_current: bool,
+    /// Whether this is the root snapshot (no parent)
+    pub is_root: bool,
+}
+
+/// Result of getting snapshot lineage
+#[derive(Debug)]
+pub struct LineageResult {
+    /// Lineage entries from start to root
+    pub entries: Vec<LineageEntry>,
+    /// Total count of snapshots in the lineage
+    pub total_count: usize,
+    /// ID of the current snapshot
+    pub current_snapshot_id: Option<i64>,
+}
+
 /// Configuration for the snapshot service
 #[derive(Debug, Clone, Default)]
 pub struct SnapshotConfig {
@@ -423,6 +451,73 @@ impl SnapshotService {
              CALL system.cherrypick_snapshot('table', {})",
             snapshot_id, snapshot_id
         )))
+    }
+
+    /// Get the lineage of a snapshot (chain of ancestors to root)
+    ///
+    /// Returns the lineage from the specified snapshot (or current if none specified)
+    /// back to the root snapshot.
+    pub async fn get_lineage(
+        &self,
+        service: &IcebergMetadataService,
+        snapshot_id: Option<i64>,
+    ) -> Result<LineageResult> {
+        use std::collections::HashMap;
+
+        let (metadata, _) = service.load_metadata().await?;
+        let current_id = metadata.current_snapshot_id();
+
+        // Get starting snapshot
+        let start_id = snapshot_id.or(current_id).ok_or_else(|| {
+            Error::General(
+                "No snapshot specified and table has no current snapshot".to_string(),
+            )
+        })?;
+
+        // Build parent map for quick lookup
+        let parent_map: HashMap<i64, Option<i64>> = metadata
+            .snapshots()
+            .map(|s| (s.snapshot_id(), s.parent_snapshot_id()))
+            .collect();
+
+        // Build snapshot info map
+        let snapshot_map: HashMap<i64, _> =
+            metadata.snapshots().map(|s| (s.snapshot_id(), s)).collect();
+
+        // Walk the lineage from start to root
+        let mut entries = Vec::new();
+        let mut current = Some(start_id);
+
+        while let Some(id) = current {
+            let parent = parent_map.get(&id).copied().flatten();
+            let (timestamp_ms, operation) = snapshot_map
+                .get(&id)
+                .map(|s| {
+                    let ts = s.timestamp_ms();
+                    let op = format!("{:?}", s.summary().operation).to_lowercase();
+                    (ts, op)
+                })
+                .unwrap_or((0, "unknown".to_string()));
+
+            entries.push(LineageEntry {
+                snapshot_id: id,
+                parent_id: parent,
+                timestamp_ms,
+                operation,
+                is_current: Some(id) == current_id,
+                is_root: parent.is_none(),
+            });
+
+            current = parent;
+        }
+
+        let total_count = entries.len();
+
+        Ok(LineageResult {
+            entries,
+            total_count,
+            current_snapshot_id: current_id,
+        })
     }
 
     /// Find snapshot at or before a given timestamp

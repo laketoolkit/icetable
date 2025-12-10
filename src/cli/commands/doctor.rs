@@ -15,6 +15,7 @@ use crate::core::maintenance::{
     CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
 };
 use crate::error::Result;
+use crate::utils::with_resource_limits;
 
 /// Handler for doctor command
 pub struct DoctorCommand;
@@ -22,6 +23,12 @@ pub struct DoctorCommand;
 impl DoctorCommand {
     /// Execute doctor command
     pub async fn execute(args: DoctorArgs) -> Result<()> {
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for doctor checks
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
+
+    async fn execute_inner(args: DoctorArgs) -> Result<()> {
         use crate::config::ResolvePath;
 
         match args.path.resolve() {

@@ -13,7 +13,8 @@ use crate::core::analysis::{
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
 };
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::inspection::{format_bytes, format_count};
+use crate::core::format_bytes;
+use crate::core::inspection::format_count;
 use crate::core::CatalogConfig;
 use crate::error::Result;
 use crate::utils::with_resource_limits;

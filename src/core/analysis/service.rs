@@ -18,7 +18,7 @@ use super::types::{
     PartitionCompactionInfo, SnapshotExpirationAnalysis, TableAnalysis,
 };
 use crate::core::maintenance::group_files_by_partition;
-use crate::core::metadata::{DataFileInfo, IcebergMetadataService};
+use crate::core::metadata::{iceberg_partition, DataFileInfo, IcebergMetadataService};
 use crate::core::storage::ObjectStoreExt;
 use crate::error::{Error, Result};
 
@@ -123,7 +123,7 @@ impl AnalyzeService {
                 path: path.clone(),
                 size: task.length,
                 record_count: task.record_count.unwrap_or(0),
-                partition: extract_partition_from_path(&path),
+                partition: iceberg_partition::extract_partition_from_path_static(&path),
             }
         }).collect();
 
@@ -378,48 +378,9 @@ impl Default for AnalyzeService {
     }
 }
 
-/// Extract partition key=value pairs from a file path
-///
-/// e.g., "s3://bucket/data/day=2024-01-01/currency=USD/file.parquet"
-///       -> {"day": "2024-01-01", "currency": "USD"}
-fn extract_partition_from_path(path: &str) -> HashMap<String, String> {
-    let mut partition = HashMap::new();
-
-    for segment in path.split('/') {
-        if let Some(idx) = segment.find('=') {
-            let key = &segment[..idx];
-            let value = &segment[idx + 1..];
-            // Skip if it looks like a file, not a partition
-            if !value.contains('.') {
-                partition.insert(key.to_string(), value.to_string());
-            }
-        }
-    }
-
-    partition
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_extract_partition_from_path() {
-        let path = "s3://bucket/data/day=2024-01-01/currency=USD/file.parquet";
-        let partition = extract_partition_from_path(path);
-
-        assert_eq!(partition.get("day"), Some(&"2024-01-01".to_string()));
-        assert_eq!(partition.get("currency"), Some(&"USD".to_string()));
-        assert_eq!(partition.len(), 2);
-    }
-
-    #[test]
-    fn test_extract_partition_no_partitions() {
-        let path = "s3://bucket/data/file.parquet";
-        let partition = extract_partition_from_path(path);
-
-        assert!(partition.is_empty());
-    }
 
     #[test]
     fn test_default_config() {

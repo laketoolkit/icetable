@@ -9,6 +9,7 @@ use crate::cli::parser::DiffArgs;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::{Snapshot, TableContext, TableMetadata};
 use crate::error::{Error, Result};
+use crate::utils::with_resource_limits;
 
 /// Handler for diff command
 pub struct DiffCommand;
@@ -16,6 +17,12 @@ pub struct DiffCommand;
 impl DiffCommand {
     /// Execute diff command
     pub async fn execute(args: DiffArgs) -> Result<()> {
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for diff operations
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
+
+    async fn execute_inner(args: DiffArgs) -> Result<()> {
         let ctx = TableContext::from_path(args.path).await?;
         ctx.require_iceberg()?;
 

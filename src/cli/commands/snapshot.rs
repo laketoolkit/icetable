@@ -354,67 +354,31 @@ impl SnapshotCommand {
         limit: Option<usize>,
         output: &str,
     ) -> Result<()> {
-        use std::collections::HashMap;
-
         let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
-        let (metadata, _) = metadata_service.load_metadata().await?;
+        let snapshot_service = SnapshotService::new();
 
-        // Get starting snapshot
-        let start_id = snapshot_id
-            .or_else(|| metadata.current_snapshot_id())
-            .ok_or_else(|| {
-                Error::General(
-                    "No snapshot specified and table has no current snapshot".to_string(),
-                )
-            })?;
+        // Delegate to service for business logic
+        let result = snapshot_service
+            .get_lineage(&metadata_service, snapshot_id)
+            .await?;
 
-        // Build parent map for quick lookup
-        let parent_map: HashMap<i64, Option<i64>> = metadata
-            .snapshots()
-            .map(|s| (s.snapshot_id(), s.parent_snapshot_id()))
-            .collect();
-
-        // Build snapshot info map
-        let snapshot_map: HashMap<i64, _> =
-            metadata.snapshots().map(|s| (s.snapshot_id(), s)).collect();
-
-        // Walk the full lineage first to get total count and root
-        let mut full_lineage: Vec<(i64, Option<i64>, i64, String)> = Vec::new();
-        let mut current = Some(start_id);
-
-        while let Some(id) = current {
-            let parent = parent_map.get(&id).copied().flatten();
-            let (timestamp, operation) = snapshot_map
-                .get(&id)
-                .map(|s| {
-                    let ts = s.timestamp_ms();
-                    let op = format!("{:?}", s.summary().operation).to_lowercase();
-                    (ts, op)
-                })
-                .unwrap_or((0, "unknown".to_string()));
-
-            full_lineage.push((id, parent, timestamp, operation));
-            current = parent;
-        }
-
-        let total_count = full_lineage.len();
+        let total_count = result.total_count;
         let max_items = limit.unwrap_or(usize::MAX);
         let is_truncated = total_count > max_items && limit.is_some();
 
-        let current_id = metadata.current_snapshot_id();
-
         if output == "json" {
-            let json_lineage: Vec<serde_json::Value> = full_lineage
+            let json_lineage: Vec<serde_json::Value> = result
+                .entries
                 .iter()
-                .map(|(id, parent, ts, op)| {
+                .map(|entry| {
                     serde_json::json!({
-                        "snapshot_id": id,
-                        "parent_id": parent,
-                        "timestamp": chrono::DateTime::from_timestamp_millis(*ts)
+                        "snapshot_id": entry.snapshot_id,
+                        "parent_id": entry.parent_id,
+                        "timestamp": chrono::DateTime::from_timestamp_millis(entry.timestamp_ms)
                             .map(|dt| dt.to_rfc3339())
                             .unwrap_or_default(),
-                        "operation": op,
-                        "is_current": Some(*id) == current_id,
+                        "operation": entry.operation,
+                        "is_current": entry.is_current,
                     })
                 })
                 .collect();
@@ -447,25 +411,22 @@ impl SnapshotCommand {
                 total_count
             };
 
-            for (id, parent, ts, op) in full_lineage.iter().take(display_count) {
-                let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
+            for entry in result.entries.iter().take(display_count) {
+                let ts_str = chrono::DateTime::from_timestamp_millis(entry.timestamp_ms)
                     .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_else(|| ts.to_string());
+                    .unwrap_or_else(|| entry.timestamp_ms.to_string());
 
-                let is_current = Some(*id) == current_id;
-                let is_root = parent.is_none() && !is_truncated;
-
-                let status = if is_current {
+                let status = if entry.is_current {
                     "● current".green().to_string()
-                } else if is_root {
+                } else if entry.is_root && !is_truncated {
                     "● root".green().to_string()
                 } else {
                     "".to_string()
                 };
 
                 table.add_row(vec![
-                    Cell::new(id.to_string()).set_alignment(CellAlignment::Right),
-                    Cell::new(op),
+                    Cell::new(entry.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                    Cell::new(&entry.operation),
                     Cell::new(ts_str),
                     Cell::new(status),
                 ]);
@@ -483,10 +444,10 @@ impl SnapshotCommand {
                 );
 
                 // Show root in a separate mini-table
-                if let Some((id, _, ts, op)) = full_lineage.last() {
-                    let ts_str = chrono::DateTime::from_timestamp_millis(*ts)
+                if let Some(root) = result.entries.last() {
+                    let ts_str = chrono::DateTime::from_timestamp_millis(root.timestamp_ms)
                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| ts.to_string());
+                        .unwrap_or_else(|| root.timestamp_ms.to_string());
 
                     let mut root_table = create_table();
                     root_table.set_header(vec![
@@ -499,8 +460,8 @@ impl SnapshotCommand {
                         Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
                     ]);
                     root_table.add_row(vec![
-                        Cell::new(id.to_string()).set_alignment(CellAlignment::Right),
-                        Cell::new(op),
+                        Cell::new(root.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                        Cell::new(&root.operation),
                         Cell::new(ts_str),
                         Cell::new("● root".green().to_string()),
                     ]);

@@ -20,8 +20,8 @@ pub use partition_filter::{PartitionFilter, matches_partition_filter};
 pub use refs::{BranchRetention, RefConfig, RefResult, RefService};
 pub use repair::{RepairAnalysis, RepairService};
 pub use snapshot::{
-    CreateBackupResult, ExpireSnapshotsResult, ListSnapshotsResult, SetSnapshotResult,
-    SnapshotConfig, SnapshotDetails, SnapshotService,
+    CreateBackupResult, ExpireSnapshotsResult, LineageEntry, LineageResult, ListSnapshotsResult,
+    SetSnapshotResult, SnapshotConfig, SnapshotDetails, SnapshotService,
 };
 pub use vacuum::{OrphanFile, VacuumAnalysis, VacuumConfig, VacuumResult, VacuumService};
 

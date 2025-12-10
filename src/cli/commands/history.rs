@@ -12,6 +12,7 @@ use crate::cli::parser::HistoryArgs;
 use crate::config::ResolvePath;
 use crate::core::{IcebergTable, TableExt, TableLoader};
 use crate::error::{Error, Result};
+use crate::utils::with_resource_limits;
 
 /// A single version/snapshot entry in history
 #[derive(Debug, Clone)]
@@ -34,6 +35,12 @@ pub struct HistoryCommand;
 impl HistoryCommand {
     /// Execute history command
     pub async fn execute(args: HistoryArgs) -> Result<()> {
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for history
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
+
+    async fn execute_inner(args: HistoryArgs) -> Result<()> {
         // 1. Resolve path from args or config
         let table_path = args.path.resolve()?;
 
