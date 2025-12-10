@@ -376,7 +376,7 @@ impl IcebergTableInspector {
         // ═══════════════════════════════════════════════════════════════════════
         // TABLE INFORMATION
         // ═══════════════════════════════════════════════════════════════════════
-        let format_version = version as i32;
+        let format_version = version;
         let location = metadata.location().to_string();
         let table_uuid = metadata.uuid().to_string();
         let current_snapshot_id = metadata.current_snapshot_id();

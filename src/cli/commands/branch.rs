@@ -5,7 +5,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_committer, create_table, print_json, print_ref_delete_dry_run, print_version_if_present, resolve_iceberg_context};
+use super::common::{create_committer, create_ref_service, create_table, print_json, print_ref_delete_dry_run, print_version_if_present, resolve_iceberg_context};
 use crate::cli::parser::{BranchArgs, BranchCommands};
 use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
 use crate::core::{CatalogConfig, TableCommitter, TableContext};
@@ -85,35 +85,33 @@ impl BranchCommand {
                 })
                 .collect();
             print_json(&branch_json)?;
+        } else if branches.is_empty() {
+            println!("{}", "No branches found".dimmed());
         } else {
-            if branches.is_empty() {
-                println!("{}", "No branches found".dimmed());
-            } else {
-                let mut table = create_table();
+            let mut table = create_table();
 
-                table.set_header(vec![
-                    Cell::new("Branch".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Snapshot ID".cyan().to_string()).set_alignment(CellAlignment::Right),
-                    Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+            table.set_header(vec![
+                Cell::new("Branch".cyan().to_string()).set_alignment(CellAlignment::Left),
+                Cell::new("Snapshot ID".cyan().to_string()).set_alignment(CellAlignment::Right),
+                Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+            ]);
+
+            for branch in &branches {
+                let is_main_current =
+                    branch.name == "main" && Some(branch.snapshot_id) == current_snapshot_id;
+                let status = if is_main_current {
+                    "● current".green().to_string()
+                } else {
+                    "".to_string()
+                };
+                table.add_row(vec![
+                    Cell::new(&branch.name).set_alignment(CellAlignment::Left),
+                    Cell::new(branch.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                    Cell::new(status).set_alignment(CellAlignment::Center),
                 ]);
-
-                for branch in &branches {
-                    let is_main_current =
-                        branch.name == "main" && Some(branch.snapshot_id) == current_snapshot_id;
-                    let status = if is_main_current {
-                        "● current".green().to_string()
-                    } else {
-                        "".to_string()
-                    };
-                    table.add_row(vec![
-                        Cell::new(&branch.name).set_alignment(CellAlignment::Left),
-                        Cell::new(branch.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
-                        Cell::new(status).set_alignment(CellAlignment::Center),
-                    ]);
-                }
-
-                println!("{}", table);
             }
+
+            println!("{}", table);
         }
 
         Ok(())
@@ -128,10 +126,7 @@ impl BranchCommand {
         committer: Option<TableCommitter>,
     ) -> Result<()> {
         let service = ctx.iceberg_service().await?;
-        let ref_service = match committer {
-            Some(c) => RefService::with_committer(c),
-            None => RefService::new(),
-        };
+        let ref_service = create_ref_service(committer);
 
         let result = ref_service
             .create_branch(&service, &ctx.path, name, from_snapshot, retention)
@@ -200,10 +195,7 @@ impl BranchCommand {
         committer: Option<TableCommitter>,
     ) -> Result<()> {
         let service = ctx.iceberg_service().await?;
-        let ref_service = match committer {
-            Some(c) => RefService::with_committer(c),
-            None => RefService::new(),
-        };
+        let ref_service = create_ref_service(committer);
 
         let result = ref_service
             .fast_forward_branch(&service, &ctx.path, name, to)
@@ -237,10 +229,7 @@ impl BranchCommand {
         committer: Option<TableCommitter>,
     ) -> Result<()> {
         let service = ctx.iceberg_service().await?;
-        let ref_service = match committer {
-            Some(c) => RefService::with_committer(c),
-            None => RefService::new(),
-        };
+        let ref_service = create_ref_service(committer);
 
         let result = ref_service
             .rename_branch(&service, &ctx.path, old_name, new_name)

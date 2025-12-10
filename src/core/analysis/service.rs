@@ -15,8 +15,9 @@ use iceberg::spec::TableMetadata;
 
 use super::types::{
     DataCompactionAnalysis, ManifestCompactionAnalysis, OrphanFilesAnalysis,
-    PartitionCompactionInfo, SnapshotExpirationAnalysis, TableAnalysis,
+    PartitionCompactionInfo, PartitionStats, SnapshotExpirationAnalysis, TableAnalysis,
 };
+use crate::core::maintenance::PartitionFilter;
 use crate::core::maintenance::group_files_by_partition;
 use crate::core::metadata::{iceberg_partition, DataFileInfo, IcebergMetadataService};
 use crate::core::storage::ObjectStoreExt;
@@ -370,6 +371,72 @@ impl AnalyzeService {
             missing_count,
         })
     }
+}
+
+/// Get statistics for files matching a partition filter
+pub async fn get_partition_stats(
+    table_path: &str,
+    partition_filter: &PartitionFilter,
+) -> Result<PartitionStats> {
+    use crate::core::metadata::MetadataService;
+
+    const SMALL_FILE_THRESHOLD: u64 = 128 * 1024 * 1024; // 128MB
+
+    // Create metadata service to list files
+    let service = IcebergMetadataService::new_async(table_path.to_string())
+        .await
+        .map_err(|e| Error::General(format!("Failed to load table: {}", e)))?;
+
+    // Get all data files
+    let all_files = service.list_data_files().await?;
+
+    // Filter files by partition
+    let matching_files: Vec<_> = all_files
+        .into_iter()
+        .filter(|file| {
+            // Build partition key string from file's partition map
+            let partition_key = file
+                .partition
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("/");
+            partition_filter.matches(&partition_key)
+        })
+        .collect();
+
+    let file_count = matching_files.len();
+    let total_size: u64 = matching_files.iter().map(|f| f.size).sum();
+    let avg_file_size = if file_count > 0 {
+        total_size / file_count as u64
+    } else {
+        0
+    };
+    let small_files = matching_files
+        .iter()
+        .filter(|f| f.size < SMALL_FILE_THRESHOLD)
+        .count();
+    let small_files_percent = if file_count > 0 {
+        (small_files as f64 / file_count as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Recommend target size based on average
+    let recommended_target_size = if avg_file_size < SMALL_FILE_THRESHOLD {
+        256 * 1024 * 1024 // 256MB if files are small
+    } else {
+        avg_file_size // Keep current average if already large
+    };
+
+    Ok(PartitionStats {
+        file_count,
+        total_size,
+        avg_file_size,
+        small_files,
+        small_files_percent,
+        recommended_target_size,
+    })
 }
 
 impl Default for AnalyzeService {

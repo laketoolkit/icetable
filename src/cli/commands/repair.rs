@@ -4,7 +4,7 @@
 
 use colored::Colorize;
 
-use super::common::{print_dry_run_header, resolve_table_path};
+use super::common::{extract_filename, print_dry_run_header, resolve_table_path};
 use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
@@ -176,14 +176,14 @@ impl RepairCommand {
             print_dry_run_header();
             if options.remove_missing {
                 for file in &analysis.missing_files {
-                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    let name = extract_filename(&file.path);
                     println!("  Would remove reference: {}", name.red());
                 }
             }
 
             if options.add_orphans {
                 for file in &analysis.orphan_files {
-                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    let name = extract_filename(&file.path);
                     println!(
                         "  Would add: {} ({})",
                         name.green(),

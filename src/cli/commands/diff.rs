@@ -4,7 +4,7 @@
 
 use colored::Colorize;
 
-use super::common::print_json;
+use super::common::{extract_filename, format_timestamp, print_json};
 use crate::cli::parser::DiffArgs;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::{Snapshot, TableContext, TableMetadata};
@@ -92,12 +92,8 @@ impl DiffCommand {
             .collect();
 
         // Format timestamps
-        let base_ts = chrono::DateTime::from_timestamp_millis(base_snapshot.timestamp_ms())
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| base_snapshot.timestamp_ms().to_string());
-        let ref_ts = chrono::DateTime::from_timestamp_millis(ref_snapshot.timestamp_ms())
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| ref_snapshot.timestamp_ms().to_string());
+        let base_ts = format_timestamp(base_snapshot.timestamp_ms());
+        let ref_ts = format_timestamp(ref_snapshot.timestamp_ms());
 
         // Labels for display
         let ref_label = args.reference.as_deref().unwrap_or("current");
@@ -162,11 +158,11 @@ impl DiffCommand {
             } else {
                 println!("Changes:");
                 for path in &added {
-                    let filename = path.rsplit('/').next().unwrap_or(path);
+                    let filename = extract_filename(path);
                     println!("  {} {}", "+".green(), filename);
                 }
                 for path in &removed {
-                    let filename = path.rsplit('/').next().unwrap_or(path);
+                    let filename = extract_filename(path);
                     println!("  {} {}", "-".red(), filename);
                 }
                 println!();

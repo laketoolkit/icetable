@@ -1,6 +1,7 @@
 //! Common utilities for CLI commands
 
 use crate::config::{ResolveTableRef, ResolvedTable};
+use crate::core::maintenance::RefService;
 use crate::core::{CatalogClient, CatalogConfig, IcebergTable, TableCommitter, TableContext, TableRef};
 use crate::error::{Error, Result};
 
@@ -261,4 +262,21 @@ pub async fn resolve_iceberg_context(
     let ctx = TableContext::from_path(Some(resolution.location())).await?;
     ctx.require_iceberg()?;
     Ok(IcebergContext { resolution, ctx })
+}
+
+/// Extract filename from a path string
+///
+/// Returns the last component after the final '/', or the whole string if no '/' present
+pub fn extract_filename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Create a RefService with an optional committer
+///
+/// Convenience helper to avoid repeating the match pattern in branch/tag commands
+pub fn create_ref_service(committer: Option<TableCommitter>) -> RefService {
+    match committer {
+        Some(c) => RefService::with_committer(c),
+        None => RefService::new(),
+    }
 }

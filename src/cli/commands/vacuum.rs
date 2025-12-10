@@ -5,7 +5,7 @@
 use colored::Colorize;
 use std::io;
 
-use super::common::{create_spinner, print_json, resolve_table_path};
+use super::common::{create_spinner, extract_filename, print_json, resolve_table_path};
 use crate::cli::parser::VacuumArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;
@@ -177,7 +177,7 @@ impl VacuumCommand {
             // Show first 10 files, then summary if more
             let show_count = 10;
             for file in analysis.orphan_files.iter().take(show_count) {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                let name = extract_filename(&file.path);
                 println!("  - {} ({})", name, format_bytes(file.size));
             }
 

@@ -205,7 +205,7 @@ impl DoctorCommand {
                     "Found in config",
                 ));
 
-                match Self::test_catalog_connectivity(catalog_name, catalog).await {
+                match DoctorService::test_catalog_connectivity(catalog_name, catalog).await {
                     Ok(_) => {
                         checks.push(CheckResult::ok(
                             format!("Catalog '{}' connectivity", catalog_name),
@@ -230,62 +230,6 @@ impl DoctorCommand {
         }
 
         checks
-    }
-
-    /// Test catalog connectivity
-    async fn test_catalog_connectivity(
-        name: &str,
-        catalog: &crate::config::CatalogConfig,
-    ) -> Result<()> {
-        use crate::core::CatalogType;
-        use crate::error::Error;
-
-        log::debug!("Testing connectivity to catalog: {}", name);
-
-        if catalog.catalog_type == CatalogType::Rest {
-            if catalog.uri.is_empty() {
-                return Err(Error::Configuration {
-                    message: "REST catalog URI is empty".to_string(),
-                });
-            }
-
-            if !catalog.uri.starts_with("http://") && !catalog.uri.starts_with("https://") {
-                return Err(Error::Configuration {
-                    message: format!(
-                        "REST catalog URI should start with http:// or https://: {}",
-                        catalog.uri
-                    ),
-                });
-            }
-
-            let client = reqwest::Client::new();
-            let config_url = format!("{}/v1/config", catalog.uri.trim_end_matches('/'));
-            match client
-                .get(&config_url)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    log::debug!("REST catalog {} is reachable", catalog.uri);
-                    Ok(())
-                }
-                Ok(resp) => Err(Error::Network {
-                    message: format!("REST catalog returned status {}", resp.status()),
-                    source: None,
-                }),
-                Err(e) => Err(Error::Network {
-                    message: format!("Cannot connect to REST catalog: {}", e),
-                    source: None,
-                }),
-            }
-        } else {
-            log::debug!(
-                "Catalog type {} configuration validated",
-                catalog.catalog_type
-            );
-            Ok(())
-        }
     }
 
     /// Output results in appropriate format

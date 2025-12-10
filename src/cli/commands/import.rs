@@ -12,7 +12,7 @@ use crate::core::operations::{ImportConfig, ImportService};
 use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::core::format_bytes;
 use crate::error::{Error, Result};
-use super::common::print_dry_run_header;
+use super::common::{extract_filename, print_dry_run_header};
 use crate::utils::with_resource_limits;
 
 /// Handler for import commands
@@ -75,7 +75,7 @@ impl ImportCommand {
             println!();
             println!("Files to import:");
             for (i, file) in files.iter().take(10).enumerate() {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                let name = extract_filename(&file.path);
                 println!("  {}. {} ({})", i + 1, name, format_bytes(file.size));
             }
             if total_files > 10 {
@@ -130,7 +130,7 @@ impl ImportCommand {
             .iter()
             .filter(|obj| {
                 let path_str = obj.location.to_string();
-                let name = path_str.rsplit('/').next().unwrap_or(&path_str);
+                let name = extract_filename(&path_str);
                 if name.ends_with(".parquet") {
                     // Simple glob matching: *.parquet matches all, **/*.parquet matches all
                     if pattern == "*.parquet" || pattern == "**/*.parquet" {
@@ -165,7 +165,7 @@ impl ImportCommand {
             println!("Files to import:");
             for (i, file) in parquet_files.iter().take(10).enumerate() {
                 let path_str = file.location.to_string();
-                let name = path_str.rsplit('/').next().unwrap_or(&path_str);
+                let name = extract_filename(&path_str);
                 println!("  {}. {} ({})", i + 1, name, format_bytes(file.size));
             }
             if total_files > 10 {

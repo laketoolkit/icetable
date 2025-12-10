@@ -6,8 +6,8 @@
 mod service;
 mod types;
 
-pub use service::{AnalysisConfig, AnalyzeService};
+pub use service::{get_partition_stats, AnalysisConfig, AnalyzeService};
 pub use types::{
     DataCompactionAnalysis, ManifestCompactionAnalysis, OrphanFilesAnalysis,
-    PartitionCompactionInfo, SnapshotExpirationAnalysis, TableAnalysis,
+    PartitionCompactionInfo, PartitionStats, SnapshotExpirationAnalysis, TableAnalysis,
 };
