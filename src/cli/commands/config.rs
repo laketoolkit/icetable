@@ -12,6 +12,7 @@ use crate::cli::parser::{
 };
 use crate::config::{CatalogConfig, Config, ResolvedTable};
 use crate::error::Result;
+use crate::utils::with_resource_limits;
 use std::path::PathBuf;
 
 /// Handler for config command
@@ -20,6 +21,11 @@ pub struct ConfigCommand;
 impl ConfigCommand {
     /// Execute config command
     pub async fn execute(args: ConfigArgs) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 8 * 1024 * 1024; // 8MB for config ops
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
+
+    async fn execute_inner(args: ConfigArgs) -> Result<()> {
         match args.command {
             ConfigCommands::Use(args) => Self::use_table(args).await,
             ConfigCommands::Current(args) => Self::current(args).await,

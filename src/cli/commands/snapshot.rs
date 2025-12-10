@@ -12,6 +12,7 @@ use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::{CatalogConfig, TableCommitter};
 use crate::error::{Error, Result};
+use crate::utils::with_resource_limits;
 
 /// Configuration for expire snapshots operation
 struct ExpireConfig<'a> {
@@ -43,6 +44,11 @@ pub struct SnapshotCommand;
 impl SnapshotCommand {
     /// Execute snapshot command
     pub async fn execute(args: SnapshotArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for snapshot ops
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+    }
+
+    async fn execute_inner(args: SnapshotArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         // Get path from subcommand and resolve via config or catalog
         let subcommand_path = match &args.command {
             SnapshotCommands::List(a) => &a.path,

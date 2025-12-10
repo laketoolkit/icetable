@@ -6,7 +6,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_table, print_json, resolve_table_path};
+use super::common::{create_spinner, create_table, print_json, resolve_table_path};
 use crate::cli::parser::AnalyzeArgs;
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
@@ -33,8 +33,6 @@ impl AnalyzeCommand {
     }
 
     async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs) -> Result<()> {
-        use indicatif::{ProgressBar, ProgressStyle};
-
         let is_json = args.output == "json";
 
         if !is_json {
@@ -60,14 +58,7 @@ impl AnalyzeCommand {
         let analyze_service = AnalyzeService::with_config(config);
 
         // Run analysis with progress indicators
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} Analyzing current snapshot...")
-                .expect("hardcoded progress template is valid"),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
+        let pb = create_spinner("Analyzing current snapshot");
         let data_analysis = analyze_service.analyze_data_compaction(&service).await?;
         pb.finish_and_clear();
 
@@ -78,13 +69,7 @@ impl AnalyzeCommand {
         let snapshot_analysis = analyze_service.analyze_snapshots(&metadata);
 
         let orphan_analysis = if !args.skip_orphans {
-            let pb = ProgressBar::new_spinner();
-            pb.set_style(
-                ProgressStyle::default_spinner()
-                    .template("{spinner:.cyan} Scanning for orphan files...")
-                    .expect("hardcoded progress template is valid"),
-            );
-            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+            let pb = create_spinner("Scanning for orphan files");
             let result = analyze_service.analyze_orphans(&service).await?;
             pb.finish_and_clear();
             Some(result)

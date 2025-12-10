@@ -9,6 +9,7 @@ use colored::Colorize;
 
 use crate::cli::parser::InitArgs;
 use crate::error::{Error, Result};
+use crate::utils::with_resource_limits;
 
 /// Handler for init command
 pub struct InitCommand;
@@ -16,6 +17,11 @@ pub struct InitCommand;
 impl InitCommand {
     /// Execute init command
     pub async fn execute(args: InitArgs) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 16 * 1024 * 1024; // 16MB for init ops
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
+
+    async fn execute_inner(args: InitArgs) -> Result<()> {
         // Parse schema if provided
         let schema = if let Some(schema_path) = &args.schema {
             Some(Self::load_schema(schema_path)?)

@@ -172,6 +172,49 @@ pub fn print_dry_run_header() {
     println!();
 }
 
+/// Print metadata version if present
+///
+/// Used consistently when operations return an optional new_version
+pub fn print_version_if_present(new_version: Option<i64>) {
+    if let Some(v) = new_version {
+        println!("New metadata version: v{}", v);
+    }
+}
+
+/// Create a spinner progress bar for long-running operations
+///
+/// Returns a spinner with the given message that ticks every 100ms
+pub fn create_spinner(message: &str) -> indicatif::ProgressBar {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::time::Duration;
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{{spinner:.cyan}} {}...", message))
+            .expect("hardcoded progress template is valid"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb
+}
+
+/// Print dry-run output for ref delete operations (branch/tag)
+///
+/// Shows what would be deleted without actually deleting
+pub fn print_ref_delete_dry_run(ref_type: &str, name: &str, snapshot_id: i64) {
+    use colored::Colorize;
+    print_dry_run_header();
+    println!("Would delete the following:");
+    println!(
+        "  {}: {} (snapshot {})",
+        ref_type,
+        name.cyan(),
+        snapshot_id
+    );
+    println!();
+    println!("{}", "Run without --dry-run to apply this change.".dimmed());
+}
+
 /// Resolved context for an Iceberg table operation
 ///
 /// Combines table resolution with TableContext, ensuring the table is Iceberg format

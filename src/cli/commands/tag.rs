@@ -5,11 +5,12 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_committer, create_table, print_dry_run_header, print_json, resolve_iceberg_context};
+use super::common::{create_committer, create_table, print_json, print_ref_delete_dry_run, print_version_if_present, resolve_iceberg_context};
 use crate::cli::parser::{TagArgs, TagCommands};
 use crate::core::maintenance::{RefConfig, RefService};
 use crate::core::{CatalogConfig, TableCommitter, TableContext};
 use crate::error::Result;
+use crate::utils::with_resource_limits;
 
 /// Handler for tag command
 pub struct TagCommand;
@@ -17,6 +18,11 @@ pub struct TagCommand;
 impl TagCommand {
     /// Execute tag command
     pub async fn execute(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024; // 32MB for tag ops
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+    }
+
+    async fn execute_inner(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         match args.command {
             TagCommands::List(a) => {
                 let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
@@ -123,9 +129,7 @@ impl TagCommand {
                 result.name.cyan(),
                 result.snapshot_id
             );
-            if let Some(v) = result.new_version {
-                println!("New metadata version: v{}", v);
-            }
+            print_version_if_present(result.new_version);
         }
 
         Ok(())
@@ -153,20 +157,10 @@ impl TagCommand {
             });
             print_json(&json)?;
         } else if result.dry_run {
-            print_dry_run_header();
-            println!("Would delete the following:");
-            println!(
-                "  Tag: {} (snapshot {})",
-                result.name.cyan(),
-                result.snapshot_id
-            );
-            println!();
-            println!("{}", "Run without --dry-run to apply this change.".dimmed());
+            print_ref_delete_dry_run("Tag", &result.name, result.snapshot_id);
         } else {
             println!("{} Deleted tag '{}'", "Success:".green(), result.name.red());
-            if let Some(v) = result.new_version {
-                println!("New metadata version: v{}", v);
-            }
+            print_version_if_present(result.new_version);
         }
 
         Ok(())
@@ -204,9 +198,7 @@ impl TagCommand {
                 old_name.yellow(),
                 result.name.cyan()
             );
-            if let Some(v) = result.new_version {
-                println!("New metadata version: v{}", v);
-            }
+            print_version_if_present(result.new_version);
         }
 
         Ok(())
