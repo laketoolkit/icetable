@@ -5,6 +5,9 @@
 
 use std::path::Path;
 
+use colored::Colorize;
+use comfy_table::{Cell, CellAlignment, ContentArrangement, presets::UTF8_FULL};
+
 use super::common::resolve_table_path;
 use crate::cli::parser::StatsArgs;
 use crate::core::CatalogConfig;
@@ -125,70 +128,58 @@ impl StatsCommand {
     }
 
     fn print_text_output(metadata: &crate::core::formats::FileMetadata, table_name: &str) {
-        // Build content lines
-        let mut lines: Vec<(String, String)> = Vec::new();
+        // Print table title
+        println!("{}", table_name.cyan().bold());
+        println!();
+
+        // Build table with stats
+        let mut table = comfy_table::Table::new();
+        table.load_preset(UTF8_FULL);
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+
+        table.set_header(vec![
+            Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Left),
+            Cell::new("Value".cyan().to_string()).set_alignment(CellAlignment::Right),
+        ]);
 
         if let Some(rows) = metadata.num_rows {
-            lines.push(("Total Records".to_string(), format_number(rows)));
+            table.add_row(vec![
+                Cell::new("Total Records").set_alignment(CellAlignment::Left),
+                Cell::new(format_number(rows)).set_alignment(CellAlignment::Right),
+            ]);
         }
 
         if let Some(size) = metadata.compressed_size {
-            lines.push(("Total Size".to_string(), format_bytes(size)));
+            table.add_row(vec![
+                Cell::new("Total Size").set_alignment(CellAlignment::Left),
+                Cell::new(format_bytes(size)).set_alignment(CellAlignment::Right),
+            ]);
         }
 
         if let Some(files) = metadata.metadata.get("total-data-files")
             && let Ok(n) = files.parse::<i64>()
         {
-            lines.push(("Data Files".to_string(), format_number(n)));
+            table.add_row(vec![
+                Cell::new("Data Files").set_alignment(CellAlignment::Left),
+                Cell::new(format_number(n)).set_alignment(CellAlignment::Right),
+            ]);
         }
 
         if let Some(ref version) = metadata.format_version {
-            lines.push(("Format Version".to_string(), version.clone()));
+            table.add_row(vec![
+                Cell::new("Format Version").set_alignment(CellAlignment::Left),
+                Cell::new(version).set_alignment(CellAlignment::Right),
+            ]);
         }
 
         if let Some(dt) = metadata.created_at {
-            lines.push((
-                "Last Modified".to_string(),
-                dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-            ));
+            table.add_row(vec![
+                Cell::new("Last Modified").set_alignment(CellAlignment::Left),
+                Cell::new(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()).set_alignment(CellAlignment::Right),
+            ]);
         }
 
-        // Calculate widths
-        let max_key_width = lines.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-        let max_val_width = lines.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
-        let content_width = max_key_width + max_val_width + 4; // 4 spaces between
-        let box_width = content_width.max(table_name.len()) + 4; // padding
-
-        // Print box
-        println!();
-        println!("╭{}╮", "─".repeat(box_width));
-
-        // Centered title
-        let title_padding = (box_width - table_name.len()) / 2;
-        println!(
-            "│{}{}{}│",
-            " ".repeat(title_padding),
-            table_name,
-            " ".repeat(box_width - title_padding - table_name.len())
-        );
-
-        println!("├{}┤", "─".repeat(box_width));
-        println!("│{}│", " ".repeat(box_width));
-
-        // Content lines
-        for (key, value) in &lines {
-            let line = format!(
-                "  {}{}{}",
-                key,
-                " ".repeat(max_key_width - key.len() + 4),
-                value
-            );
-            println!("│{}{}│", line, " ".repeat(box_width - line.len()));
-        }
-
-        println!("│{}│", " ".repeat(box_width));
-        println!("╰{}╯", "─".repeat(box_width));
-        println!();
+        println!("{}", table);
     }
 
     /// Get statistics for files matching a partition filter

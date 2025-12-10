@@ -7,6 +7,7 @@ use colored::Colorize;
 
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use crate::cli::parser::InspectArgs;
+use crate::config::ResolvePath;
 use crate::core::operations::inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
 };
@@ -31,12 +32,11 @@ impl InspectCommand {
     }
 
     async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_input = args.path.as_ref().ok_or_else(|| {
-            crate::error::Error::General("Table path or identifier required".to_string())
-        })?;
+        // Resolve table path from args or config
+        let table_path = args.path.resolve()?;
 
         // Load table using unified TableLoader
-        let table = TableLoader::load_table(table_input, catalog_config.as_ref()).await?;
+        let table = TableLoader::load_table(&table_path, catalog_config.as_ref()).await?;
 
         // Build inspection options from CLI args
         let options = IcebergInspectOptions::from_cli(args.verbose);
