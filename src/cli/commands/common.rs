@@ -215,6 +215,25 @@ pub fn print_ref_delete_dry_run(ref_type: &str, name: &str, snapshot_id: i64) {
     println!("{}", "Run without --dry-run to apply this change.".dimmed());
 }
 
+/// Format timestamp in milliseconds to human-readable string
+///
+/// Returns "unknown" if the timestamp is invalid
+pub fn format_timestamp(timestamp_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Extract table name from a path
+///
+/// Returns the last component of the path, or "table" as fallback
+pub fn extract_table_name(path: &str) -> &str {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("table")
+}
+
 /// Resolved context for an Iceberg table operation
 ///
 /// Combines table resolution with TableContext, ensuring the table is Iceberg format

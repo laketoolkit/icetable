@@ -6,7 +6,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_spinner, create_table, print_json, resolve_table_path};
+use super::common::{create_spinner, create_table, extract_table_name, print_json, resolve_table_path};
 use crate::cli::parser::AnalyzeArgs;
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
@@ -36,11 +36,7 @@ impl AnalyzeCommand {
         let is_json = args.output == "json";
 
         if !is_json {
-            let table_name = table_path
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or("table");
+            let table_name = extract_table_name(table_path);
 
             println!("{} {}", "Analyzing".green(), table_name.cyan());
             println!("{}", table_path.dimmed());

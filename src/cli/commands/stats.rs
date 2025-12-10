@@ -8,7 +8,7 @@ use std::path::Path;
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_table, print_json, resolve_table_path};
+use super::common::{create_table, extract_table_name, print_json, resolve_table_path};
 use crate::cli::parser::StatsArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;
@@ -64,7 +64,7 @@ impl StatsCommand {
         let metadata = handler.read_metadata().await?;
 
         // Extract table name from path
-        let table_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("table");
+        let table_name = extract_table_name(&table_path);
 
         // If partition filter is specified, get detailed partition stats
         if let Some(partition_filter_str) = &args.partition {

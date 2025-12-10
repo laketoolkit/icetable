@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::common::{print_json, resolve_table_path};
+use super::common::{create_spinner, print_json, resolve_table_path};
 use crate::cli::parser::ValidateArgs;
 use crate::core::CatalogConfig;
 use crate::core::formats::FormatHandlerRegistry;
@@ -12,7 +12,6 @@ use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::create_object_store;
 use crate::core::validation::{Severity, ValidationEngine};
 use crate::error::{Error, Result};
-use crate::utils::progress::ProgressTracker;
 use crate::utils::with_resource_limits;
 
 /// Handler for validate command
@@ -56,8 +55,8 @@ impl ValidateCommand {
 
         // 4. Execute basic validation
         let show_progress = !args.quiet && args.output != "json";
-        let progress = if show_progress {
-            Some(ProgressTracker::spinner("Validating table structure..."))
+        let pb = if show_progress {
+            Some(create_spinner("Validating table structure"))
         } else {
             None
         };
@@ -65,16 +64,14 @@ impl ValidateCommand {
         let operation = ValidateOperation::new(handler.into());
         let result = operation.execute(args.quick).await?;
 
-        if let Some(p) = progress {
+        if let Some(p) = pb {
             p.finish_and_clear();
         }
 
         // 5. Execute custom rules if provided
         let rules_results = if let Some(rules_path) = &args.rules {
-            let progress = if show_progress {
-                Some(ProgressTracker::spinner(
-                    "Running custom validation rules...",
-                ))
+            let pb = if show_progress {
+                Some(create_spinner("Running custom validation rules"))
             } else {
                 None
             };
@@ -91,7 +88,7 @@ impl ValidateCommand {
             let engine = ValidationEngine::new(handler2.into(), rules);
             let rules_result = engine.execute().await?;
 
-            if let Some(p) = progress {
+            if let Some(p) = pb {
                 p.finish_and_clear();
             }
 

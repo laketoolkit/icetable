@@ -5,6 +5,7 @@
 
 use colored::Colorize;
 
+use super::common::format_timestamp;
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use crate::cli::parser::InspectArgs;
 use crate::config::ResolvePath;
@@ -334,13 +335,6 @@ impl InspectCommand {
 
         renderer.render(container)
     }
-}
-
-/// Format timestamp in milliseconds to human-readable string
-fn format_timestamp(timestamp_ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(timestamp_ms)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 // Re-export common module
