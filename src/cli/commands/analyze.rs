@@ -6,15 +6,15 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_spinner, create_table, extract_table_name, print_json, resolve_table_path};
+use super::common::{create_spinner, extract_table_name, print_json, resolve_table_path};
+use crate::cli::output::create_styled_table;
 use crate::cli::parser::AnalyzeArgs;
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
 };
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::format_bytes;
-use crate::core::inspection::format_count;
+use crate::core::{format_bytes, format_count};
 use crate::core::CatalogConfig;
 use crate::error::Result;
 use crate::utils::with_resource_limits;
@@ -99,7 +99,7 @@ impl AnalyzeCommand {
         }
 
         // Build summary table
-        let mut table = create_table();
+        let mut table = create_styled_table();
 
         table.set_header(vec![
             Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Center),

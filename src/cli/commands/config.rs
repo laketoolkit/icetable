@@ -5,7 +5,8 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_table, print_json};
+use super::common::print_json;
+use crate::cli::output::create_styled_table;
 use crate::cli::parser::{
     ConfigAddArgs, ConfigAddCatalogArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs,
     ConfigListArgs, ConfigRemoveArgs, ConfigRemoveCatalogArgs, ConfigUnsetArgs, ConfigUseArgs,
@@ -244,7 +245,7 @@ impl ConfigCommand {
             if config.tables.is_empty() {
                 println!("  {}", "(none)".dimmed());
             } else {
-                let mut table = create_table();
+                let mut table = create_styled_table();
 
                 table.set_header(vec![
                     Cell::new("".to_string()).set_alignment(CellAlignment::Center),
@@ -276,7 +277,7 @@ impl ConfigCommand {
             if config.catalogs.is_empty() {
                 println!("  {}", "(none)".dimmed());
             } else {
-                let mut table = create_table();
+                let mut table = create_styled_table();
 
                 table.set_header(vec![
                     Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),

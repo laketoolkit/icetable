@@ -5,10 +5,12 @@
 
 use colored::Colorize;
 
-use super::common::{extract_filename, format_timestamp, print_json};
+use super::common::{print_json, resolve_table_path};
+use crate::core::extract_filename;
+use crate::cli::output::format_timestamp_ms;
 use crate::cli::parser::DiffArgs;
 use crate::core::operations::{DiffConfig, DiffService, SnapshotDiffResult};
-use crate::core::TableContext;
+use crate::core::{CatalogConfig, TableContext};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -17,14 +19,15 @@ pub struct DiffCommand;
 
 impl DiffCommand {
     /// Execute diff command
-    pub async fn execute(args: DiffArgs) -> Result<()> {
+    pub async fn execute(args: DiffArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for diff operations
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
     }
 
-    async fn execute_inner(args: DiffArgs) -> Result<()> {
-        // 1. Load table context
-        let ctx = TableContext::from_path(args.path.clone()).await?;
+    async fn execute_inner(args: DiffArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // 1. Resolve path (supports catalog resolution) and load table context
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        let ctx = TableContext::from_path(Some(table_path)).await?;
         ctx.require_iceberg()?;
 
         let service = ctx.iceberg_service().await?;
@@ -79,14 +82,14 @@ impl DiffCommand {
             "{:<20} {:<20} {:<20} {}",
             base_label,
             result.base.snapshot_id,
-            format_timestamp(result.base.timestamp_ms),
+            format_timestamp_ms(result.base.timestamp_ms),
             result.base.manifest_count
         );
         println!(
             "{:<20} {:<20} {:<20} {}",
             ref_label,
             result.reference.snapshot_id,
-            format_timestamp(result.reference.timestamp_ms),
+            format_timestamp_ms(result.reference.timestamp_ms),
             result.reference.manifest_count
         );
         println!();
@@ -130,13 +133,13 @@ impl DiffCommand {
             "base": {
                 "ref": result.base.label,
                 "snapshot_id": result.base.snapshot_id,
-                "timestamp": format_timestamp(result.base.timestamp_ms),
+                "timestamp": format_timestamp_ms(result.base.timestamp_ms),
                 "manifest_count": result.base.manifest_count,
             },
             "reference": {
                 "ref": result.reference.label,
                 "snapshot_id": result.reference.snapshot_id,
-                "timestamp": format_timestamp(result.reference.timestamp_ms),
+                "timestamp": format_timestamp_ms(result.reference.timestamp_ms),
                 "manifest_count": result.reference.manifest_count,
             },
             "diff": {

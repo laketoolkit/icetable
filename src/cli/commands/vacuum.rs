@@ -5,7 +5,8 @@
 use colored::Colorize;
 use std::io;
 
-use super::common::{create_spinner, extract_filename, print_json, resolve_table_path};
+use super::common::{create_spinner, print_json, resolve_table_path};
+use crate::core::extract_filename;
 use crate::cli::parser::VacuumArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;

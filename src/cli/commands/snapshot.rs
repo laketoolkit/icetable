@@ -5,7 +5,8 @@
 
 use colored::Colorize;
 
-use super::common::{TableResolution, create_committer, create_table, format_timestamp, print_dry_run_header, print_json, resolve_table};
+use super::common::{TableResolution, create_committer, print_dry_run_header, print_json, resolve_table};
+use crate::cli::output::{create_header_cells, create_styled_table, format_timestamp_ms};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
@@ -207,21 +208,14 @@ impl SnapshotCommand {
                 b.cyan()
             );
         }
-        let config = SnapshotConfig {
-            dry_run: cfg.dry_run,
-        };
-        let snapshot_service = if let Some(c) = cfg.committer {
-            SnapshotService::with_committer(config, c)
-        } else {
-            SnapshotService::with_config(config)
-        };
+
+        // Load metadata ONCE for validation and display
+        let (metadata, _) = metadata_service.load_metadata().await?;
+        let snapshots: Vec<_> = metadata.snapshots().collect();
+        let current_id = metadata.current_snapshot_id();
 
         // Validate explicit IDs and show warnings
         if let Some(ref explicit_ids) = cfg.ids {
-            let (metadata, _) = metadata_service.load_metadata().await?;
-            let snapshots: Vec<_> = metadata.snapshots().collect();
-            let current_id = metadata.current_snapshot_id();
-
             for id in explicit_ids {
                 if Some(*id) == current_id {
                     eprintln!("{}", format!("Cannot expire current snapshot {}", id).red());
@@ -230,6 +224,15 @@ impl SnapshotCommand {
                 }
             }
         }
+
+        let config = SnapshotConfig {
+            dry_run: cfg.dry_run,
+        };
+        let snapshot_service = if let Some(c) = cfg.committer {
+            SnapshotService::with_committer(config, c)
+        } else {
+            SnapshotService::with_config(config)
+        };
 
         let result = snapshot_service
             .expire_snapshots(
@@ -258,10 +261,8 @@ impl SnapshotCommand {
             return Ok(());
         }
 
-        // Show snapshots to expire (for non-JSON output)
+        // Show snapshots to expire (for non-JSON output) - reuse loaded snapshots
         if cfg.output != "json" {
-            let (metadata, _) = metadata_service.load_metadata().await?;
-            let snapshots: Vec<_> = metadata.snapshots().collect();
             let expire_set: HashSet<i64> = result.expired_ids.iter().cloned().collect();
 
             println!();
@@ -270,7 +271,7 @@ impl SnapshotCommand {
                 .iter()
                 .filter(|s| expire_set.contains(&s.snapshot_id()))
             {
-                let ts = format_timestamp(snap.timestamp_ms());
+                let ts = format_timestamp_ms(snap.timestamp_ms());
                 println!("  - {} ({})", snap.snapshot_id(), ts);
             }
         }
@@ -399,14 +400,8 @@ impl SnapshotCommand {
             println!("{} snapshot lineage at {}", "Showing".green(), path);
             println!();
 
-            let mut table = create_table();
-
-            table.set_header(vec![
-                Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
-                Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
-                Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
-                Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
-            ]);
+            let mut table = create_styled_table();
+            table.set_header(create_header_cells(&["Snapshot", "Operation", "Timestamp", "Status"]));
 
             // Show items up to limit
             let display_count = if is_truncated {
@@ -416,7 +411,7 @@ impl SnapshotCommand {
             };
 
             for entry in result.entries.iter().take(display_count) {
-                let ts_str = format_timestamp(entry.timestamp_ms);
+                let ts_str = format_timestamp_ms(entry.timestamp_ms);
 
                 let status = if entry.is_current {
                     "● current".green().to_string()
@@ -447,18 +442,10 @@ impl SnapshotCommand {
 
                 // Show root in a separate mini-table
                 if let Some(root) = result.entries.last() {
-                    let ts_str = format_timestamp(root.timestamp_ms);
+                    let ts_str = format_timestamp_ms(root.timestamp_ms);
 
-                    let mut root_table = create_table();
-                    root_table.set_header(vec![
-                        Cell::new("Snapshot".cyan().to_string())
-                            .set_alignment(CellAlignment::Center),
-                        Cell::new("Operation".cyan().to_string())
-                            .set_alignment(CellAlignment::Center),
-                        Cell::new("Timestamp".cyan().to_string())
-                            .set_alignment(CellAlignment::Center),
-                        Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
-                    ]);
+                    let mut root_table = create_styled_table();
+                    root_table.set_header(create_header_cells(&["Snapshot", "Operation", "Timestamp", "Status"]));
                     root_table.add_row(vec![
                         Cell::new(root.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
                         Cell::new(&root.operation),

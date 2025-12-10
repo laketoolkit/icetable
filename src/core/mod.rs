@@ -31,6 +31,11 @@ pub use crate::utils::core::{
 };
 pub use commit::{CommitResult, SnapshotCommitter, DirectCommitter};
 
+// Re-export formatting utilities for consistent access across CLI
+pub use inspection::formatters::{
+    extract_filename, format_count, format_number, format_percentage, format_size,
+};
+
 // Re-export iceberg types used by CLI to avoid direct iceberg:: dependency
 // This provides a stable interface if iceberg crate changes
 pub use iceberg::table::Table as IcebergTable;

@@ -4,7 +4,8 @@
 
 use colored::Colorize;
 
-use super::common::{extract_filename, print_dry_run_header, resolve_table_path};
+use super::common::{print_dry_run_header, resolve_table_path};
+use crate::core::extract_filename;
 use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;

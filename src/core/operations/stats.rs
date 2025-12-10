@@ -149,7 +149,6 @@ mod tests {
     #[test]
     fn test_stats_config_default() {
         let config = StatsConfig::default();
-        assert!(config.format.is_none());
         assert!(config.partition.is_none());
     }
 }

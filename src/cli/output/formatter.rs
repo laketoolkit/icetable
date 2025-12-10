@@ -1,9 +1,7 @@
 //! Output formatting utilities
 
-use comfy_table::{ContentArrangement, Table, presets};
-use unicode_width::UnicodeWidthStr;
-
-use crate::utils::{visual_width, wrap_line};
+use colored::Colorize;
+use comfy_table::{Cell, CellAlignment, ContentArrangement, Table, presets};
 
 use super::icons::{SeverityIcon, StatusIcon};
 
@@ -15,6 +13,20 @@ pub fn create_styled_table() -> Table {
     table.load_preset(presets::UTF8_FULL);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table
+}
+
+/// Create a styled header cell with cyan color and center alignment
+///
+/// This provides consistent header styling across all CLI tables
+pub fn create_header_cell(text: &str) -> Cell {
+    Cell::new(text.cyan().to_string()).set_alignment(CellAlignment::Center)
+}
+
+/// Create header cells from a slice of strings
+///
+/// Convenience function for creating multiple header cells at once
+pub fn create_header_cells(headers: &[&str]) -> Vec<Cell> {
+    headers.iter().map(|h| create_header_cell(h)).collect()
 }
 
 /// Format a timestamp from milliseconds to human-readable string with UTC suffix
@@ -74,72 +86,5 @@ impl OutputFormatter {
     /// Format an info message
     pub fn info(message: &str) -> String {
         format!("{}  {}", SeverityIcon::Info, message)
-    }
-
-    /// Create a framed box with title and content lines
-    ///
-    /// # Arguments
-    /// * `title` - Optional title to display centered in the top border
-    /// * `lines` - Vector of content lines to display in the box
-    /// * `width` - Fixed width of the box (default 100)
-    ///
-    /// # Returns
-    /// A formatted string with the framed content
-    pub fn framed_box(title: Option<&str>, lines: Vec<String>, width: Option<usize>) -> String {
-        let box_width = width.unwrap_or(100);
-        let content_width = box_width - 2; // -2 for left and right borders
-
-        let mut output = Vec::new();
-
-        // Top border with optional centered title
-        if let Some(t) = title {
-            let title_width = UnicodeWidthStr::width(t);
-            let padding_total = content_width.saturating_sub(title_width);
-            let padding_left = padding_total / 2;
-            let padding_right = padding_total - padding_left;
-            output.push(format!(
-                "┌{}{}{}┐",
-                "─".repeat(padding_left),
-                t,
-                "─".repeat(padding_right)
-            ));
-        } else {
-            output.push(format!("┌{}┐", "─".repeat(content_width)));
-        }
-
-        // Empty line after title
-        output.push(format!("│{:width$}│", "", width = content_width));
-
-        // Content lines
-        for line in lines {
-            if line.is_empty() {
-                // Empty line
-                output.push(format!("│{:width$}│", "", width = content_width));
-            } else {
-                let line_width = visual_width(&line);
-
-                if line_width <= content_width {
-                    // Line fits, pad it
-                    let padding = content_width - line_width;
-                    output.push(format!("│{}{:width$}│", line, "", width = padding));
-                } else {
-                    // Line too long, wrap it
-                    let wrapped = wrap_line(&line, content_width);
-                    for wrapped_line in wrapped {
-                        let wrapped_width = visual_width(&wrapped_line);
-                        let padding = content_width.saturating_sub(wrapped_width);
-                        output.push(format!("│{}{:width$}│", wrapped_line, "", width = padding));
-                    }
-                }
-            }
-        }
-
-        // Empty line before bottom
-        output.push(format!("│{:width$}│", "", width = content_width));
-
-        // Bottom border
-        output.push(format!("└{}┘", "─".repeat(content_width)));
-
-        output.join("\n")
     }
 }

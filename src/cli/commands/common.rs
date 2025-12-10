@@ -131,16 +131,6 @@ pub fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     Ok(())
 }
 
-/// Create a styled comfy_table::Table with standard icetable appearance
-///
-/// Uses UTF8_FULL preset and Dynamic content arrangement
-pub fn create_table() -> comfy_table::Table {
-    use comfy_table::{ContentArrangement, presets::UTF8_FULL};
-    let mut table = comfy_table::Table::new();
-    table.load_preset(UTF8_FULL);
-    table.set_content_arrangement(ContentArrangement::Dynamic);
-    table
-}
 
 /// Create a TableCommitter if the table was resolved from a catalog
 ///
@@ -216,21 +206,6 @@ pub fn print_ref_delete_dry_run(ref_type: &str, name: &str, snapshot_id: i64) {
     println!("{}", "Run without --dry-run to apply this change.".dimmed());
 }
 
-/// Format timestamp in milliseconds to human-readable string
-///
-/// Returns "unknown" if the timestamp is invalid
-pub fn format_timestamp(timestamp_ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(timestamp_ms)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Format a DateTime<Utc> to human-readable string
-///
-/// Consistent format with format_timestamp for DateTime objects
-pub fn format_datetime(dt: &chrono::DateTime<chrono::Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-}
 
 /// Extract table name from a path
 ///
@@ -271,12 +246,6 @@ pub async fn resolve_iceberg_context(
     Ok(IcebergContext { resolution, ctx })
 }
 
-/// Extract filename from a path string
-///
-/// Returns the last component after the final '/', or the whole string if no '/' present
-pub fn extract_filename(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
 
 /// Create a RefService with an optional committer
 ///

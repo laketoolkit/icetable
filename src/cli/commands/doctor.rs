@@ -9,7 +9,8 @@
 use colored::Colorize;
 use comfy_table::{Cell, Color};
 
-use super::common::{create_table, print_json};
+use super::common::print_json;
+use crate::cli::output::create_styled_table;
 use crate::cli::parser::DoctorArgs;
 use crate::core::maintenance::{
     CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
@@ -263,7 +264,7 @@ impl DoctorCommand {
 
     /// Display results as a table
     fn display_table(checks: &[CheckResult]) {
-        let mut table = create_table();
+        let mut table = create_styled_table();
 
         table.set_header(vec![
             Cell::new("Status")

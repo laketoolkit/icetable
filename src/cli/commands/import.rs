@@ -12,7 +12,8 @@ use crate::core::operations::{ImportConfig, ImportService};
 use crate::core::storage::{create_object_store, ObjectStoreExt};
 use crate::core::format_bytes;
 use crate::error::{Error, Result};
-use super::common::{extract_filename, print_dry_run_header};
+use super::common::print_dry_run_header;
+use crate::core::extract_filename;
 use crate::utils::with_resource_limits;
 
 /// Handler for import commands

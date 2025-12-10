@@ -5,15 +5,14 @@
 
 use colored::Colorize;
 
-use super::common::format_timestamp;
+use super::common::resolve_table_path;
+use crate::cli::output::format_timestamp_ms;
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use crate::cli::parser::InspectArgs;
-use crate::config::ResolvePath;
 use crate::core::operations::inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
 };
-use crate::core::inspection::format_number;
-use crate::core::{format_bytes, CatalogConfig, TableLoader};
+use crate::core::{format_bytes, format_number, CatalogConfig, TableLoader};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -29,8 +28,8 @@ impl InspectCommand {
     }
 
     async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // Resolve table path from args or config
-        let table_path = args.path.resolve()?;
+        // Resolve table path (supports catalog resolution)
+        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // Load table using unified TableLoader
         let table = TableLoader::load_table(&table_path, catalog_config.as_ref()).await?;
@@ -71,7 +70,7 @@ impl InspectCommand {
                 key_width,
             ),
             BoxItem::kv_aligned("Snapshot Count", result.snapshot_count.to_string(), key_width),
-            BoxItem::kv_aligned("Last Updated", format_timestamp(result.last_updated_ms), key_width),
+            BoxItem::kv_aligned("Last Updated", format_timestamp_ms(result.last_updated_ms), key_width),
         ];
 
         // Add sequence number in verbose mode
