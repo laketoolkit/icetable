@@ -1,22 +1,17 @@
 //! Stats command implementation
 //!
 //! Shows table statistics from snapshot summary metadata.
-//! Uses only pre-computed values - instantaneous, no manifest scanning.
-
-use std::path::Path;
+//! Thin wrapper that delegates to StatsService in core.
 
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_table, extract_table_name, print_json, resolve_table_path};
+use super::common::{create_table, print_json, resolve_table_path};
 use crate::cli::parser::StatsArgs;
-use crate::core::analysis::get_partition_stats;
-use crate::core::CatalogConfig;
 use crate::core::format_bytes;
-use crate::core::formats::FormatHandlerFactory;
 use crate::core::inspection::formatters::format_number;
-use crate::core::maintenance::PartitionFilter;
-use crate::core::storage::create_object_store;
+use crate::core::operations::{PartitionStats, StatsConfig, StatsResult, StatsService, TableStats};
+use crate::core::CatalogConfig;
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -31,114 +26,81 @@ impl StatsCommand {
     }
 
     async fn execute_inner(args: StatsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        // 1. Resolve table path
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
-        let path = Path::new(&table_path);
 
-        // Create storage backend
-        let storage = create_object_store(&table_path).await?;
-
-        // Get format handler
-        let handler = if let Some(format) = &args.format {
-            FormatHandlerFactory::create_handler_for_format(format, path, storage).await?
-        } else {
-            FormatHandlerFactory::create_handler(path, storage).await?
+        // 2. Build config and delegate to service
+        let config = StatsConfig {
+            format: args.format.clone(),
+            partition: args.partition.clone(),
         };
 
-        // Read metadata (contains snapshot summary - instant)
-        let metadata = handler.read_metadata().await?;
+        let result = StatsService::get_stats(&table_path, &config).await?;
 
-        // Extract table name from path
-        let table_name = extract_table_name(&table_path);
-
-        // If partition filter is specified, get detailed partition stats
-        if let Some(partition_filter_str) = &args.partition {
-            let partition_filter = PartitionFilter::parse(partition_filter_str).map_err(|e| {
-                crate::error::Error::General(format!("Invalid partition filter: {}", e))
-            })?;
-
-            let partition_stats = get_partition_stats(&table_path, &partition_filter).await?;
-
-            // Format output
-            if args.output == "json" {
-                let json = serde_json::json!({
-                    "table": table_name,
-                    "format": handler.format_name(),
-                    "partition_filter": partition_filter_str,
-                    "stats": partition_stats,
-                });
-                print_json(&json)?;
-            } else {
-                // Print simple partition stats
-                println!();
-                println!("Partition: {}", partition_filter_str);
-                println!("  Files: {}", partition_stats.file_count);
-                println!("  Total Size: {}", format_bytes(partition_stats.total_size));
-                println!(
-                    "  Avg File Size: {}",
-                    format_bytes(partition_stats.avg_file_size)
-                );
-                println!(
-                    "  Small Files (<128MB): {} ({:.1}%)",
-                    partition_stats.small_files, partition_stats.small_files_percent
-                );
-
-                if partition_stats.small_files > 0 && partition_stats.small_files_percent > 50.0 {
-                    println!(
-                        "  ⚠  Recommend: optimize --target-size {}",
-                        format_bytes(partition_stats.recommended_target_size)
-                    );
-                }
-            }
-        } else {
-            // Original behavior: general table stats
-            // Format output
-            if args.output == "json" {
-                let json = serde_json::json!({
-                    "table": table_name,
-                    "format": handler.format_name(),
-                    "total_records": metadata.num_rows,
-                    "compressed_size_bytes": metadata.compressed_size,
-                    "format_version": metadata.format_version,
-                    "created_at": metadata.created_at.map(|dt| dt.to_rfc3339()),
-                    "properties": metadata.metadata,
-                });
-                print_json(&json)?;
-            } else {
-                Self::print_text_output(&metadata, table_name);
-            }
-        }
-
-        Ok(())
+        // 3. Output
+        Self::output(&result, &args)
     }
 
-    fn print_text_output(metadata: &crate::core::formats::FileMetadata, table_name: &str) {
-        // Print table title
-        println!("{}", table_name.cyan().bold());
+    /// Output stats in the requested format
+    fn output(result: &StatsResult, args: &StatsArgs) -> Result<()> {
+        match result {
+            StatsResult::Table(stats) => {
+                if args.output == "json" {
+                    Self::output_table_json(stats)
+                } else {
+                    Self::output_table_text(stats)
+                }
+            }
+            StatsResult::Partition(stats) => {
+                if args.output == "json" {
+                    Self::output_partition_json(stats)
+                } else {
+                    Self::output_partition_text(stats)
+                }
+            }
+        }
+    }
+
+    /// Output table stats as JSON
+    fn output_table_json(stats: &TableStats) -> Result<()> {
+        let json = serde_json::json!({
+            "table": stats.table_name,
+            "format": stats.format,
+            "total_records": stats.total_records,
+            "compressed_size_bytes": stats.compressed_size,
+            "format_version": stats.format_version,
+            "created_at": stats.last_modified.map(|dt| dt.to_rfc3339()),
+            "properties": stats.properties,
+        });
+        print_json(&json)
+    }
+
+    /// Output table stats as text
+    fn output_table_text(stats: &TableStats) -> Result<()> {
+        println!("{}", stats.table_name.cyan().bold());
         println!();
 
-        // Build table with stats
         let mut table = create_table();
-
         table.set_header(vec![
             Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Left),
             Cell::new("Value".cyan().to_string()).set_alignment(CellAlignment::Right),
         ]);
 
-        if let Some(rows) = metadata.num_rows {
+        if let Some(rows) = stats.total_records {
             table.add_row(vec![
                 Cell::new("Total Records").set_alignment(CellAlignment::Left),
                 Cell::new(format_number(rows)).set_alignment(CellAlignment::Right),
             ]);
         }
 
-        if let Some(size) = metadata.compressed_size {
+        if let Some(size) = stats.compressed_size {
             table.add_row(vec![
                 Cell::new("Total Size").set_alignment(CellAlignment::Left),
                 Cell::new(format_bytes(size)).set_alignment(CellAlignment::Right),
             ]);
         }
 
-        if let Some(files) = metadata.metadata.get("total-data-files")
+        if let Some(files) = stats.properties.get("total-data-files")
             && let Ok(n) = files.parse::<i64>()
         {
             table.add_row(vec![
@@ -147,20 +109,63 @@ impl StatsCommand {
             ]);
         }
 
-        if let Some(ref version) = metadata.format_version {
+        if let Some(ref version) = stats.format_version {
             table.add_row(vec![
                 Cell::new("Format Version").set_alignment(CellAlignment::Left),
                 Cell::new(version).set_alignment(CellAlignment::Right),
             ]);
         }
 
-        if let Some(dt) = metadata.created_at {
+        if let Some(dt) = stats.last_modified {
             table.add_row(vec![
                 Cell::new("Last Modified").set_alignment(CellAlignment::Left),
-                Cell::new(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()).set_alignment(CellAlignment::Right),
+                Cell::new(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .set_alignment(CellAlignment::Right),
             ]);
         }
 
         println!("{}", table);
+        Ok(())
+    }
+
+    /// Output partition stats as JSON
+    fn output_partition_json(stats: &PartitionStats) -> Result<()> {
+        let json = serde_json::json!({
+            "table": stats.table_name,
+            "format": stats.format,
+            "partition_filter": stats.partition_filter,
+            "stats": {
+                "file_count": stats.file_count,
+                "total_size": stats.total_size,
+                "avg_file_size": stats.avg_file_size,
+                "small_files": stats.small_files,
+                "small_files_percent": stats.small_files_percent,
+                "recommended_target_size": stats.recommended_target_size,
+            }
+        });
+        print_json(&json)
+    }
+
+    /// Output partition stats as text
+    fn output_partition_text(stats: &PartitionStats) -> Result<()> {
+        println!();
+        println!("Partition: {}", stats.partition_filter);
+        println!("  Files: {}", stats.file_count);
+        println!("  Total Size: {}", format_bytes(stats.total_size));
+        println!("  Avg File Size: {}", format_bytes(stats.avg_file_size));
+        println!(
+            "  Small Files (<128MB): {} ({:.1}%)",
+            stats.small_files, stats.small_files_percent
+        );
+
+        if stats.small_files > 0 && stats.small_files_percent > 50.0 {
+            println!(
+                "  {}  Recommend: optimize --target-size {}",
+                "⚠".yellow(),
+                format_bytes(stats.recommended_target_size)
+            );
+        }
+
+        Ok(())
     }
 }

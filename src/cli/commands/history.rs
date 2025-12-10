@@ -1,33 +1,17 @@
 //! History command implementation
 //!
 //! Shows version history for Iceberg tables.
-//! This is a thin wrapper that delegates to core services.
+//! Thin wrapper that delegates to HistoryService in core.
 
-use chrono::{DateTime, TimeZone, Utc};
 use colored::Colorize;
-use std::sync::Arc;
 
 use super::common::print_json;
 use crate::cli::parser::HistoryArgs;
 use crate::config::ResolvePath;
-use crate::core::{IcebergTable, TableExt, TableLoader};
+use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
+use crate::core::TableLoader;
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
-
-/// A single version/snapshot entry in history
-#[derive(Debug, Clone)]
-pub struct HistoryEntry {
-    /// Snapshot ID
-    pub version: i64,
-    /// Timestamp of the version
-    pub timestamp: DateTime<Utc>,
-    /// Operation type (e.g., "APPEND", "OVERWRITE")
-    pub operation: String,
-    /// Additional details about the operation
-    pub details: std::collections::HashMap<String, String>,
-    /// Whether this is the current snapshot
-    pub is_current: bool,
-}
 
 /// Handler for history command
 pub struct HistoryCommand;
@@ -35,7 +19,6 @@ pub struct HistoryCommand;
 impl HistoryCommand {
     /// Execute history command
     pub async fn execute(args: HistoryArgs) -> Result<()> {
-        // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for history
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
     }
@@ -47,62 +30,25 @@ impl HistoryCommand {
         // 2. Load table using unified TableLoader
         let table = TableLoader::load_table(&table_path, None).await?;
 
-        // 3. Verify format (implicitly verified by TableLoader)
+        // 3. Verify format
         if let Some(ref fmt) = args.format
             && fmt.to_lowercase() != "iceberg"
         {
             return Err(Error::UnsupportedFeature {
-                    feature: "Only Iceberg tables are supported. Use 'icetable import delta' to convert Delta tables.".to_string(),
-                });
-        }
-
-        // 4. Get history from table
-        let entries = Self::history(&table, &args).await?;
-
-        // 5. Output
-        Self::output(&entries, &args.output)
-    }
-
-    /// Get history entries from Iceberg table
-    async fn history(table: &Arc<IcebergTable>, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
-        let (metadata, _) = table.metadata_with_version();
-
-        let current_snapshot_id = metadata.current_snapshot_id();
-        let mut entries = Vec::new();
-
-        // Collect ALL snapshots first, then sort, then apply limit
-        for snapshot in table.snapshots() {
-            let summary = snapshot.summary();
-            let mut details = std::collections::HashMap::new();
-
-            details.insert("operation".to_string(), format!("{:?}", summary.operation));
-            for (k, v) in &summary.additional_properties {
-                details.insert(k.clone(), v.clone());
-            }
-
-            let timestamp = Utc
-                .timestamp_millis_opt(snapshot.timestamp_ms())
-                .single()
-                .unwrap_or_else(Utc::now);
-
-            entries.push(HistoryEntry {
-                version: snapshot.snapshot_id(),
-                timestamp,
-                operation: format!("{:?}", summary.operation),
-                details,
-                is_current: Some(snapshot.snapshot_id()) == current_snapshot_id,
+                feature: "Only Iceberg tables are supported. Use 'icetable import delta' to convert Delta tables.".to_string(),
             });
         }
 
-        // Sort by timestamp descending (newest first)
-        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        // 4. Build config and delegate to service
+        let config = HistoryConfig {
+            limit: Some(args.limit),
+            all: args.all,
+        };
 
-        // Apply limit AFTER sorting
-        if !args.all {
-            entries.truncate(args.limit);
-        }
+        let entries = HistoryService::get_history(&table, &config)?;
 
-        Ok(entries)
+        // 5. Output
+        Self::output(&entries, &args.output)
     }
 
     /// Output history in the requested format
@@ -146,23 +92,7 @@ impl HistoryCommand {
             );
 
             // Details line
-            let mut details = Vec::new();
-            if let Some(added) = entry.details.get("added-records") {
-                details.push(format!("+{} records", added));
-            }
-            if let Some(deleted) = entry.details.get("deleted-records") {
-                details.push(format!("-{} records", deleted));
-            }
-            if let Some(files) = entry.details.get("added-data-files") {
-                details.push(format!("+{} files", files));
-            }
-            if let Some(files) = entry.details.get("deleted-data-files") {
-                details.push(format!("-{} files", files));
-            }
-            if let Some(total) = entry.details.get("total-records") {
-                details.push(format!("total: {} records", total));
-            }
-
+            let details = HistoryService::format_details(entry);
             if !details.is_empty() {
                 println!("  {}", details.join(", ").dimmed());
             }

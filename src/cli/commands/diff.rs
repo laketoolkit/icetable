@@ -1,14 +1,15 @@
 //! Diff command implementation
 //!
 //! Compares snapshots, branches, or tags within a table.
+//! Thin wrapper that delegates to DiffService in core.
 
 use colored::Colorize;
 
 use super::common::{extract_filename, format_timestamp, print_json};
 use crate::cli::parser::DiffArgs;
-use crate::core::metadata::IcebergMetadataService;
-use crate::core::{Snapshot, TableContext, TableMetadata};
-use crate::error::{Error, Result};
+use crate::core::operations::{DiffConfig, DiffService, SnapshotDiffResult};
+use crate::core::TableContext;
+use crate::error::Result;
 use crate::utils::with_resource_limits;
 
 /// Handler for diff command
@@ -17,205 +18,136 @@ pub struct DiffCommand;
 impl DiffCommand {
     /// Execute diff command
     pub async fn execute(args: DiffArgs) -> Result<()> {
-        // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for diff operations
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
     }
 
     async fn execute_inner(args: DiffArgs) -> Result<()> {
-        let ctx = TableContext::from_path(args.path).await?;
+        // 1. Load table context
+        let ctx = TableContext::from_path(args.path.clone()).await?;
         ctx.require_iceberg()?;
 
         let service = ctx.iceberg_service().await?;
-        let (metadata, _) = service.load_metadata().await?;
 
-        let current_id = metadata
-            .current_snapshot_id()
-            .ok_or_else(|| Error::General("Table has no current snapshot".to_string()))?;
-
-        // Resolve reference (default to current)
-        let ref_id = if let Some(ref reference) = args.reference {
-            Self::resolve_ref(&metadata, reference)?
-        } else {
-            current_id
+        // 2. Build config and delegate to service
+        let config = DiffConfig {
+            reference: args.reference.clone(),
+            base: args.base.clone(),
         };
 
-        // Resolve base (default to parent of reference, or error if no base specified and no parent)
-        let base_id = if let Some(ref base_ref) = args.base {
-            Self::resolve_ref(&metadata, base_ref)?
-        } else {
-            // Try to get parent snapshot
-            let ref_snapshot = metadata
-                .snapshot_by_id(ref_id)
-                .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
-            ref_snapshot.parent_snapshot_id().ok_or_else(|| {
-                Error::General(
-                    "No parent snapshot. Use --base to specify a base reference.".to_string(),
-                )
-            })?
-        };
+        let result = DiffService::compare_snapshots(&service, &config).await?;
 
-        if ref_id == base_id {
-            if args.output == "json" {
-                let json = serde_json::json!({
-                    "reference": ref_id,
-                    "base": base_id,
-                    "identical": true,
-                });
-                print_json(&json)?;
-            } else {
-                println!("{}", "References point to the same snapshot".yellow());
-            }
+        // 3. Output
+        Self::output(&result, &args)
+    }
+
+    /// Output diff result in the requested format
+    fn output(result: &SnapshotDiffResult, args: &DiffArgs) -> Result<()> {
+        if args.output == "json" {
+            Self::output_json(result)
+        } else {
+            Self::output_table(result, args)
+        }
+    }
+
+    /// Output diff as formatted table
+    fn output_table(result: &SnapshotDiffResult, args: &DiffArgs) -> Result<()> {
+        if result.is_identical {
+            println!("{}", "References point to the same snapshot".yellow());
             return Ok(());
         }
 
-        // Get snapshots
-        let base_snapshot = metadata
-            .snapshot_by_id(base_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", base_id)))?;
-        let ref_snapshot = metadata
-            .snapshot_by_id(ref_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
-
-        // Get manifest files for both
-        let base_manifests = Self::get_manifest_files(&service, base_snapshot).await?;
-        let ref_manifests = Self::get_manifest_files(&service, ref_snapshot).await?;
-
-        // Calculate diff (what changed from base to ref)
-        let added: Vec<_> = ref_manifests
-            .iter()
-            .filter(|m| !base_manifests.contains(m))
-            .collect();
-        let removed: Vec<_> = base_manifests
-            .iter()
-            .filter(|m| !ref_manifests.contains(m))
-            .collect();
-
-        // Format timestamps
-        let base_ts = format_timestamp(base_snapshot.timestamp_ms());
-        let ref_ts = format_timestamp(ref_snapshot.timestamp_ms());
-
-        // Labels for display
         let ref_label = args.reference.as_deref().unwrap_or("current");
         let base_label = args.base.as_deref().unwrap_or("parent");
 
-        if args.output == "json" {
-            let json = serde_json::json!({
-                "base": {
-                    "ref": base_label,
-                    "snapshot_id": base_id,
-                    "timestamp": base_ts,
-                    "manifest_count": base_manifests.len(),
-                },
-                "reference": {
-                    "ref": ref_label,
-                    "snapshot_id": ref_id,
-                    "timestamp": ref_ts,
-                    "manifest_count": ref_manifests.len(),
-                },
-                "diff": {
-                    "manifests_added": added.len(),
-                    "manifests_removed": removed.len(),
-                    "added_paths": added,
-                    "removed_paths": removed,
-                }
-            });
-            print_json(&json)?;
-        } else {
-            println!(
-                "{} {} (base: {})",
-                "Comparing".green(),
-                ref_label,
-                base_label
-            );
-            println!();
-            println!(
-                "{:<20} {:<20} {:<20} {}",
-                "REF".cyan(),
-                "SNAPSHOT".cyan(),
-                "TIMESTAMP".cyan(),
-                "MANIFESTS".cyan()
-            );
-            println!("{}", "-".repeat(75));
-            println!(
-                "{:<20} {:<20} {:<20} {}",
-                base_label,
-                base_id,
-                base_ts,
-                base_manifests.len()
-            );
-            println!(
-                "{:<20} {:<20} {:<20} {}",
-                ref_label,
-                ref_id,
-                ref_ts,
-                ref_manifests.len()
-            );
-            println!();
+        println!(
+            "{} {} (base: {})",
+            "Comparing".green(),
+            ref_label,
+            base_label
+        );
+        println!();
+        println!(
+            "{:<20} {:<20} {:<20} {}",
+            "REF".cyan(),
+            "SNAPSHOT".cyan(),
+            "TIMESTAMP".cyan(),
+            "MANIFESTS".cyan()
+        );
+        println!("{}", "-".repeat(75));
+        println!(
+            "{:<20} {:<20} {:<20} {}",
+            base_label,
+            result.base.snapshot_id,
+            format_timestamp(result.base.timestamp_ms),
+            result.base.manifest_count
+        );
+        println!(
+            "{:<20} {:<20} {:<20} {}",
+            ref_label,
+            result.reference.snapshot_id,
+            format_timestamp(result.reference.timestamp_ms),
+            result.reference.manifest_count
+        );
+        println!();
 
-            if added.is_empty() && removed.is_empty() {
-                println!("{}", "No manifest changes".yellow());
-            } else {
-                println!("Changes:");
-                for path in &added {
-                    let filename = extract_filename(path);
-                    println!("  {} {}", "+".green(), filename);
-                }
-                for path in &removed {
-                    let filename = extract_filename(path);
-                    println!("  {} {}", "-".red(), filename);
-                }
-                println!();
-                println!(
-                    "Summary: {} added, {} removed",
-                    added.len().to_string().green(),
-                    removed.len().to_string().red()
-                );
+        if result.manifests_added.is_empty() && result.manifests_removed.is_empty() {
+            println!("{}", "No manifest changes".yellow());
+        } else {
+            println!("Changes:");
+            for path in &result.manifests_added {
+                let filename = extract_filename(path);
+                println!("  {} {}", "+".green(), filename);
             }
+            for path in &result.manifests_removed {
+                let filename = extract_filename(path);
+                println!("  {} {}", "-".red(), filename);
+            }
+            println!();
+            println!(
+                "Summary: {} added, {} removed",
+                result.manifests_added.len().to_string().green(),
+                result.manifests_removed.len().to_string().red()
+            );
         }
 
         Ok(())
     }
 
-    /// Resolve a reference (snapshot ID, branch name, or tag name) to a snapshot ID
-    fn resolve_ref(metadata: &std::sync::Arc<TableMetadata>, reference: &str) -> Result<i64> {
-        // Try parsing as snapshot ID first
-        if let Ok(id) = reference.parse::<i64>() {
-            if metadata.snapshot_by_id(id).is_some() {
-                return Ok(id);
+    /// Output diff as JSON
+    fn output_json(result: &SnapshotDiffResult) -> Result<()> {
+        if result.is_identical {
+            let json = serde_json::json!({
+                "reference": result.reference.snapshot_id,
+                "base": result.base.snapshot_id,
+                "identical": true,
+            });
+            print_json(&json)?;
+            return Ok(());
+        }
+
+        let json = serde_json::json!({
+            "base": {
+                "ref": result.base.label,
+                "snapshot_id": result.base.snapshot_id,
+                "timestamp": format_timestamp(result.base.timestamp_ms),
+                "manifest_count": result.base.manifest_count,
+            },
+            "reference": {
+                "ref": result.reference.label,
+                "snapshot_id": result.reference.snapshot_id,
+                "timestamp": format_timestamp(result.reference.timestamp_ms),
+                "manifest_count": result.reference.manifest_count,
+            },
+            "diff": {
+                "manifests_added": result.manifests_added.len(),
+                "manifests_removed": result.manifests_removed.len(),
+                "added_paths": result.manifests_added,
+                "removed_paths": result.manifests_removed,
             }
-            // ID format but doesn't exist - still report as snapshot not found
-            return Err(Error::General(format!("Snapshot {} not found", id)));
-        }
+        });
+        print_json(&json)?;
 
-        // Try as branch/tag name
-        if let Some(snapshot) = metadata.snapshot_for_ref(reference) {
-            return Ok(snapshot.snapshot_id());
-        }
-
-        Err(Error::General(format!(
-            "Reference '{}' not found (not a valid snapshot ID, branch, or tag)",
-            reference
-        )))
-    }
-
-    /// Get manifest file paths from a snapshot using native API
-    async fn get_manifest_files(
-        service: &IcebergMetadataService,
-        snapshot: &Snapshot,
-    ) -> Result<Vec<String>> {
-        let file_io = service.file_io();
-        let metadata = service.table().metadata();
-
-        let manifest_list = snapshot
-            .load_manifest_list(file_io, &metadata)
-            .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
-
-        Ok(manifest_list
-            .entries()
-            .iter()
-            .map(|e| e.manifest_path.clone())
-            .collect())
+        Ok(())
     }
 }
