@@ -29,7 +29,7 @@ pub use logging::{LogLevel, init_logger};
 pub use progress::ProgressTracker;
 pub use resources::{
     ResourceLimits, current_memory_usage, get_resource_limits, init_resource_limits,
-    release_memory, track_memory_usage, with_timeout,
+    release_memory, track_memory_usage, with_resource_limits, with_timeout,
 };
 pub use telemetry::TelemetryCollector;
 pub use text::{strip_ansi_codes, visual_width, wrap_line};

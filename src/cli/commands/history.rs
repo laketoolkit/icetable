@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::common::print_json;
 use crate::cli::parser::HistoryArgs;
 use crate::config::ResolvePath;
-use crate::core::{TableExt, TableLoader};
+use crate::core::{IcebergTable, TableExt, TableLoader};
 use crate::error::{Error, Result};
 
 /// A single version/snapshot entry in history
@@ -57,7 +57,7 @@ impl HistoryCommand {
     }
 
     /// Get history entries from Iceberg table
-    async fn history(table: &Arc<iceberg::table::Table>, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
+    async fn history(table: &Arc<IcebergTable>, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
         let (metadata, _) = table.metadata_with_version();
 
         let current_snapshot_id = metadata.current_snapshot_id();

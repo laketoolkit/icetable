@@ -6,8 +6,8 @@ use colored::Colorize;
 
 use super::common::print_json;
 use crate::cli::parser::DiffArgs;
-use crate::core::TableContext;
 use crate::core::metadata::IcebergMetadataService;
+use crate::core::{Snapshot, TableContext, TableMetadata};
 use crate::error::{Error, Result};
 
 /// Handler for diff command
@@ -175,10 +175,7 @@ impl DiffCommand {
     }
 
     /// Resolve a reference (snapshot ID, branch name, or tag name) to a snapshot ID
-    fn resolve_ref(
-        metadata: &std::sync::Arc<iceberg::spec::TableMetadata>,
-        reference: &str,
-    ) -> Result<i64> {
+    fn resolve_ref(metadata: &std::sync::Arc<TableMetadata>, reference: &str) -> Result<i64> {
         // Try parsing as snapshot ID first
         if let Ok(id) = reference.parse::<i64>() {
             if metadata.snapshot_by_id(id).is_some() {
@@ -202,7 +199,7 @@ impl DiffCommand {
     /// Get manifest file paths from a snapshot using native API
     async fn get_manifest_files(
         service: &IcebergMetadataService,
-        snapshot: &iceberg::spec::Snapshot,
+        snapshot: &Snapshot,
     ) -> Result<Vec<String>> {
         let file_io = service.file_io();
         let metadata = service.table().metadata();

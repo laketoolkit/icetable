@@ -16,7 +16,7 @@ use crate::core::metadata::IcebergMetadataService;
 use crate::core::inspection::{format_bytes, format_count};
 use crate::core::CatalogConfig;
 use crate::error::Result;
-use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
+use crate::utils::with_resource_limits;
 
 /// Handler for analyze command
 pub struct AnalyzeCommand;
@@ -26,16 +26,9 @@ impl AnalyzeCommand {
     pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: metadata + file lists
-                let estimated_memory = 128 * 1024 * 1024; // 128MB for analysis
-                track_memory_usage(estimated_memory)?;
-
-                Self::analyze_iceberg(&table_path, &args).await
-            }).await
-        }).await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for analysis
+        with_resource_limits(ESTIMATED_MEMORY, Self::analyze_iceberg(&table_path, &args)).await
     }
 
     async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs) -> Result<()> {

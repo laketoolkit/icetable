@@ -3,10 +3,10 @@
 //! Interact with Iceberg REST catalogs (Nessie, Polaris, etc.)
 
 use colored::Colorize;
-use iceberg::spec::Schema;
 use std::collections::HashMap;
 
 use super::common::print_json;
+use crate::core::IcebergSchema;
 use crate::cli::parser::{
     CatalogArgs, CatalogCommands, CatalogCreateNamespaceArgs, CatalogCreateTableArgs,
     CatalogDropNamespaceArgs, CatalogDropTableArgs, CatalogNamespacesArgs,
@@ -325,7 +325,7 @@ impl CatalogCommand {
         })?;
 
         // Parse schema JSON
-        let schema: Schema = serde_json::from_str(&schema_content)
+        let schema: IcebergSchema = serde_json::from_str(&schema_content)
             .map_err(|e| Error::General(format!("Failed to parse schema JSON: {}", e)))?;
 
         let namespace: Vec<String> = args.namespace.split('.').map(|s| s.to_string()).collect();

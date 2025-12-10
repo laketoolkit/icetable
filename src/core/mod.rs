@@ -30,3 +30,8 @@ pub use crate::utils::core::{
     TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
 };
 pub use commit::{CommitResult, SnapshotCommitter, DirectCommitter};
+
+// Re-export iceberg types used by CLI to avoid direct iceberg:: dependency
+// This provides a stable interface if iceberg crate changes
+pub use iceberg::table::Table as IcebergTable;
+pub use iceberg::spec::{TableMetadata, Snapshot, Schema as IcebergSchema};

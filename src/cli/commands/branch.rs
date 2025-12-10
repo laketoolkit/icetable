@@ -5,7 +5,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_committer, create_table, print_json, resolve_table};
+use super::common::{create_committer, create_table, print_dry_run_header, print_json, resolve_iceberg_context};
 use crate::cli::parser::{BranchArgs, BranchCommands};
 use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
 use crate::core::{CatalogConfig, TableCommitter, TableContext};
@@ -19,23 +19,19 @@ impl BranchCommand {
     pub async fn execute(args: BranchArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         match args.command {
             BranchCommands::List(a) => {
-                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
-                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
-                ctx.require_iceberg()?;
-                Self::list(&ctx, &a.output).await
+                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
+                Self::list(&iceberg.ctx, &a.output).await
             }
             BranchCommands::Create(a) => {
-                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
-                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
-                ctx.require_iceberg()?;
-                let committer = create_committer(catalog_config.as_ref(), &resolution);
+                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
+                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
                 let retention = BranchRetention {
                     min_snapshots_to_keep: a.min_snapshots_to_keep,
                     max_snapshot_age_ms: a.max_snapshot_age_ms,
                     max_ref_age_ms: a.max_ref_age_ms,
                 };
                 Self::create(
-                    &ctx,
+                    &iceberg.ctx,
                     &a.name,
                     a.from_snapshot,
                     retention,
@@ -45,25 +41,19 @@ impl BranchCommand {
                 .await
             }
             BranchCommands::Delete(a) => {
-                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
-                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
-                ctx.require_iceberg()?;
-                let committer = create_committer(catalog_config.as_ref(), &resolution);
-                Self::delete(&ctx, &a.name, a.dry_run, &a.output, committer).await
+                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
+                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
+                Self::delete(&iceberg.ctx, &a.name, a.dry_run, &a.output, committer).await
             }
             BranchCommands::FastForward(a) => {
-                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
-                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
-                ctx.require_iceberg()?;
-                let committer = create_committer(catalog_config.as_ref(), &resolution);
-                Self::fast_forward(&ctx, &a.name, &a.to, &a.output, committer).await
+                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
+                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
+                Self::fast_forward(&iceberg.ctx, &a.name, &a.to, &a.output, committer).await
             }
             BranchCommands::Rename(a) => {
-                let resolution = resolve_table(&a.path, catalog_config.as_ref()).await?;
-                let ctx = TableContext::from_path(Some(resolution.location().to_string())).await?;
-                ctx.require_iceberg()?;
-                let committer = create_committer(catalog_config.as_ref(), &resolution);
-                Self::rename(&ctx, &a.old_name, &a.new_name, &a.output, committer).await
+                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
+                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
+                Self::rename(&iceberg.ctx, &a.old_name, &a.new_name, &a.output, committer).await
             }
         }
     }
@@ -185,8 +175,7 @@ impl BranchCommand {
             });
             print_json(&json)?;
         } else if result.dry_run {
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-            println!();
+            print_dry_run_header();
             println!("Would delete the following:");
             println!(
                 "  Branch: {} (snapshot {})",

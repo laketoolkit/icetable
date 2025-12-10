@@ -5,7 +5,7 @@
 
 use colored::Colorize;
 
-use super::common::{TableResolution, create_committer, create_table, print_json, resolve_table};
+use super::common::{TableResolution, create_committer, create_table, print_dry_run_header, print_json, resolve_table};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
@@ -273,7 +273,7 @@ impl SnapshotCommand {
 
         if result.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
+            print_dry_run_header();
         }
 
         if cfg.output == "json" {

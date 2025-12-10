@@ -1,9 +1,8 @@
 //! Common utilities for CLI commands
 
 use crate::config::{ResolveTableRef, ResolvedTable};
-use crate::core::{CatalogClient, CatalogConfig, TableCommitter, TableRef};
+use crate::core::{CatalogClient, CatalogConfig, IcebergTable, TableCommitter, TableContext, TableRef};
 use crate::error::{Error, Result};
-use iceberg::table::Table;
 
 /// Resolved table that can be either a direct path or a catalog table
 pub enum TableResolution {
@@ -12,7 +11,7 @@ pub enum TableResolution {
     /// Table loaded from catalog
     CatalogTable {
         /// The loaded iceberg Table (boxed to reduce enum size)
-        table: Box<Table>,
+        table: Box<IcebergTable>,
         /// Namespace path
         namespace: Vec<String>,
         /// Table name
@@ -43,7 +42,7 @@ impl TableResolution {
     }
 
     /// Get the catalog table if available
-    pub fn as_catalog_table(&self) -> Option<&Table> {
+    pub fn as_catalog_table(&self) -> Option<&IcebergTable> {
         match self {
             TableResolution::Path(_) => None,
             TableResolution::CatalogTable { table, .. } => Some(table),
@@ -162,4 +161,42 @@ pub fn create_committer(
         )),
         _ => None,
     }
+}
+
+/// Print the standard dry-run header message
+///
+/// Used consistently across commands that support --dry-run
+pub fn print_dry_run_header() {
+    use colored::Colorize;
+    println!("{}", "DRY RUN - No changes made".yellow().bold());
+    println!();
+}
+
+/// Resolved context for an Iceberg table operation
+///
+/// Combines table resolution with TableContext, ensuring the table is Iceberg format
+pub struct IcebergContext {
+    /// The table resolution (path or catalog)
+    pub resolution: TableResolution,
+    /// The table context for operations
+    pub ctx: TableContext,
+}
+
+/// Resolve a table reference and create an Iceberg context
+///
+/// This is a convenience function that combines:
+/// 1. Resolving the table reference (path or catalog)
+/// 2. Creating a TableContext from the resolved location
+/// 3. Validating that the table is Iceberg format
+///
+/// Returns an IcebergContext with both the resolution and context,
+/// useful when you need the resolution for creating a committer.
+pub async fn resolve_iceberg_context(
+    table_ref: &Option<String>,
+    cli_catalog: Option<&CatalogConfig>,
+) -> Result<IcebergContext> {
+    let resolution = resolve_table(table_ref, cli_catalog).await?;
+    let ctx = TableContext::from_path(Some(resolution.location())).await?;
+    ctx.require_iceberg()?;
+    Ok(IcebergContext { resolution, ctx })
 }

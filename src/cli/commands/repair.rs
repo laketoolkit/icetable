@@ -4,13 +4,13 @@
 
 use colored::Colorize;
 
-use super::common::resolve_table_path;
+use super::common::{print_dry_run_header, resolve_table_path};
 use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
 use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
-use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
+use crate::utils::with_resource_limits;
 
 /// Repair options specifying what actions to take
 #[derive(Debug, Clone, Copy)]
@@ -29,18 +29,9 @@ impl RepairCommand {
     pub async fn execute(args: RepairArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: storage scanning + metadata
-                let estimated_memory = 256 * 1024 * 1024; // 256MB for repair operations
-                track_memory_usage(estimated_memory)?;
-
-                Self::repair_inner(table_path, args, catalog_config).await
-            })
-            .await
-        })
-        .await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for repair operations
+        with_resource_limits(ESTIMATED_MEMORY, Self::repair_inner(table_path, args, catalog_config)).await
     }
 
     async fn repair_inner(
@@ -182,8 +173,7 @@ impl RepairCommand {
 
         if args.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-
+            print_dry_run_header();
             if options.remove_missing {
                 for file in &analysis.missing_files {
                     let name = file.path.rsplit('/').next().unwrap_or(&file.path);

@@ -12,7 +12,7 @@ use crate::core::operations::generate::{
 };
 use crate::utils::core::format_bytes;
 use crate::error::Result;
-use crate::utils::{temp_dir_with_cleanup, track_memory_usage, with_cancellation, with_timeout};
+use crate::utils::{temp_dir_with_cleanup, with_resource_limits};
 
 /// Handler for generate command
 pub struct GenerateCommand;
@@ -45,19 +45,12 @@ impl GenerateCommand {
         println!("  Rows: {}", config.rows);
         println!("  Files: {}", config.files);
 
-        // Apply timeout and cancellation with cleanup
-        let result = with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: schema size + batch buffers
-                let estimated_memory = Self::estimate_memory_usage(&config);
-                track_memory_usage(estimated_memory)?;
-
-                // Create temp directory for intermediate files (will be cleaned up on cancellation)
-                let _temp_dir = temp_dir_with_cleanup()?;
-
-                GenerateOperation::execute(config).await
-            })
-            .await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        let estimated_memory = Self::estimate_memory_usage(&config);
+        let result = with_resource_limits(estimated_memory, async {
+            // Create temp directory for intermediate files (will be cleaned up on cancellation)
+            let _temp_dir = temp_dir_with_cleanup()?;
+            GenerateOperation::execute(config).await
         })
         .await?;
 

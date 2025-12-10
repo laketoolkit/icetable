@@ -9,7 +9,8 @@ use crate::cli::parser::ImportDeltaArgs;
 use crate::cli::parser::ImportParquetArgs;
 use crate::core::storage::{ObjectMeta, ObjectStoreExt, Storage};
 use crate::error::{Error, Result};
-use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
+use super::common::print_dry_run_header;
+use crate::utils::with_resource_limits;
 
 /// Handler for import commands
 pub struct ImportCommand;
@@ -18,18 +19,9 @@ impl ImportCommand {
     /// Import from Delta Lake table
     #[cfg(feature = "delta")]
     pub async fn delta(args: ImportDeltaArgs) -> Result<()> {
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: Delta metadata + file lists
-                let estimated_memory = 128 * 1024 * 1024; // 128MB for Delta operations
-                track_memory_usage(estimated_memory)?;
-
-                Self::delta_inner(args).await
-            })
-            .await
-        })
-        .await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for Delta operations
+        with_resource_limits(ESTIMATED_MEMORY, Self::delta_inner(args)).await
     }
 
     #[cfg(feature = "delta")]
@@ -83,8 +75,7 @@ impl ImportCommand {
 
         if args.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-            println!();
+            print_dry_run_header();
             println!("Schema:");
             for field in schema.fields() {
                 println!("  {} ({})", field.name().cyan(), field.data_type());
@@ -183,18 +174,9 @@ impl ImportCommand {
 
     /// Import from Parquet files
     pub async fn parquet(args: ImportParquetArgs) -> Result<()> {
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: file lists + parquet reading buffers
-                let estimated_memory = 256 * 1024 * 1024; // 256MB for Parquet operations
-                track_memory_usage(estimated_memory)?;
-
-                Self::parquet_inner(args).await
-            })
-            .await
-        })
-        .await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for Parquet operations
+        with_resource_limits(ESTIMATED_MEMORY, Self::parquet_inner(args)).await
     }
 
     async fn parquet_inner(args: ImportParquetArgs) -> Result<()> {
@@ -256,8 +238,7 @@ impl ImportCommand {
 
         if args.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-            println!();
+            print_dry_run_header();
             println!("Files to import:");
             for (i, file) in parquet_files.iter().take(10).enumerate() {
                 let path_str = file.location.to_string();

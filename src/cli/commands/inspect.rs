@@ -14,7 +14,7 @@ use crate::core::operations::inspect::{
 use crate::core::inspection::format_number;
 use crate::core::{format_bytes, CatalogConfig, TableLoader};
 use crate::error::Result;
-use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
+use crate::utils::with_resource_limits;
 
 /// Handler for inspect command
 pub struct InspectCommand;
@@ -22,14 +22,9 @@ pub struct InspectCommand;
 impl InspectCommand {
     /// Execute inspect command
     pub async fn execute(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        with_timeout(async {
-            with_cancellation(async {
-                track_memory_usage(128 * 1024 * 1024)?;
-                Self::inspect_inner(args, catalog_config).await
-            })
-            .await
-        })
-        .await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for inspection
+        with_resource_limits(ESTIMATED_MEMORY, Self::inspect_inner(args, catalog_config)).await
     }
 
     async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {

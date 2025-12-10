@@ -174,6 +174,39 @@ where
     }
 }
 
+/// Run an async operation with all resource limits (timeout, cancellation, memory)
+///
+/// This is a convenience wrapper that combines:
+/// - Timeout (from global resource limits)
+/// - Cancellation checking
+/// - Memory tracking
+///
+/// # Arguments
+/// * `estimated_memory` - Estimated memory usage in bytes
+/// * `operation` - The async operation to run
+///
+/// # Example
+/// ```ignore
+/// with_resource_limits(256 * 1024 * 1024, async {
+///     // actual work here
+/// }).await
+/// ```
+pub async fn with_resource_limits<F, T>(estimated_memory: u64, operation: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    with_timeout(async {
+        super::cancellation::with_cancellation(async {
+            track_memory_usage(estimated_memory)?;
+            let result = operation.await;
+            release_memory(estimated_memory);
+            result
+        })
+        .await
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,7 +8,7 @@
 
 use colored::Colorize;
 
-use super::common::{create_committer, print_json, resolve_table};
+use super::common::{create_committer, print_dry_run_header, print_json, resolve_table};
 use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
 use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{
@@ -18,7 +18,7 @@ use crate::core::metadata::MaintenanceResult;
 use crate::utils::core::parse_bytes;
 use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
-use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
+use crate::utils::with_resource_limits;
 
 /// Handler for optimize command
 pub struct OptimizeCommand;
@@ -67,21 +67,12 @@ impl OptimizeCommand {
 
         let service = OptimizeService::with_config(config);
 
-        let result = with_timeout(async {
-            with_cancellation(async {
-                let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
-                track_memory_usage(estimated_memory)?;
-
-                Self::optimize_iceberg_data(
-                    &table_path,
-                    &service,
-                    args.branch.as_deref(),
-                    committer,
-                )
-                .await
-            })
-            .await
-        })
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
+        let result = with_resource_limits(
+            estimated_memory,
+            Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), committer),
+        )
         .await?;
 
         Self::output_data_result(&result, &args.output)?;
@@ -98,15 +89,12 @@ impl OptimizeCommand {
 
         let committer = create_committer(catalog_config.as_ref(), &resolution);
 
-        with_timeout(async {
-            with_cancellation(async {
-                let estimated_memory = args.target_size * 2;
-                track_memory_usage(estimated_memory)?;
-
-                Self::rewrite_iceberg_manifests(&table_path, &args, committer).await
-            })
-            .await
-        })
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        let estimated_memory = args.target_size * 2;
+        with_resource_limits(
+            estimated_memory,
+            Self::rewrite_iceberg_manifests(&table_path, &args, committer),
+        )
         .await
     }
 
@@ -227,7 +215,7 @@ impl OptimizeCommand {
             analysis.delete_manifests.to_string().cyan()
         );
         println!();
-        println!("{}", "DRY RUN - No changes made".yellow().bold());
+        print_dry_run_header();
         println!(
             "Total data entries: {}",
             analysis.total_entries.to_string().cyan()
@@ -310,9 +298,7 @@ impl OptimizeCommand {
                 println!();
 
                 if is_dry_run {
-                    println!("{}", "DRY RUN - No changes made".yellow().bold());
-                    println!();
-
+                    print_dry_run_header();
                     if result.files_added == 0 && result.files_removed == 0 {
                         println!("{}", "Table is already optimized.".green());
                         if let Some(reason) = result.details.get("reason") {
