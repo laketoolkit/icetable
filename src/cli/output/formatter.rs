@@ -1,11 +1,33 @@
 //! Output formatting utilities
 
-use comfy_table::{Table, presets};
+use comfy_table::{ContentArrangement, Table, presets};
 use unicode_width::UnicodeWidthStr;
 
 use crate::utils::{visual_width, wrap_line};
 
 use super::icons::{SeverityIcon, StatusIcon};
+
+/// Create a styled comfy_table with UTF8_FULL preset and dynamic arrangement
+///
+/// This is the standard table style used throughout the CLI
+pub fn create_styled_table() -> Table {
+    let mut table = Table::new();
+    table.load_preset(presets::UTF8_FULL);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table
+}
+
+/// Format a timestamp from milliseconds to human-readable string with UTC suffix
+pub fn format_timestamp_ms(timestamp_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Format a DateTime<Utc> to human-readable string with UTC suffix
+pub fn format_datetime_utc(dt: &chrono::DateTime<chrono::Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
 
 /// Output formatter for different formats
 pub struct OutputFormatter;

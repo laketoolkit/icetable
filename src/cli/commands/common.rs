@@ -225,6 +225,13 @@ pub fn format_timestamp(timestamp_ms: i64) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Format a DateTime<Utc> to human-readable string
+///
+/// Consistent format with format_timestamp for DateTime objects
+pub fn format_datetime(dt: &chrono::DateTime<chrono::Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
 /// Extract table name from a path
 ///
 /// Returns the last component of the path, or "table" as fallback

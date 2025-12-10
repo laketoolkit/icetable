@@ -6,7 +6,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_table, print_json, resolve_table_path};
+use super::common::{create_table, format_datetime, print_json, resolve_table_path};
 use crate::cli::parser::StatsArgs;
 use crate::core::format_bytes;
 use crate::core::inspection::formatters::format_number;
@@ -115,11 +115,10 @@ impl StatsCommand {
             ]);
         }
 
-        if let Some(dt) = stats.last_modified {
+        if let Some(ref dt) = stats.last_modified {
             table.add_row(vec![
                 Cell::new("Last Modified").set_alignment(CellAlignment::Left),
-                Cell::new(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-                    .set_alignment(CellAlignment::Right),
+                Cell::new(format_datetime(dt)).set_alignment(CellAlignment::Right),
             ]);
         }
 

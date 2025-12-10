@@ -5,7 +5,7 @@
 
 use colored::Colorize;
 
-use super::common::print_json;
+use super::common::{format_datetime, print_json};
 use crate::cli::parser::HistoryArgs;
 use crate::config::ResolvePath;
 use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
@@ -64,7 +64,7 @@ impl HistoryCommand {
                 "○".dimmed()
             };
 
-            let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
+            let timestamp = format_datetime(&entry.timestamp);
 
             let op = match entry.operation.as_str() {
                 "Append" => "append".green(),

@@ -359,8 +359,8 @@ impl DoctorCommand {
             }
         });
 
-        // Note: print_json returns Result, but display_json doesn't propagate errors
-        // This is acceptable since JSON serialization of simple values shouldn't fail
-        let _ = print_json(&json);
+        if let Err(e) = print_json(&json) {
+            eprintln!("Error serializing JSON: {}", e);
+        }
     }
 }

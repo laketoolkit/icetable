@@ -4,8 +4,9 @@ use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment, Color, Table, presets};
+use comfy_table::{Cell, CellAlignment, Color};
 
+use super::formatter::create_styled_table;
 use crate::core::format_bytes;
 use crate::core::formats::{ColumnStats, FileMetadata};
 use crate::core::inspection::formatters::format_number;
@@ -251,8 +252,7 @@ impl InspectionFormatter {
 
     /// Format column statistics as a table
     pub fn format_statistics(stats: &[ColumnStats]) -> String {
-        let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL);
+        let mut table = create_styled_table();
 
         table.set_header(vec![
             "Column".to_string(),
@@ -302,8 +302,7 @@ impl InspectionFormatter {
 
     /// Format an Arrow RecordBatch as a table
     pub fn format_record_batch(batch: &RecordBatch) -> String {
-        let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL);
+        let mut table = create_styled_table();
 
         // Create header
         let schema = batch.schema();

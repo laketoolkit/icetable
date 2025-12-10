@@ -41,7 +41,7 @@ use std::path::PathBuf;
 
 use crate::utils::credentials::CredentialSource;
 
-/// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and migrate from Delta Lake
+/// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and more
 #[derive(Parser, Debug)]
 #[command(name = "icetable")]
 #[command(version, about, long_about = None)]

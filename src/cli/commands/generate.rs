@@ -160,9 +160,9 @@ impl GenerateCommand {
                 "metadata_path": result.metadata_path,
                 "snapshot_id": result.snapshot_id
             });
-            // Note: print_json returns Result, but print_result doesn't propagate errors
-            // This is acceptable since JSON serialization of simple values shouldn't fail
-            let _ = print_json(&json_result);
+            if let Err(e) = print_json(&json_result) {
+                eprintln!("Error serializing JSON: {}", e);
+            }
         }
     }
 
