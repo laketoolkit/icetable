@@ -90,7 +90,7 @@ impl AnalyzeCommand {
     }
 
     fn print_analysis(
-        _table_path: &str,
+        table_path: &str,
         data: &DataCompactionAnalysis,
         manifest: &ManifestCompactionAnalysis,
         snapshot: &SnapshotExpirationAnalysis,
@@ -99,7 +99,7 @@ impl AnalyzeCommand {
         verbose: bool,
     ) -> Result<()> {
         if output == "json" {
-            return Self::print_json(_table_path, data, manifest, snapshot, orphan);
+            return Self::print_json(table_path, data, manifest, snapshot, orphan);
         }
 
         // Build summary table

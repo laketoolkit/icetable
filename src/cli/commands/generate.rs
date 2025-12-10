@@ -11,6 +11,7 @@ use crate::core::operations::generate::{
     GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
 };
 use crate::core::format_bytes;
+use super::common::print_json;
 use crate::error::Result;
 use crate::utils::{temp_dir_with_cleanup, with_resource_limits};
 
@@ -159,11 +160,9 @@ impl GenerateCommand {
                 "metadata_path": result.metadata_path,
                 "snapshot_id": result.snapshot_id
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_result)
-                    .expect("JSON serialization of GenerateResult should never fail")
-            );
+            // Note: print_json returns Result, but print_result doesn't propagate errors
+            // This is acceptable since JSON serialization of simple values shouldn't fail
+            let _ = print_json(&json_result);
         }
     }
 

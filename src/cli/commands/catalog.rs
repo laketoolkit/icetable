@@ -14,6 +14,7 @@ use crate::cli::parser::{
 use crate::config::{CatalogConfig, Config};
 use crate::core::RestCatalogClient;
 use crate::error::{Error, Result};
+use crate::utils::with_resource_limits;
 
 /// Handler for catalog command
 pub struct CatalogCommand;
@@ -21,6 +22,11 @@ pub struct CatalogCommand;
 impl CatalogCommand {
     /// Execute catalog command
     pub async fn execute(args: CatalogArgs) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024; // 32MB for catalog ops
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
+
+    async fn execute_inner(args: CatalogArgs) -> Result<()> {
         let catalog = args.catalog;
         let namespace = args.namespace;
         let output = args.output;

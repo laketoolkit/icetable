@@ -9,7 +9,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, Color};
 
-use super::common::create_table;
+use super::common::{create_table, print_json};
 use crate::cli::parser::DoctorArgs;
 use crate::core::maintenance::{
     CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
@@ -415,9 +415,8 @@ impl DoctorCommand {
             }
         });
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json).unwrap_or_default()
-        );
+        // Note: print_json returns Result, but display_json doesn't propagate errors
+        // This is acceptable since JSON serialization of simple values shouldn't fail
+        let _ = print_json(&json);
     }
 }

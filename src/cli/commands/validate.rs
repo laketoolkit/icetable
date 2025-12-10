@@ -13,6 +13,7 @@ use crate::core::storage::create_object_store;
 use crate::core::validation::{Severity, ValidationEngine};
 use crate::error::{Error, Result};
 use crate::utils::progress::ProgressTracker;
+use crate::utils::with_resource_limits;
 
 /// Handler for validate command
 pub struct ValidateCommand;
@@ -20,6 +21,11 @@ pub struct ValidateCommand;
 impl ValidateCommand {
     /// Execute validate command
     pub async fn execute(args: ValidateArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for validation
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+    }
+
+    async fn execute_inner(args: ValidateArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
 
         // 1. Create storage backend based on path

@@ -8,7 +8,7 @@ use std::path::Path;
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_table, resolve_table_path};
+use super::common::{create_table, print_json, resolve_table_path};
 use crate::cli::parser::StatsArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;
@@ -17,6 +17,7 @@ use crate::core::inspection::formatters::format_number;
 use crate::core::maintenance::PartitionFilter;
 use crate::core::storage::create_object_store;
 use crate::error::Result;
+use crate::utils::with_resource_limits;
 
 /// Statistics for a specific partition
 #[derive(Debug, serde::Serialize)]
@@ -41,6 +42,11 @@ pub struct StatsCommand;
 impl StatsCommand {
     /// Execute stats command
     pub async fn execute(args: StatsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for stats
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+    }
+
+    async fn execute_inner(args: StatsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
         let path = Path::new(&table_path);
 
@@ -76,10 +82,7 @@ impl StatsCommand {
                     "partition_filter": partition_filter_str,
                     "stats": partition_stats,
                 });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json).unwrap_or_default()
-                );
+                print_json(&json)?;
             } else {
                 // Print simple partition stats
                 println!();
@@ -115,10 +118,7 @@ impl StatsCommand {
                     "created_at": metadata.created_at.map(|dt| dt.to_rfc3339()),
                     "properties": metadata.metadata,
                 });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json).unwrap_or_default()
-                );
+                print_json(&json)?;
             } else {
                 Self::print_text_output(&metadata, table_name);
             }

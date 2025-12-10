@@ -3,10 +3,9 @@
 //! Thin wrapper that delegates to VacuumService in core.
 
 use colored::Colorize;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::io;
 
-use super::common::{print_json, resolve_table_path};
+use super::common::{create_spinner, print_json, resolve_table_path};
 use crate::cli::parser::VacuumArgs;
 use crate::core::CatalogConfig;
 use crate::core::format_bytes;
@@ -46,14 +45,7 @@ impl VacuumCommand {
         let service = VacuumService::with_config(config);
 
         // Show progress while analyzing
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("hardcoded progress template is valid"),
-        );
-        pb.set_message("Scanning manifests...");
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        let pb = create_spinner("Scanning manifests");
 
         // Execute vacuum (analyze + optionally delete)
         let result = service.execute(table_path).await?;

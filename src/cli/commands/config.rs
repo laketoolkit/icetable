@@ -5,7 +5,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::create_table;
+use super::common::{create_table, print_json};
 use crate::cli::parser::{
     ConfigAddArgs, ConfigAddCatalogArgs, ConfigArgs, ConfigCommands, ConfigCurrentArgs,
     ConfigListArgs, ConfigRemoveArgs, ConfigRemoveCatalogArgs, ConfigUnsetArgs, ConfigUseArgs,
@@ -76,10 +76,7 @@ impl ConfigCommand {
             let json = serde_json::json!({
                 "current_context": config.get_current_context(),
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_default()
-            );
+            print_json(&json)?;
         } else {
             match config.get_current_context() {
                 Some(context) => println!("{}", context.cyan()),
@@ -232,10 +229,7 @@ impl ConfigCommand {
                     })
                 }).collect::<Vec<_>>(),
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_default()
-            );
+            print_json(&json)?;
         } else {
             // Show current context
             println!("{}", "Current context:".bold());
