@@ -2,13 +2,15 @@
 //!
 //! Thin wrapper that delegates to core::operations::generate
 
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use colored::Colorize;
 
 use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate};
 use crate::core::operations::generate::{
-    GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
+    ExistingTableInfo, GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate,
+    parse_schema_string,
 };
 use crate::core::format_bytes;
 use super::common::print_json;
@@ -27,6 +29,18 @@ impl GenerateCommand {
             return Self::print_dry_run(&args, &schema);
         }
 
+        // Check if table already exists
+        let existing_table = GenerateOperation::table_exists(&args.path).await;
+
+        // If table exists and --force not specified, prompt for confirmation
+        if let Some(ref table_info) = existing_table
+            && !args.force
+            && !Self::confirm_append(table_info)?
+        {
+            println!("{}", "Operation cancelled.".yellow());
+            return Ok(());
+        }
+
         let config = GenerateConfig {
             path: args.path.clone(),
             schema: Arc::new(schema),
@@ -37,9 +51,16 @@ impl GenerateCommand {
             target_file_size: args.target_file_size,
         };
 
+        let action = if existing_table.is_some() {
+            "Appending to existing"
+        } else {
+            "Creating new"
+        };
+
         println!(
-            "{} Generating synthetic Iceberg table...",
-            "->".cyan().bold()
+            "{} {} Iceberg table...",
+            "->".cyan().bold(),
+            action
         );
         println!("  Location: {}", config.path);
         println!("  Schema: {} columns", config.schema.fields().len());
@@ -48,16 +69,51 @@ impl GenerateCommand {
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         let estimated_memory = Self::estimate_memory_usage(&config);
+        let is_append = existing_table.is_some();
         let result = with_resource_limits(estimated_memory, async {
             // Create temp directory for intermediate files (will be cleaned up on cancellation)
             let _temp_dir = temp_dir_with_cleanup()?;
-            GenerateOperation::execute(config).await
+            if is_append {
+                GenerateOperation::execute_append(config).await
+            } else {
+                GenerateOperation::execute(config).await
+            }
         })
         .await?;
 
         Self::print_result(&result, &args.output);
 
         Ok(())
+    }
+
+    /// Prompt user for confirmation before appending to an existing table
+    fn confirm_append(table_info: &ExistingTableInfo) -> Result<bool> {
+        println!();
+        println!(
+            "{} An Iceberg table already exists at this location:",
+            "!".yellow().bold()
+        );
+        println!("  Snapshots: {}", table_info.snapshot_count.to_string().cyan());
+        println!("  Data files: {}", table_info.data_file_count.to_string().cyan());
+        println!(
+            "  Total records: {}",
+            table_info.total_records.to_string().cyan()
+        );
+        println!();
+        println!(
+            "{}",
+            "You are about to append new data to this table.".yellow()
+        );
+        print!("Do you want to continue? [y/N] ");
+        io::stdout().flush().map_err(crate::error::Error::Io)?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(crate::error::Error::Io)?;
+
+        let input = input.trim().to_lowercase();
+        Ok(input == "y" || input == "yes")
     }
 
     fn resolve_schema(args: &GenerateArgs) -> Result<arrow::datatypes::Schema> {
@@ -135,15 +191,27 @@ impl GenerateCommand {
             );
         }
 
+        let metadata_action = if result.appended {
+            "Created new snapshot"
+        } else {
+            "Created Iceberg metadata"
+        };
         println!(
-            "  {} Created Iceberg metadata (snapshot {})",
+            "  {} {} (snapshot {})",
             "v".green(),
+            metadata_action,
             result.snapshot_id
         );
 
+        let action = if result.appended {
+            "Appended"
+        } else {
+            "Generated table with"
+        };
         println!(
-            "\n{} Generated table with {} rows in {} files ({})",
+            "\n{} {} {} rows in {} files ({})",
             "v".green().bold(),
+            action,
             result.total_rows,
             result.files_created,
             format_bytes(result.total_bytes)
@@ -158,7 +226,8 @@ impl GenerateCommand {
                 "total_bytes": result.total_bytes,
                 "data_files": result.data_files.iter().map(|f| &f.path).collect::<Vec<_>>(),
                 "metadata_path": result.metadata_path,
-                "snapshot_id": result.snapshot_id
+                "snapshot_id": result.snapshot_id,
+                "appended": result.appended
             });
             if let Err(e) = print_json(&json_result) {
                 eprintln!("Error serializing JSON: {}", e);

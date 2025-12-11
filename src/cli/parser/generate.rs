@@ -41,6 +41,10 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Skip confirmation when appending to existing table
+    #[arg(short = 'f', long)]
+    pub force: bool,
+
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,

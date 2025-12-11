@@ -3,6 +3,8 @@
 //! This module provides functionality to generate synthetic test data
 //! and create complete, valid Iceberg tables with proper manifests and snapshots
 //! for benchmarking and integration testing.
+//!
+//! Supports both creating new tables and appending data to existing tables.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,10 +20,11 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::core::metadata::{DataFileInfo, SnapshotWriter};
+use crate::core::metadata::{DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType, SnapshotWriter};
 use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, create_file_io, to_path};
 use crate::error::{Error, Result};
 use crate::utils::track_memory_usage;
+use crate::utils::core::find_latest_metadata;
 use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct, Summary};
 
 /// Configuration for data generation
@@ -60,6 +63,21 @@ pub struct GenerateResult {
     pub metadata_path: String,
     /// Snapshot ID of the created snapshot
     pub snapshot_id: i64,
+    /// Whether this was an append to an existing table
+    pub appended: bool,
+}
+
+/// Information about an existing Iceberg table
+#[derive(Debug, Clone)]
+pub struct ExistingTableInfo {
+    /// Path to the table
+    pub path: String,
+    /// Number of existing snapshots
+    pub snapshot_count: usize,
+    /// Total existing data files
+    pub data_file_count: usize,
+    /// Total existing records
+    pub total_records: u64,
 }
 
 
@@ -67,6 +85,32 @@ pub struct GenerateResult {
 pub struct GenerateOperation;
 
 impl GenerateOperation {
+    /// Check if an Iceberg table exists at the given path
+    ///
+    /// Returns Some(ExistingTableInfo) if a valid table exists, None otherwise.
+    pub async fn table_exists(path: &str) -> Option<ExistingTableInfo> {
+        let storage = create_object_store(path).await.ok()?;
+
+        // Try to find metadata file
+        if find_latest_metadata(path, &storage).await.is_err() {
+            return None;
+        }
+
+        // Table exists, try to load it to get stats
+        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await.ok()?;
+        let snapshots = metadata_service.list_snapshots(None).await.ok()?;
+        let data_files = metadata_service.list_data_files().await.ok()?;
+
+        let total_records: u64 = data_files.iter().map(|f| f.record_count).sum();
+
+        Some(ExistingTableInfo {
+            path: path.to_string(),
+            snapshot_count: snapshots.len(),
+            data_file_count: data_files.len(),
+            total_records,
+        })
+    }
+
     /// Execute the generate operation - creates a complete valid Iceberg table
     pub async fn execute(config: GenerateConfig) -> Result<GenerateResult> {
         let storage = create_object_store(&config.path).await?;
@@ -135,6 +179,100 @@ impl GenerateOperation {
             data_files,
             metadata_path: metadata_file_path,
             snapshot_id,
+            appended: false,
+        })
+    }
+
+    /// Execute append operation - adds data to an existing Iceberg table
+    ///
+    /// This generates new parquet files and creates a new snapshot that references
+    /// the new files while preserving existing table data.
+    pub async fn execute_append(config: GenerateConfig) -> Result<GenerateResult> {
+        let storage = create_object_store(&config.path).await?;
+        let base_path = config.path.trim_end_matches('/').to_string();
+
+        let rows_per_file = (config.rows / config.files as u64).max(1);
+        let mut data_files = Vec::new();
+        let mut total_bytes = 0u64;
+
+        // Use timestamp for unique file names to avoid conflicts with existing files
+        let timestamp_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after UNIX epoch")
+            .as_nanos();
+
+        // Step 1: Generate and write parquet data files
+        for file_idx in 0..config.files {
+            let file_rows = if file_idx == config.files - 1 {
+                config.rows - (rows_per_file * (config.files - 1) as u64)
+            } else {
+                rows_per_file
+            };
+
+            let batch =
+                Self::generate_batch(&config.schema, file_rows, config.seed + file_idx as u64)?;
+
+            // Use timestamp + seed + index for unique file ID
+            let file_id = format!(
+                "{:016x}",
+                (timestamp_nanos as u64)
+                    .wrapping_mul(1000003)
+                    .wrapping_add(config.seed)
+                    .wrapping_add(file_idx as u64)
+            );
+            let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
+
+            // Relative path for storage (PrefixStore adds the table prefix)
+            let storage_path = format!("data/{}", file_name);
+            // Absolute path for Iceberg metadata
+            let iceberg_path = format!("{}/data/{}", base_path, file_name);
+
+            let parquet_bytes = Self::write_parquet_bytes(&batch)?;
+            let file_size = parquet_bytes.len() as u64;
+            total_bytes += file_size;
+
+            storage
+                .put_bytes(&to_path(&storage_path), Bytes::from(parquet_bytes))
+                .await?;
+
+            data_files.push(DataFileInfo {
+                path: iceberg_path,
+                size: file_size,
+                record_count: file_rows,
+                partition: HashMap::new(),
+            });
+        }
+
+        // Step 2: Use IcebergMetadataService to append the new data files
+        let metadata_service = IcebergMetadataService::new_async(base_path.clone()).await?;
+
+        // Build data file changes for append
+        let mut changes = DataFileChanges::new();
+        changes.added = data_files.clone();
+
+        // Create summary for the append operation
+        let mut summary = HashMap::new();
+        summary.insert("source".to_string(), "generate-append".to_string());
+
+        // Write the new snapshot
+        let snapshot_info = metadata_service
+            .write_snapshot(changes, OperationType::Append, summary)
+            .await?;
+
+        // Get the latest metadata path after write
+        let metadata_path = find_latest_metadata(&base_path, &storage)
+            .await
+            .unwrap_or_else(|_| format!("{}/metadata/latest.json", base_path));
+
+        Ok(GenerateResult {
+            table_path: base_path,
+            total_rows: config.rows,
+            files_created: config.files,
+            total_bytes,
+            data_files,
+            metadata_path,
+            snapshot_id: snapshot_info.id,
+            appended: true,
         })
     }
 
