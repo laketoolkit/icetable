@@ -27,7 +27,4 @@ pub use traits::{
     RowGroupLayout, RowGroupMetadata, SchemaInfo, StatisticsInfo, UnstructuredLayout,
     VerbosityLevel,
 };
-pub use view_builder::{
-    InspectionView, InspectionViewBuilder, ViewItem, ViewSection, view_to_box_items,
-    view_to_inspect_result,
-};
+pub use view_builder::{InspectionView, InspectionViewBuilder, ViewItem, ViewSection};

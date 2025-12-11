@@ -94,11 +94,12 @@ impl RefService {
         let (metadata, current_version) = service.load_metadata().await?;
 
         // Use specified snapshot or current
-        let target_id = snapshot_id.unwrap_or_else(|| {
-            metadata
-                .current_snapshot_id()
-                .expect("Table has no current snapshot")
-        });
+        let target_id = match snapshot_id {
+            Some(id) => id,
+            None => metadata.current_snapshot_id().ok_or_else(|| {
+                Error::General("Table has no current snapshot. Specify a snapshot ID explicitly.".to_string())
+            })?,
+        };
 
         // Verify snapshot exists
         metadata
@@ -172,11 +173,12 @@ impl RefService {
         let (metadata, current_version) = service.load_metadata().await?;
 
         // Use specified snapshot or current
-        let target_id = snapshot_id.unwrap_or_else(|| {
-            metadata
-                .current_snapshot_id()
-                .expect("Table has no current snapshot")
-        });
+        let target_id = match snapshot_id {
+            Some(id) => id,
+            None => metadata.current_snapshot_id().ok_or_else(|| {
+                Error::General("Table has no current snapshot. Specify a snapshot ID explicitly.".to_string())
+            })?,
+        };
 
         // Verify snapshot exists
         metadata

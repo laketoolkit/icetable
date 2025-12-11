@@ -6,7 +6,6 @@ use clap::{Parser, Subcommand};
 #[derive(Subcommand, Debug)]
 pub enum ImportCommands {
     /// Import from a Delta Lake table
-    #[cfg(feature = "delta")]
     Delta(ImportDeltaArgs),
 
     /// Import from Parquet files
@@ -14,7 +13,6 @@ pub enum ImportCommands {
 }
 
 /// Arguments for import delta command
-#[cfg(feature = "delta")]
 #[derive(Parser, Debug)]
 pub struct ImportDeltaArgs {
     /// Path to source Delta Lake table

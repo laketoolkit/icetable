@@ -62,12 +62,9 @@ async fn async_main(cli: Cli) -> i32 {
     let catalog_config = cli.catalog_config();
 
     // Register cloud storage handlers (required for Delta Lake S3/GCS/Azure support)
-    #[cfg(feature = "delta")]
-    {
-        deltalake::aws::register_handlers(None);
-        deltalake::gcp::register_handlers(None);
-        deltalake::azure::register_handlers(None);
-    }
+    deltalake::aws::register_handlers(None);
+    deltalake::gcp::register_handlers(None);
+    deltalake::azure::register_handlers(None);
 
     // Execute command and handle errors
     let result = match cli.command {
@@ -83,7 +80,6 @@ async fn async_main(cli: Cli) -> i32 {
         Commands::Snapshot(args) => SnapshotCommand::execute(args, catalog_config.clone()).await,
         Commands::Repair(args) => RepairCommand::execute(args, catalog_config.clone()).await,
         Commands::Import(cmd) => match cmd {
-            #[cfg(feature = "delta")]
             ImportCommands::Delta(args) => ImportCommand::delta(args).await,
             ImportCommands::Parquet(args) => ImportCommand::parquet(args).await,
         },

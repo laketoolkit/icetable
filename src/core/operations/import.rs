@@ -119,7 +119,6 @@ impl ImportService {
     /// Import Delta Lake files into an Iceberg table
     ///
     /// Takes pre-extracted file information from Delta Lake and adds them to Iceberg.
-    #[cfg(feature = "delta")]
     pub async fn import_delta(
         &self,
         target_path: &str,

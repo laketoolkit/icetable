@@ -426,9 +426,12 @@ impl GenerateOperation {
                     Arc::new(builder.finish())
                 }
                 _ => {
+                    // Use pre-defined sample values to avoid format! allocations in hot path
+                    let sample_values = ["value_a", "value_b", "value_c", "value_d", "value_e"];
                     let mut builder = StringBuilder::with_capacity(num_rows as usize, 16);
-                    for i in 0..num_rows {
-                        builder.append_value(format!("value_{}", i));
+                    for _ in 0..num_rows {
+                        let idx = next_rand(&mut rng_state) as usize % sample_values.len();
+                        builder.append_value(sample_values[idx]);
                     }
                     Arc::new(builder.finish())
                 }

@@ -73,8 +73,12 @@ impl TableCommitter {
     }
 
     /// Create a committer that uses a REST catalog for commits (multi-writer safe)
+    ///
+    /// # Panics
+    /// Panics if namespace is empty - callers must validate namespace before calling.
     pub fn with_catalog(config: CatalogConfig, namespace: Vec<String>, table_name: String) -> Self {
-        let ns_ident = NamespaceIdent::from_vec(namespace).expect("Invalid namespace");
+        assert!(!namespace.is_empty(), "Namespace cannot be empty");
+        let ns_ident = NamespaceIdent::from_vec(namespace).expect("Invalid namespace - validated non-empty above");
         let table_ident = TableIdent::new(ns_ident, table_name);
 
         Self {

@@ -22,7 +22,7 @@ arrow-ipc = "55.2.0"
 parquet = { version = "55.2.0", features = ["arrow", "async", "object_store"] }
 
 # Table formats
-deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"], optional = true }
+deltalake = { version = "0.28.0", default-features = false, features = ["rustls", "s3", "gcs", "azure"] }
 iceberg = { version = "0.7" }
 iceberg-catalog-rest = { version = "0.7", optional = true }
 
@@ -84,12 +84,10 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = ["rest-catalog"]
-# Delta support is for import only - reading Delta tables to create Iceberg tables
-delta = ["dep:deltalake", "deltalake/s3", "deltalake/gcs", "deltalake/azure"]
 tui = ["dep:ratatui", "dep:crossterm"]
 # REST catalog support for Nessie, Polaris, Tabular, etc.
 rest-catalog = ["dep:iceberg-catalog-rest"]
-all = ["delta", "tui", "rest-catalog"]
+all = ["tui", "rest-catalog"]
 
 [[bin]]
 name = "icetable"

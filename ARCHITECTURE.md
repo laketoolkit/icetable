@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the high-level architecture of icetable, a CLI tool for inspecting and maintaining Apache Iceberg and Delta Lake tables.
+This document describes the high-level architecture of icetable, a CLI tool for managing Apache Iceberg tables (with Delta Lake import support).
 
 ## Overview
 

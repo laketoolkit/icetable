@@ -5,7 +5,6 @@
 
 use colored::Colorize;
 
-#[cfg(feature = "delta")]
 use crate::cli::parser::ImportDeltaArgs;
 use crate::cli::parser::ImportParquetArgs;
 use crate::core::operations::{ImportConfig, ImportService};
@@ -21,14 +20,12 @@ pub struct ImportCommand;
 
 impl ImportCommand {
     /// Import from Delta Lake table
-    #[cfg(feature = "delta")]
     pub async fn delta(args: ImportDeltaArgs) -> Result<()> {
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for Delta operations
         with_resource_limits(ESTIMATED_MEMORY, Self::delta_inner(args)).await
     }
 
-    #[cfg(feature = "delta")]
     async fn delta_inner(args: ImportDeltaArgs) -> Result<()> {
         use deltalake::DeltaTableBuilder;
 
@@ -77,7 +74,7 @@ impl ImportCommand {
             println!("Files to import:");
             for (i, file) in files.iter().take(10).enumerate() {
                 let name = extract_filename(&file.path);
-                println!("  {}. {} ({})", i + 1, name, format_bytes(file.size));
+                println!("  {}. {} ({})", i + 1, name, format_bytes(file.size as u64));
             }
             if total_files > 10 {
                 println!("  ... and {} more files", total_files - 10);
