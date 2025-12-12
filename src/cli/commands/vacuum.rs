@@ -6,7 +6,7 @@ use colored::Colorize;
 use std::io;
 
 use super::common::{TableResolution, create_spinner, print_json, resolve_table_from_context};
-use crate::cli::parser::{TableContext, VacuumArgs};
+use crate::cli::parser::{CliTableContext, VacuumArgs};
 use crate::core::extract_filename;
 use crate::core::format_bytes;
 use crate::core::maintenance::{VacuumConfig, VacuumResult, VacuumService};
@@ -18,7 +18,7 @@ pub struct VacuumCommand;
 
 impl VacuumCommand {
     /// Execute vacuum command
-    pub async fn execute(args: VacuumArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: VacuumArgs, ctx: &CliTableContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 

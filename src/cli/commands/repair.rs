@@ -5,7 +5,7 @@
 use colored::Colorize;
 
 use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
-use crate::cli::parser::{RepairArgs, TableContext};
+use crate::cli::parser::{CliTableContext, RepairArgs};
 use crate::core::extract_filename;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
@@ -27,7 +27,7 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(args: RepairArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: RepairArgs, ctx: &CliTableContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 

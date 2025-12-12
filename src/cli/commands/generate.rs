@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use colored::Colorize;
 
-use super::common::{no_namespace_error, no_table_error, print_json, resolve_catalog_from_context};
-use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate, TableContext};
+use super::common::{no_namespace_error, no_table_error, print_json, resolve_catalog};
+use crate::cli::parser::{CliTableContext, GenerateArgs, SchemaTemplate as CliSchemaTemplate};
 use crate::core::format_bytes;
 use crate::core::operations::generate::{
     ExistingTableInfo, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
@@ -20,9 +20,9 @@ pub struct GenerateCommand;
 
 impl GenerateCommand {
     /// Execute generate command
-    pub async fn execute(args: GenerateArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: GenerateArgs, ctx: &CliTableContext) -> Result<()> {
         // Resolve catalog context (error propagates with full context)
-        let catalog = resolve_catalog_from_context(ctx, args.catalog.as_deref()).await?;
+        let catalog = resolve_catalog(ctx, args.catalog.as_deref()).await?;
 
         // Must have namespace
         let namespace = catalog.namespace().ok_or_else(no_namespace_error)?;
@@ -49,11 +49,11 @@ impl GenerateCommand {
             // Check existing table info for append confirmation
             if !args.force {
                 let existing_info = GenerateOperation::table_exists(&location).await;
-                if let Some(ref info) = existing_info {
-                    if !Self::confirm_append(info)? {
-                        println!("{}", "Operation cancelled.".yellow());
-                        return Ok(());
-                    }
+                if let Some(ref info) = existing_info
+                    && !Self::confirm_append(info)?
+                {
+                    println!("{}", "Operation cancelled.".yellow());
+                    return Ok(());
                 }
             }
             table

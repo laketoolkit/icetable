@@ -6,8 +6,8 @@
 
 use colored::Colorize;
 
-use super::common::{CatalogResolution, no_namespace_error, resolve_catalog_from_context};
-use crate::cli::parser::{DeleteArgs, TableContext};
+use super::common::{CatalogResolution, no_namespace_error, resolve_catalog};
+use crate::cli::parser::{CliTableContext, DeleteArgs};
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
@@ -16,14 +16,14 @@ pub struct DeleteCommand;
 
 impl DeleteCommand {
     /// Execute delete command
-    pub async fn execute(args: DeleteArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: DeleteArgs, ctx: &CliTableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: DeleteArgs, ctx: &TableContext) -> Result<()> {
+    async fn execute_inner(args: DeleteArgs, ctx: &CliTableContext) -> Result<()> {
         // Resolve catalog context (error propagates with full context)
-        let catalog = resolve_catalog_from_context(ctx, args.catalog.as_deref()).await?;
+        let catalog = resolve_catalog(ctx, args.catalog.as_deref()).await?;
 
         // Must have namespace
         let namespace = catalog.namespace().ok_or_else(no_namespace_error)?;

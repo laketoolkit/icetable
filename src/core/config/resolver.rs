@@ -10,12 +10,12 @@ use crate::error::{Error, Result};
 pub enum ResolvedTable {
     /// Direct path to table
     Path(String),
-    /// Reference via catalog
+    /// Reference via catalog (boxed to reduce enum size)
     Catalog {
         /// Name of the catalog in config
         catalog_name: String,
-        /// Configuration for the catalog
-        catalog_config: CatalogConfig,
+        /// Configuration for the catalog (boxed to reduce variant size)
+        catalog_config: Box<CatalogConfig>,
         /// Table identifier within the catalog (namespace.table)
         table_name: String,
     },
@@ -139,7 +139,7 @@ mod tests {
 
         let catalog = ResolvedTable::Catalog {
             catalog_name: "nessie".to_string(),
-            catalog_config: CatalogConfig::rest("http://localhost"),
+            catalog_config: Box::new(CatalogConfig::rest("http://localhost")),
             table_name: "analytics.events".to_string(),
         };
         assert_eq!(catalog.display_name(), "nessie.analytics.events");
@@ -152,7 +152,7 @@ mod tests {
 
         let catalog = ResolvedTable::Catalog {
             catalog_name: "test".to_string(),
-            catalog_config: CatalogConfig::rest("http://localhost"),
+            catalog_config: Box::new(CatalogConfig::rest("http://localhost")),
             table_name: "table".to_string(),
         };
         assert_eq!(catalog.as_path(), None);
@@ -165,7 +165,7 @@ mod tests {
 
         let catalog = ResolvedTable::Catalog {
             catalog_name: "test".to_string(),
-            catalog_config: CatalogConfig::rest("http://localhost"),
+            catalog_config: Box::new(CatalogConfig::rest("http://localhost")),
             table_name: "table".to_string(),
         };
         assert!(catalog.is_catalog());

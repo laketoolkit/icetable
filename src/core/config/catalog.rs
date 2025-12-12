@@ -244,12 +244,11 @@ impl CatalogConfig {
         props.extend(self.auth.to_properties()?);
 
         // Legacy credential support (if auth is None)
-        if matches!(self.auth, CatalogAuth::None) {
-            if let Some(ref cred) = self.credential {
-                if let Some(token) = cred.resolve()? {
-                    props.insert("credential".to_string(), token);
-                }
-            }
+        if matches!(self.auth, CatalogAuth::None)
+            && let Some(ref cred) = self.credential
+            && let Some(token) = cred.resolve()?
+        {
+            props.insert("credential".to_string(), token);
         }
 
         // Add custom properties

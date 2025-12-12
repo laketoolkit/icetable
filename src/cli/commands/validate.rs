@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use super::common::{create_spinner, print_json, resolve_table_from_context};
-use crate::cli::parser::{TableContext, ValidateArgs};
+use crate::cli::parser::{CliTableContext, ValidateArgs};
 use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::create_object_store;
@@ -18,12 +18,12 @@ pub struct ValidateCommand;
 
 impl ValidateCommand {
     /// Execute validate command
-    pub async fn execute(args: ValidateArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: ValidateArgs, ctx: &CliTableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for validation
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: ValidateArgs, ctx: &TableContext) -> Result<()> {
+    async fn execute_inner(args: ValidateArgs, ctx: &CliTableContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 

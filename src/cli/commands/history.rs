@@ -7,7 +7,7 @@ use colored::Colorize;
 
 use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::format_datetime_utc;
-use crate::cli::parser::{HistoryArgs, TableContext};
+use crate::cli::parser::{CliTableContext, HistoryArgs};
 use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
@@ -17,12 +17,12 @@ pub struct HistoryCommand;
 
 impl HistoryCommand {
     /// Execute history command
-    pub async fn execute(args: HistoryArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: HistoryArgs, ctx: &CliTableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for history
         with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: HistoryArgs, ctx: &TableContext) -> Result<()> {
+    async fn execute_inner(args: HistoryArgs, ctx: &CliTableContext) -> Result<()> {
         // 1. Resolve table (supports catalog resolution)
         let resolution = resolve_table_from_context(ctx).await?;
 

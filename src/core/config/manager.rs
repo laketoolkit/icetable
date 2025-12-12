@@ -228,14 +228,14 @@ impl Config {
         }
 
         // 2. Check if it's a catalog.table reference (catalog.namespace.table or catalog.table)
-        if let Some((first, rest)) = name_or_path.split_once('.') {
-            if let Some(catalog) = self.catalogs.get(first) {
-                return Ok(ResolvedTable::Catalog {
-                    catalog_name: first.to_string(),
-                    catalog_config: catalog.clone(),
-                    table_name: rest.to_string(),
-                });
-            }
+        if let Some((first, rest)) = name_or_path.split_once('.')
+            && let Some(catalog) = self.catalogs.get(first)
+        {
+            return Ok(ResolvedTable::Catalog {
+                catalog_name: first.to_string(),
+                catalog_config: Box::new(catalog.clone()),
+                table_name: rest.to_string(),
+            });
         }
 
         // 3. Check if it's a table alias
@@ -245,22 +245,22 @@ impl Config {
 
         // 4. If we have a current catalog context, try to use it
         //    e.g., context=polaris.demo + input=events → polaris catalog with demo.events
-        if let Some(catalog_name) = self.get_current_catalog() {
-            if let Some(catalog) = self.catalogs.get(catalog_name) {
-                // Get namespace from context or catalog default
-                let namespace = self
-                    .get_current_namespace()
-                    .or_else(|| catalog.default_namespace.clone());
+        if let Some(catalog_name) = self.get_current_catalog()
+            && let Some(catalog) = self.catalogs.get(catalog_name)
+        {
+            // Get namespace from context or catalog default
+            let namespace = self
+                .get_current_namespace()
+                .or_else(|| catalog.default_namespace.clone());
 
-                if let Some(ns) = namespace {
-                    // Combine namespace.table
-                    let table_name = format!("{}.{}", ns, name_or_path);
-                    return Ok(ResolvedTable::Catalog {
-                        catalog_name: catalog_name.to_string(),
-                        catalog_config: catalog.clone(),
-                        table_name,
-                    });
-                }
+            if let Some(ns) = namespace {
+                // Combine namespace.table
+                let table_name = format!("{}.{}", ns, name_or_path);
+                return Ok(ResolvedTable::Catalog {
+                    catalog_name: catalog_name.to_string(),
+                    catalog_config: Box::new(catalog.clone()),
+                    table_name,
+                });
             }
         }
 

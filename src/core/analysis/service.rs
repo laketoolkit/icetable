@@ -113,23 +113,20 @@ impl AnalyzeService {
         }
 
         // Use native scan API - automatically filters deleted files
-        let scan = table.scan().build().map_err(|e| Error::Parse {
-            message: format!("Failed to build scan: {}", e),
-            source: Some(Box::new(e)),
+        let scan = table.scan().build().map_err(|e| Error::IcebergScan {
+            source: Box::new(e),
         })?;
 
         let tasks: Vec<_> = scan
             .plan_files()
             .await
-            .map_err(|e| Error::Parse {
-                message: format!("Failed to plan files: {}", e),
-                source: Some(Box::new(e)),
+            .map_err(|e| Error::IcebergScan {
+                source: Box::new(e),
             })?
             .try_collect()
             .await
-            .map_err(|e| Error::Parse {
-                message: format!("Failed to collect tasks: {}", e),
-                source: Some(Box::new(e)),
+            .map_err(|e| Error::IcebergScan {
+                source: Box::new(e),
             })?;
 
         let files: Vec<DataFileInfo> = tasks
@@ -248,9 +245,8 @@ impl AnalyzeService {
         let manifest_list = snapshot
             .load_manifest_list(service.file_io(), metadata.as_ref())
             .await
-            .map_err(|e| Error::Parse {
-                message: format!("Failed to load manifest list: {}", e),
-                source: Some(Box::new(e)),
+            .map_err(|e| Error::IcebergScan {
+                source: Box::new(e),
             })?;
 
         let total_manifests = manifest_list.entries().len();
@@ -354,23 +350,20 @@ impl AnalyzeService {
                     .scan()
                     .snapshot_id(snapshot.snapshot_id())
                     .build()
-                    .map_err(|e| Error::Parse {
-                        message: format!("Failed to build scan: {}", e),
-                        source: Some(Box::new(e)),
+                    .map_err(|e| Error::IcebergScan {
+                        source: Box::new(e),
                     })?;
 
                 let tasks: Vec<_> = scan
                     .plan_files()
                     .await
-                    .map_err(|e| Error::Parse {
-                        message: format!("Failed to plan files: {}", e),
-                        source: Some(Box::new(e)),
+                    .map_err(|e| Error::IcebergScan {
+                        source: Box::new(e),
                     })?
                     .try_collect()
                     .await
-                    .map_err(|e| Error::Parse {
-                        message: format!("Failed to collect tasks: {}", e),
-                        source: Some(Box::new(e)),
+                    .map_err(|e| Error::IcebergScan {
+                        source: Box::new(e),
                     })?;
 
                 for task in tasks {
@@ -440,9 +433,9 @@ pub async fn get_partition_stats(
     // Create metadata service to list files
     let service = IcebergMetadataService::new_async(table_path.to_string())
         .await
-        .map_err(|e| Error::Parse {
-            message: format!("Failed to load table: {}", e),
-            source: None,
+        .map_err(|e| Error::IcebergLoad {
+            path: table_path.to_string(),
+            source: Box::new(e),
         })?;
 
     // Get all data files

@@ -248,7 +248,7 @@ pub enum Commands {
 /// Contains the global options from CLI that are relevant to table operations.
 /// This is passed to commands instead of individual parameters.
 #[derive(Debug, Clone)]
-pub struct TableContext {
+pub struct CliTableContext {
     /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
     pub table: Option<String>,
     /// Namespace (e.g., "db.schema")
@@ -257,7 +257,7 @@ pub struct TableContext {
     pub catalog_config: Option<crate::core::CatalogConfig>,
 }
 
-impl TableContext {
+impl CliTableContext {
     /// Get the full table reference, combining namespace and table if both are present
     ///
     /// If both namespace and table are specified, returns "namespace.table".
@@ -313,8 +313,8 @@ impl Cli {
     }
 
     /// Build table context from CLI global options
-    pub fn table_context(&self) -> TableContext {
-        TableContext {
+    pub fn table_context(&self) -> CliTableContext {
+        CliTableContext {
             table: self.table.clone(),
             namespace: self.namespace.clone(),
             catalog_config: self.catalog_config(),

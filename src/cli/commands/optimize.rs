@@ -11,7 +11,9 @@ use colored::Colorize;
 use super::common::{
     TableResolution, print_dry_run_header, print_json, resolve_table_from_context,
 };
-use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs, TableContext};
+use crate::cli::parser::{
+    CliTableContext, OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs,
+};
 use crate::core::maintenance::{
     MaintenanceConfig, ManifestConfig, ManifestService, OptimizeService,
 };
@@ -26,7 +28,7 @@ pub struct OptimizeCommand;
 
 impl OptimizeCommand {
     /// Execute optimize command
-    pub async fn execute(cmd: OptimizeCommands, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(cmd: OptimizeCommands, ctx: &CliTableContext) -> Result<()> {
         match cmd {
             OptimizeCommands::Data(args) => Self::execute_data(args, ctx).await,
             OptimizeCommands::Manifests(args) => Self::execute_manifests(args, ctx).await,
@@ -34,7 +36,7 @@ impl OptimizeCommand {
     }
 
     /// Execute optimize data subcommand
-    async fn execute_data(args: OptimizeDataArgs, ctx: &TableContext) -> Result<()> {
+    async fn execute_data(args: OptimizeDataArgs, ctx: &CliTableContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 
@@ -80,7 +82,7 @@ impl OptimizeCommand {
     }
 
     /// Execute optimize manifests subcommand
-    async fn execute_manifests(args: OptimizeManifestsArgs, ctx: &TableContext) -> Result<()> {
+    async fn execute_manifests(args: OptimizeManifestsArgs, ctx: &CliTableContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 

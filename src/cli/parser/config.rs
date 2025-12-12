@@ -17,7 +17,7 @@ pub enum ConfigCommands {
     Use(ConfigUseArgs),
 
     /// Add a table alias or catalog (inferred from URI scheme)
-    Add(ConfigAddArgs),
+    Add(Box<ConfigAddArgs>),
 
     /// Delete a table alias or catalog
     Delete(ConfigDeleteArgs),

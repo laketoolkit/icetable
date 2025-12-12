@@ -14,6 +14,7 @@ pub mod inspection;
 pub mod maintenance;
 pub mod metadata;
 pub mod operations;
+pub mod resolution;
 pub mod storage;
 pub mod table_loader;
 pub mod validation;
@@ -33,6 +34,12 @@ pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
 pub use storage::{ObjectStoreExt, Storage, create_object_store};
 pub use table_loader::{TableExt, TableLoader};
+
+// Re-export resolution types for table/catalog resolution
+pub use resolution::{
+    CatalogContext, CatalogResolution, TableResolution, no_catalog_error, no_namespace_error,
+    no_table_error, resolve_catalog_from_context, resolve_table, resolve_table_path,
+};
 
 // Re-export formatting utilities for consistent access across CLI
 pub use inspection::formatters::{

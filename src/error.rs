@@ -356,6 +356,52 @@ pub enum Error {
         /// Description of what failed
         message: String,
     },
+
+    /// Branch not found
+    #[error("Branch not found: {name}")]
+    BranchNotFound {
+        /// The branch name that was not found
+        name: String,
+    },
+
+    /// Tag not found
+    #[error("Tag not found: {name}")]
+    TagNotFound {
+        /// The tag name that was not found
+        name: String,
+    },
+
+    /// Invalid snapshot reference
+    #[error("Invalid snapshot reference '{reference}': {reason}")]
+    InvalidSnapshotRef {
+        /// The invalid reference string
+        reference: String,
+        /// Why it's invalid
+        reason: String,
+    },
+
+    /// Table already exists
+    #[error("Table already exists: {path}")]
+    TableAlreadyExists {
+        /// The path to the existing table
+        path: String,
+    },
+
+    /// Namespace already exists
+    #[error("Namespace already exists: {name}")]
+    NamespaceAlreadyExists {
+        /// The namespace name
+        name: String,
+    },
+
+    /// Invalid filter expression (partition filter, predicate, etc.)
+    #[error("Invalid filter expression '{expression}': {reason}")]
+    InvalidFilterExpression {
+        /// The invalid expression string
+        expression: String,
+        /// Why it's invalid
+        reason: String,
+    },
 }
 
 /// Result type alias for TableTools operations
@@ -436,9 +482,21 @@ impl Error {
 
 impl From<iceberg::Error> for Error {
     fn from(error: iceberg::Error) -> Self {
-        Error::Parse {
-            message: format!("Iceberg error: {}", error),
-            source: Some(Box::new(error)),
+        use iceberg::ErrorKind;
+
+        let message = error.to_string();
+        match error.kind() {
+            ErrorKind::DataInvalid => Error::DataValidation { message },
+            ErrorKind::FeatureUnsupported => Error::UnsupportedFeature { feature: message },
+            ErrorKind::TableNotFound => Error::TableNotFound { path: message },
+            ErrorKind::NamespaceNotFound => Error::NamespaceNotFound { name: message },
+            ErrorKind::TableAlreadyExists => Error::TableAlreadyExists { path: message },
+            ErrorKind::NamespaceAlreadyExists => Error::NamespaceAlreadyExists { name: message },
+            ErrorKind::CatalogCommitConflicts => Error::Conflict(message),
+            ErrorKind::PreconditionFailed => Error::Conflict(format!("Precondition failed: {}", message)),
+            ErrorKind::Unexpected => Error::Metadata { message },
+            // Handle future ErrorKind variants
+            _ => Error::Metadata { message },
         }
     }
 }

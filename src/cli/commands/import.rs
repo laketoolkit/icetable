@@ -6,7 +6,7 @@
 use colored::Colorize;
 
 use super::common::{print_dry_run_header, resolve_table};
-use crate::cli::parser::{ImportDeltaArgs, ImportParquetArgs, TableContext};
+use crate::cli::parser::{CliTableContext, ImportDeltaArgs, ImportParquetArgs};
 use crate::core::extract_filename;
 use crate::core::format_bytes;
 use crate::core::operations::{ImportConfig, ImportService};
@@ -19,13 +19,13 @@ pub struct ImportCommand;
 
 impl ImportCommand {
     /// Import from Delta Lake table
-    pub async fn delta(args: ImportDeltaArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn delta(args: ImportDeltaArgs, ctx: &CliTableContext) -> Result<()> {
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for Delta operations
         with_resource_limits(ESTIMATED_MEMORY, Self::delta_inner(args, ctx)).await
     }
 
-    async fn delta_inner(args: ImportDeltaArgs, ctx: &TableContext) -> Result<()> {
+    async fn delta_inner(args: ImportDeltaArgs, ctx: &CliTableContext) -> Result<()> {
         use deltalake::DeltaTableBuilder;
 
         println!(
@@ -127,13 +127,13 @@ impl ImportCommand {
     }
 
     /// Import from Parquet files
-    pub async fn parquet(args: ImportParquetArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn parquet(args: ImportParquetArgs, ctx: &CliTableContext) -> Result<()> {
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for Parquet operations
         with_resource_limits(ESTIMATED_MEMORY, Self::parquet_inner(args, ctx)).await
     }
 
-    async fn parquet_inner(args: ImportParquetArgs, ctx: &TableContext) -> Result<()> {
+    async fn parquet_inner(args: ImportParquetArgs, ctx: &CliTableContext) -> Result<()> {
         println!(
             "{} Parquet files from {} to Iceberg at {}",
             if args.dry_run {

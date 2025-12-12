@@ -292,11 +292,11 @@ impl RestCatalogClient {
             })?;
 
         // If purge requested and we have a location, delete storage
-        if let Some(location) = table_location {
-            if let Err(e) = Self::purge_table_storage(&location).await {
-                // Log warning but don't fail - catalog drop succeeded
-                eprintln!("Warning: Failed to purge storage at {}: {}", location, e);
-            }
+        if let Some(location) = table_location
+            && let Err(e) = Self::purge_table_storage(&location).await
+        {
+            // Log warning but don't fail - catalog drop succeeded
+            eprintln!("Warning: Failed to purge storage at {}: {}", location, e);
         }
 
         Ok(())

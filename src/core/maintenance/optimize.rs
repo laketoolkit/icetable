@@ -508,20 +508,20 @@ impl OptimizeService {
         }
 
         // For gs:// (GCS) URLs
-        if let Some(gcs_path) = path.strip_prefix("gs://") {
-            if let Some(slash_pos) = gcs_path.find('/') {
-                let object_path = &gcs_path[slash_pos + 1..];
-                return Ok(ObjectPath::from(object_path));
-            }
+        if let Some(gcs_path) = path.strip_prefix("gs://")
+            && let Some(slash_pos) = gcs_path.find('/')
+        {
+            let object_path = &gcs_path[slash_pos + 1..];
+            return Ok(ObjectPath::from(object_path));
         }
 
         // For az:// or azure:// URLs
         for prefix in ["az://", "azure://"] {
-            if let Some(az_path) = path.strip_prefix(prefix) {
-                if let Some(slash_pos) = az_path.find('/') {
-                    let object_path = &az_path[slash_pos + 1..];
-                    return Ok(ObjectPath::from(object_path));
-                }
+            if let Some(az_path) = path.strip_prefix(prefix)
+                && let Some(slash_pos) = az_path.find('/')
+            {
+                let object_path = &az_path[slash_pos + 1..];
+                return Ok(ObjectPath::from(object_path));
             }
         }
 

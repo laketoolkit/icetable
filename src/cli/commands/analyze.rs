@@ -8,7 +8,7 @@ use comfy_table::{Cell, CellAlignment};
 
 use super::common::{create_spinner, extract_table_name, print_json, resolve_table_from_context};
 use crate::cli::output::create_styled_table;
-use crate::cli::parser::{AnalyzeArgs, TableContext};
+use crate::cli::parser::{AnalyzeArgs, CliTableContext};
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
@@ -22,7 +22,7 @@ pub struct AnalyzeCommand;
 
 impl AnalyzeCommand {
     /// Execute analyze command
-    pub async fn execute(args: AnalyzeArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: AnalyzeArgs, ctx: &CliTableContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 

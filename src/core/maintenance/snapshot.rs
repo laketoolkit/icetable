@@ -419,7 +419,7 @@ impl SnapshotService {
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let backup_file = metadata_dir.join(format!("{}.{}.backup", metadata_filename, timestamp));
 
-        std::fs::copy(&metadata_file, &backup_file).map_err(|e| Error::Metadata {
+        std::fs::copy(&metadata_file, &backup_file).map_err(|e| Error::Storage {
             message: format!("Failed to create backup: {}", e),
         })?;
 

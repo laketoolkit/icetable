@@ -7,8 +7,8 @@
 
 use colored::Colorize;
 
-use super::common::{CatalogResolution, print_json, resolve_catalog_from_context};
-use crate::cli::parser::{LsArgs, TableContext};
+use super::common::{CatalogResolution, print_json, resolve_catalog};
+use crate::cli::parser::{CliTableContext, LsArgs};
 use crate::core::metadata::{IcebergMetadataService, MetadataService};
 use crate::error::Result;
 
@@ -22,9 +22,9 @@ pub struct LsCommand;
 
 impl LsCommand {
     /// Execute ls command
-    pub async fn execute(args: LsArgs, ctx: &TableContext) -> Result<()> {
+    pub async fn execute(args: LsArgs, ctx: &CliTableContext) -> Result<()> {
         // Resolve catalog context (error propagates with full context)
-        let catalog = resolve_catalog_from_context(ctx, args.catalog.as_deref()).await?;
+        let catalog = resolve_catalog(ctx, args.catalog.as_deref()).await?;
 
         // If we have a table in context, show table info
         if let (Some(table_name), Some(ns)) = (catalog.table(), catalog.namespace()) {

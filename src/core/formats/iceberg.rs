@@ -519,7 +519,7 @@ impl FormatHandler for IcebergHandler {
 
         // Ensure data directory exists
         let data_dir = format!("{}/data", table_path);
-        std::fs::create_dir_all(&data_dir).map_err(|e| Error::Metadata {
+        std::fs::create_dir_all(&data_dir).map_err(|e| Error::Storage {
             message: format!("Failed to create data dir: {}", e),
         })?;
 
@@ -554,7 +554,7 @@ impl FormatHandler for IcebergHandler {
         let schema = Arc::new(arrow::datatypes::Schema::new(fields_with_ids));
 
         // Write batches to parquet
-        let file = File::create(&parquet_path).map_err(|e| Error::Metadata {
+        let file = File::create(&parquet_path).map_err(|e| Error::Storage {
             message: format!("Failed to create parquet file: {}", e),
         })?;
         let props = WriterProperties::builder().build();

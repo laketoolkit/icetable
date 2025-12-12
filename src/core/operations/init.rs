@@ -66,7 +66,7 @@ impl InitService {
         let table_path = Path::new(&config.path);
 
         // Create table directory structure
-        fs::create_dir_all(table_path).map_err(|e| Error::Metadata {
+        fs::create_dir_all(table_path).map_err(|e| Error::Storage {
             message: format!(
                 "Failed to create table directory '{}': {}",
                 table_path.display(),
@@ -75,12 +75,12 @@ impl InitService {
         })?;
 
         let metadata_dir = table_path.join("metadata");
-        fs::create_dir_all(&metadata_dir).map_err(|e| Error::Metadata {
+        fs::create_dir_all(&metadata_dir).map_err(|e| Error::Storage {
             message: format!("Failed to create metadata directory: {}", e),
         })?;
 
         let data_dir = table_path.join("data");
-        fs::create_dir_all(&data_dir).map_err(|e| Error::Metadata {
+        fs::create_dir_all(&data_dir).map_err(|e| Error::Storage {
             message: format!("Failed to create data directory: {}", e),
         })?;
 
@@ -134,7 +134,7 @@ impl InitService {
         let initial_location = new_metadata_location(&location);
         let metadata_filename = metadata_location_filename(&initial_location);
         let metadata_file = metadata_dir.join(&metadata_filename);
-        fs::write(&metadata_file, metadata_json).map_err(|e| Error::Metadata {
+        fs::write(&metadata_file, metadata_json).map_err(|e| Error::Storage {
             message: format!("Failed to write metadata file: {}", e),
         })?;
 
@@ -147,7 +147,7 @@ impl InitService {
 
     /// Load schema definition from a JSON file
     pub fn load_schema_from_file(path: &Path) -> Result<SchemaDefinition> {
-        let content = std::fs::read_to_string(path).map_err(|e| Error::Metadata {
+        let content = std::fs::read_to_string(path).map_err(|e| Error::Storage {
             message: format!("Failed to read schema file '{}': {}", path.display(), e),
         })?;
 

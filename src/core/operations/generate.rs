@@ -221,11 +221,11 @@ impl GenerateOperation {
             })?;
 
             for df in data_files {
-                total_bytes += df.file_size_in_bytes() as u64;
+                total_bytes += df.file_size_in_bytes();
                 data_files_info.push(DataFileInfo {
                     path: df.file_path().to_string(),
-                    size: df.file_size_in_bytes() as u64,
-                    record_count: df.record_count() as u64,
+                    size: df.file_size_in_bytes(),
+                    record_count: df.record_count(),
                     partition: HashMap::new(),
                 });
                 all_data_files.push(df);
@@ -245,10 +245,7 @@ impl GenerateOperation {
         // tracking what changed in each snapshot.
         let added_records: u64 = all_data_files.iter().map(|f| f.record_count()).sum();
         let added_data_files_count = all_data_files.len() as u32;
-        let added_file_size: u64 = all_data_files
-            .iter()
-            .map(|f| f.file_size_in_bytes() as u64)
-            .sum();
+        let added_file_size: u64 = all_data_files.iter().map(|f| f.file_size_in_bytes()).sum();
 
         // Build snapshot properties with added stats only
         // Note: total-* properties are calculated by iceberg-rs update_snapshot_summaries()

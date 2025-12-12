@@ -28,7 +28,7 @@ impl ConfigCommand {
     async fn execute_inner(args: ConfigArgs) -> Result<()> {
         match args.command {
             ConfigCommands::Use(args) => Self::use_context(args).await,
-            ConfigCommands::Add(args) => Self::add(args).await,
+            ConfigCommands::Add(args) => Self::add(*args).await,
             ConfigCommands::Delete(args) => Self::delete(args).await,
             ConfigCommands::Ls(args) => Self::ls(args).await,
         }
@@ -119,10 +119,10 @@ impl ConfigCommand {
         // Build output message
         let mut parts = vec![name.cyan().to_string()];
 
-        if let Some(cat_config) = config.catalogs.get(name) {
-            if let Some(ref ns) = cat_config.default_namespace {
-                parts.push(ns.cyan().to_string());
-            }
+        if let Some(cat_config) = config.catalogs.get(name)
+            && let Some(ref ns) = cat_config.default_namespace
+        {
+            parts.push(ns.cyan().to_string());
         }
 
         if let Some(ref table) = args.table {
