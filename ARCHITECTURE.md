@@ -128,13 +128,26 @@ This allows:
 ```
 cli/
 ├── commands/
-│   ├── inspect.rs      # Table inspection
-│   ├── vacuum.rs       # Remove orphan files
-│   ├── optimize.rs     # Compact small files
 │   ├── analyze.rs      # Table health analysis
-│   ├── history.rs      # Snapshot history
-│   ├── stats.rs        # Partition statistics
+│   ├── common.rs       # Shared CLI utilities
+│   ├── config.rs       # Configuration management
+│   ├── create.rs       # Create tables/namespaces
+│   ├── delete.rs       # Delete tables/namespaces
+│   ├── diff.rs         # Compare snapshots
+│   ├── doctor.rs       # Environment diagnostics
 │   ├── generate.rs     # Test data generation
+│   ├── history.rs      # Snapshot history
+│   ├── import.rs       # Delta Lake import
+│   ├── init.rs         # Initialize new table
+│   ├── inspect.rs      # Table inspection
+│   ├── ls.rs           # List catalog contents
+│   ├── optimize.rs     # Compact small files
+│   ├── refs.rs         # Branch/tag management
+│   ├── repair.rs       # Fix table metadata
+│   ├── snapshot.rs     # Snapshot management
+│   ├── stats.rs        # Partition statistics
+│   ├── tui.rs          # Terminal UI (experimental)
+│   ├── vacuum.rs       # Remove orphan files
 │   └── validate.rs     # Schema/data validation
 └── output/
     ├── box_section.rs  # Box-frame rendering
@@ -146,6 +159,21 @@ cli/
 
 ```
 core/
+├── analysis/           # Table health analysis
+│   └── service.rs      # AnalysisService
+├── arrow_compat.rs     # Arrow version compatibility
+├── catalog/            # Catalog integration (REST, etc.)
+│   ├── client.rs       # CatalogClient
+│   ├── rest.rs         # REST catalog implementation
+│   └── traits.rs       # Catalog traits
+├── commit/             # Table commit operations
+│   └── mod.rs          # TableCommitter
+├── config/             # Configuration and resolution
+│   ├── mod.rs          # CatalogConfig, CatalogAuth
+│   └── resolver.rs     # Config-based table resolution
+├── context.rs          # TableContext for execution
+├── formats/            # Format detection and conversion
+│   └── mod.rs          # Format utilities
 ├── inspection/
 │   ├── iceberg/        # Iceberg inspector (modularized)
 │   │   ├── mod.rs      # IcebergInspector
@@ -157,30 +185,31 @@ core/
 │   ├── traits.rs       # PhysicalInspector trait
 │   ├── registry.rs     # Inspector discovery
 │   └── view_builder.rs # View construction
-├── metadata/
-│   ├── iceberg.rs      # IcebergMetadataService
-│   └── traits.rs       # MetadataService trait
 ├── maintenance/
+│   ├── doctor/         # DoctorService (env diagnostics)
 │   ├── vacuum.rs       # VacuumService
 │   ├── optimize.rs     # OptimizeService
 │   ├── manifest.rs     # Manifest operations
 │   └── snapshot.rs     # Snapshot management
+├── metadata/
+│   ├── iceberg.rs      # IcebergMetadataService
+│   └── traits.rs       # MetadataService trait
 ├── operations/
-│   ├── inspect.rs      # High-level inspect
 │   ├── generate.rs     # Data generation
 │   └── transform/      # Data transformations
 │       ├── pipeline.rs # Transform pipeline
 │       ├── filter.rs   # Row filtering
 │       └── project.rs  # Column projection
+├── resolution.rs       # TableResolution, CatalogResolution
 ├── storage/
 │   ├── traits.rs       # StorageBackend trait
 │   ├── local.rs        # Local filesystem
 │   ├── s3.rs           # Amazon S3
 │   ├── gcs.rs          # Google Cloud Storage
 │   └── factory.rs      # Backend factory
-└── catalog/
-    ├── config.rs       # Catalog configuration
-    └── mod.rs          # Catalog integration
+├── table_loader.rs     # TableLoader for Iceberg tables
+└── validation/         # Data validation
+    └── mod.rs          # Validation utilities
 ```
 
 ### `src/utils/`
@@ -189,14 +218,77 @@ Shared utilities used across the codebase:
 
 ```
 utils/
-├── time.rs             # Timestamp parsing
+├── box_frame.rs        # Box-frame rendering utilities
+├── cancellation.rs     # Graceful cancellation (Ctrl+C)
+├── logging.rs          # Log configuration
+├── progress.rs         # Progress indicators
 ├── resources.rs        # Memory/concurrency limits
-├── credentials.rs      # Credential resolution
-├── cancellation.rs     # Graceful cancellation
+├── telemetry.rs        # Usage telemetry (opt-in)
+├── text.rs             # Text formatting utilities
+├── time.rs             # Timestamp parsing
+├── types.rs            # Shared type definitions
 └── core/
     ├── format_detection.rs  # Auto-detect table format
+    ├── fs.rs                # Filesystem utilities
+    ├── iceberg.rs           # Iceberg-specific utilities
+    ├── parquet.rs           # Parquet utilities
     └── snapshot.rs          # Snapshot utilities
 ```
+
+## Table Resolution
+
+The resolution system (`core/resolution.rs`) provides a unified way to resolve table references
+from various sources. This is central to the "Thin CLI, Fat Core" principle.
+
+### Resolution Types
+
+```rust
+// Path-based or catalog-based table resolution
+pub enum TableResolution {
+    Path(String),                    // Direct storage path
+    CatalogTable {                   // Loaded from catalog
+        table: Box<IcebergTable>,
+        namespace: Vec<String>,
+        name: String,
+        catalog_config: Box<CatalogConfig>,
+    },
+}
+
+// Catalog-level resolution for ls, create, delete
+pub struct CatalogResolution {
+    catalog_name: String,
+    catalog_config: CatalogConfig,
+    namespace: Option<String>,
+    table: Option<String>,
+    client: RestCatalogClient,
+}
+```
+
+### Resolution Priority
+
+1. CLI `--catalog-uri` argument (explicit catalog)
+2. Config context (`icetable config use`)
+3. Direct path (if provided)
+
+### Factory Methods
+
+`TableResolution` provides factory methods to create services:
+
+```rust
+// Read-only operations (analyze, inspect, list)
+let service = resolution.to_readonly_service().await?;
+
+// Write operations (optimize, repair, expire)
+let service = resolution.to_writable_service(catalog, branch).await?;
+
+// Direct table access
+let table = resolution.to_table().await?;
+```
+
+This ensures:
+- Catalog tables use proper commit semantics
+- Direct paths write to storage without catalog tracking
+- Consistent behavior across all commands
 
 ## Key Data Flows
 
@@ -241,22 +333,53 @@ utils/
 
 ## Error Handling
 
-All fallible operations return `Result<T, Error>` where `Error` is defined in `src/error.rs`:
+All fallible operations return `Result<T, Error>` where `Error` is defined in `src/error.rs`.
+The error system uses **semantic error types** - each variant describes a specific failure mode
+with appropriate context:
 
 ```rust
 pub enum Error {
+    // I/O and storage
     Io(std::io::Error),
-    Storage(StorageError),
-    Metadata(MetadataError),
-    Iceberg(iceberg::Error),
-    Delta(deltalake::DeltaTableError),
+    FileNotFound { path: PathBuf },
+    Storage { message: String },
+    ObjectStore(object_store::Error),
+
+    // Format parsing
+    Parse { message: String, source: Option<...> },
+    InvalidFormat { message: String },
+    CorruptedFile { path: PathBuf, reason: String },
+
+    // Table operations
+    TableNotFound { path: String },
+    TableAlreadyExists { path: String },
+    SnapshotNotFound { snapshot_id: i64 },
+    BranchNotFound { name: String },
+    TagNotFound { name: String },
+
+    // Catalog operations
+    NoCatalog,
+    CatalogNotFound { name: String },
+    NamespaceNotFound { name: String },
+
+    // Data validation
+    DataValidation { message: String },
+    SchemaValidation { message: String },
+    InvalidFilterExpression { expression: String, reason: String },
+
+    // External libraries
     Arrow(arrow::error::ArrowError),
     Parquet(parquet::errors::ParquetError),
-    Config(String),
-    Validation(String),
-    General(String),
+
+    // ... and more (33+ semantic variants)
 }
 ```
+
+Key design principles:
+- **No generic catch-all errors** - each error type is semantically meaningful
+- **Contextual information** - errors include relevant data (paths, IDs, names)
+- **User-friendly messages** - `user_message()` method provides actionable suggestions
+- **Recoverability hints** - `is_recoverable()` indicates if retry might succeed
 
 Errors propagate up to the CLI layer, which formats them for display.
 
