@@ -5,7 +5,7 @@
 
 use colored::Colorize;
 
-use super::common::{TableResolution, create_committer, print_dry_run_header, print_json, resolve_table};
+use super::common::{TableResolution, print_dry_run_header, print_json, resolve_table};
 use crate::cli::output::{create_header_cells, create_styled_table, format_timestamp_ms};
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{SnapshotArgs, SnapshotCommands};
@@ -24,7 +24,8 @@ struct ExpireConfig<'a> {
     dry_run: bool,
     branch: Option<&'a str>,
     output: &'a str,
-    committer: Option<TableCommitter>,
+    resolution: &'a TableResolution,
+    cli_catalog: Option<&'a CatalogConfig>,
 }
 
 /// Configuration for set snapshot operation
@@ -36,7 +37,8 @@ struct SetSnapshotConfig<'a> {
     tag: Option<String>,
     dry_run: bool,
     output: &'a str,
-    committer: Option<TableCommitter>,
+    resolution: &'a TableResolution,
+    cli_catalog: Option<&'a CatalogConfig>,
 }
 
 /// Handler for snapshot command
@@ -52,7 +54,7 @@ impl SnapshotCommand {
     async fn execute_inner(args: SnapshotArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         // Get path from subcommand and resolve via config or catalog
         let subcommand_path = match &args.command {
-            SnapshotCommands::List(a) => &a.path,
+            SnapshotCommands::Ls(a) => &a.path,
             SnapshotCommands::Create(a) => &a.path,
             SnapshotCommands::Expire(a) => &a.path,
             SnapshotCommands::Set(a) => &a.path,
@@ -73,12 +75,9 @@ impl SnapshotCommand {
         catalog_config: Option<CatalogConfig>,
         resolution: &TableResolution,
     ) -> Result<()> {
-        // Create committer based on catalog config and table resolution
-        let committer = create_committer(catalog_config.as_ref(), resolution);
-
         match args.command {
-            SnapshotCommands::List(a) => {
-                Self::iceberg_list(table_path, a.limit, a.all, &a.output).await
+            SnapshotCommands::Ls(a) => {
+                Self::iceberg_list(table_path, a.limit, a.all, &a.output, resolution, catalog_config.as_ref()).await
             }
             SnapshotCommands::Create(a) => {
                 Self::iceberg_create(table_path, a.force, &a.output).await
@@ -92,7 +91,8 @@ impl SnapshotCommand {
                     dry_run: a.dry_run,
                     branch: a.branch.as_deref(),
                     output: &a.output,
-                    committer,
+                    resolution,
+                    cli_catalog: catalog_config.as_ref(),
                 };
                 Self::iceberg_expire(config).await
             }
@@ -105,7 +105,8 @@ impl SnapshotCommand {
                     tag: a.tag,
                     dry_run: a.dry_run,
                     output: &a.output,
-                    committer,
+                    resolution,
+                    cli_catalog: catalog_config.as_ref(),
                 };
                 Self::iceberg_set(config).await
             }
@@ -114,16 +115,32 @@ impl SnapshotCommand {
             }
             SnapshotCommands::Lineage(a) => {
                 let limit = if a.all { None } else { Some(a.limit) };
-                Self::iceberg_lineage(table_path, a.snapshot_id, limit, &a.output).await
+                Self::iceberg_lineage(table_path, a.snapshot_id, limit, &a.output, resolution, catalog_config.as_ref()).await
             }
         }
     }
 
-    async fn iceberg_list(path: &str, limit: usize, all: bool, output: &str) -> Result<()> {
+    async fn iceberg_list(
+        path: &str,
+        limit: usize,
+        all: bool,
+        output: &str,
+        resolution: &TableResolution,
+        cli_catalog: Option<&CatalogConfig>,
+    ) -> Result<()> {
         println!("{} Iceberg snapshots at {}", "Listing".green(), path);
         println!();
 
-        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        // Create metadata service: use catalog table when available for proper metadata consistency
+        let metadata_service = match resolution {
+            TableResolution::CatalogTable { table, .. } => {
+                IcebergMetadataService::from_catalog_table_readonly(table).await?
+            }
+            TableResolution::Path(_) => {
+                IcebergMetadataService::new_async(path.to_string()).await?
+            }
+        };
+        let _ = cli_catalog; // Used for write operations only
         let snapshot_service = SnapshotService::new();
 
         let limit = if all { None } else { Some(limit) };
@@ -195,11 +212,29 @@ impl SnapshotCommand {
     async fn iceberg_expire(cfg: ExpireConfig<'_>) -> Result<()> {
         use std::collections::HashSet;
 
-        let metadata_service = IcebergMetadataService::new_with_branch(
-            cfg.path.to_string(),
-            cfg.branch.map(|s| s.to_string()),
-        )
-        .await?;
+        // Create metadata service: use catalog table when available for proper metadata consistency
+        let metadata_service = match cfg.resolution {
+            TableResolution::CatalogTable { table, namespace, name, catalog_config } => {
+                // Use catalog table's metadata for proper UUID/snapshot consistency
+                let config = cfg.cli_catalog.unwrap_or(catalog_config);
+                let committer = TableCommitter::with_catalog(
+                    config.clone(),
+                    namespace.clone(),
+                    name.clone(),
+                );
+                IcebergMetadataService::from_catalog_table(
+                    table,
+                    cfg.branch.map(|s| s.to_string()),
+                    committer,
+                ).await?
+            }
+            TableResolution::Path(_) => {
+                IcebergMetadataService::new_with_branch(
+                    cfg.path.to_string(),
+                    cfg.branch.map(|s| s.to_string()),
+                ).await?
+            }
+        };
 
         if let Some(b) = cfg.branch {
             println!(
@@ -228,11 +263,8 @@ impl SnapshotCommand {
         let config = SnapshotConfig {
             dry_run: cfg.dry_run,
         };
-        let snapshot_service = if let Some(c) = cfg.committer {
-            SnapshotService::with_committer(config, c)
-        } else {
-            SnapshotService::with_config(config)
-        };
+        // Committer is now embedded in metadata_service, no need to pass separately
+        let snapshot_service = SnapshotService::with_config(config);
 
         let result = snapshot_service
             .expire_snapshots(
@@ -303,15 +335,28 @@ impl SnapshotCommand {
     }
 
     async fn iceberg_set(cfg: SetSnapshotConfig<'_>) -> Result<()> {
-        let metadata_service = IcebergMetadataService::new_async(cfg.path.to_string()).await?;
+        // Create metadata service: use catalog table when available for proper metadata consistency
+        let metadata_service = match cfg.resolution {
+            TableResolution::CatalogTable { table, namespace, name, catalog_config } => {
+                // Use catalog table's metadata for proper UUID/snapshot consistency
+                let config = cfg.cli_catalog.unwrap_or(catalog_config);
+                let committer = TableCommitter::with_catalog(
+                    config.clone(),
+                    namespace.clone(),
+                    name.clone(),
+                );
+                IcebergMetadataService::from_catalog_table(table, None, committer).await?
+            }
+            TableResolution::Path(_) => {
+                // Direct path - read-only analysis, writes will fail
+                IcebergMetadataService::new_async(cfg.path.to_string()).await?
+            }
+        };
+
         let config = SnapshotConfig {
             dry_run: cfg.dry_run,
         };
-        let snapshot_service = if let Some(c) = cfg.committer {
-            SnapshotService::with_committer(config, c)
-        } else {
-            SnapshotService::with_config(config)
-        };
+        let snapshot_service = SnapshotService::with_config(config);
 
         let result = snapshot_service
             .set_current_snapshot(
@@ -358,8 +403,19 @@ impl SnapshotCommand {
         snapshot_id: Option<i64>,
         limit: Option<usize>,
         output: &str,
+        resolution: &TableResolution,
+        cli_catalog: Option<&CatalogConfig>,
     ) -> Result<()> {
-        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await?;
+        // Create metadata service: use catalog table when available for proper metadata consistency
+        let metadata_service = match resolution {
+            TableResolution::CatalogTable { table, .. } => {
+                IcebergMetadataService::from_catalog_table_readonly(table).await?
+            }
+            TableResolution::Path(_) => {
+                IcebergMetadataService::new_async(path.to_string()).await?
+            }
+        };
+        let _ = cli_catalog; // Used for write operations only
         let snapshot_service = SnapshotService::new();
 
         // Delegate to service for business logic

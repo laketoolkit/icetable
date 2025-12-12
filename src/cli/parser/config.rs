@@ -13,121 +13,95 @@ pub struct ConfigArgs {
 /// Config subcommands
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
-    /// Set the current table context
+    /// Set the current context (catalog, namespace, table)
     Use(ConfigUseArgs),
 
-    /// Show the current table context
-    Current(ConfigCurrentArgs),
-
-    /// Unset the current table context
-    Unset(ConfigUnsetArgs),
-
-    /// Add a named table alias
+    /// Add a table alias or catalog (inferred from URI scheme)
     Add(ConfigAddArgs),
 
-    /// Remove a named table alias
-    Remove(ConfigRemoveArgs),
-
-    /// Add a catalog configuration
-    #[command(name = "add-catalog")]
-    AddCatalog(ConfigAddCatalogArgs),
-
-    /// Remove a catalog configuration
-    #[command(name = "remove-catalog")]
-    RemoveCatalog(ConfigRemoveCatalogArgs),
+    /// Delete a table alias or catalog
+    Delete(ConfigDeleteArgs),
 
     /// List all configured tables and catalogs
-    List(ConfigListArgs),
+    Ls(ConfigLsArgs),
 }
 
 /// Arguments for config use
 #[derive(Parser, Debug)]
 pub struct ConfigUseArgs {
-    /// Table path or alias name to use as default
-    pub table: String,
+    /// Catalog or table name to use
+    pub name: Option<String>,
+
+    /// Namespace (only for catalogs)
+    #[arg(short, long)]
+    pub namespace: Option<String>,
+
+    /// Table within namespace (only for catalogs)
+    #[arg(short, long)]
+    pub table: Option<String>,
 }
 
-/// Arguments for config current
-#[derive(Parser, Debug)]
-pub struct ConfigCurrentArgs {
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
-    pub output: String,
-}
-
-/// Arguments for config unset
-#[derive(Parser, Debug)]
-pub struct ConfigUnsetArgs {}
-
-/// Arguments for config add
+/// Arguments for config add (table alias or catalog, inferred from URI)
 #[derive(Parser, Debug)]
 pub struct ConfigAddArgs {
-    /// Alias name for the table
+    /// Name (alias for table, or catalog name)
     pub name: String,
 
-    /// Table path (local or s3://, gs://, etc.)
-    pub path: String,
-
-    /// Optional description
-    #[arg(short, long)]
-    pub description: Option<String>,
-}
-
-/// Arguments for config remove
-#[derive(Parser, Debug)]
-pub struct ConfigRemoveArgs {
-    /// Alias name to remove
-    pub name: String,
-}
-
-/// Arguments for config add-catalog
-#[derive(Parser, Debug)]
-pub struct ConfigAddCatalogArgs {
-    /// Catalog name (used as prefix for tables, e.g., nessie.analytics.events)
-    pub name: String,
-
-    /// Catalog URI (e.g., http://nessie:19120/iceberg/)
+    /// URI (http/https = catalog, s3/gs/az/file = table alias)
     pub uri: String,
 
-    /// Catalog type (rest, hive, glue)
-    #[arg(short = 't', long, value_enum, default_value = "rest")]
-    pub catalog_type: crate::core::CatalogType,
-
-    /// Warehouse location (optional, some catalogs provide this)
+    // --- Catalog options (only used if URI is http/https) ---
+    /// Warehouse location (catalog only)
     #[arg(short, long)]
     pub warehouse: Option<String>,
 
-    /// Credential (optional, format depends on catalog type)
-    #[arg(short, long)]
-    pub credential: Option<String>,
+    /// Bearer token (catalog auth)
+    #[arg(long, conflicts_with_all = ["token_env", "client_id", "aws_region"])]
+    pub token: Option<String>,
 
-    /// Credential from environment variable
-    #[arg(long)]
-    pub credential_env: Option<String>,
+    /// Bearer token from env var (catalog auth)
+    #[arg(long, conflicts_with_all = ["token", "client_id", "aws_region"])]
+    pub token_env: Option<String>,
 
-    /// Credential from file
-    #[arg(long)]
-    pub credential_file: Option<String>,
+    /// OAuth2 client ID (catalog auth)
+    #[arg(long, conflicts_with_all = ["token", "token_env", "aws_region"])]
+    pub client_id: Option<String>,
 
-    /// Use IAM Role for authentication (AWS/GCP/Azure)
-    #[arg(long)]
-    pub use_iam_role: bool,
+    /// OAuth2 client secret (catalog auth)
+    #[arg(long, requires = "client_id")]
+    pub client_secret: Option<String>,
 
-    /// Use OAuth2 for authentication
-    #[arg(long)]
-    pub use_oauth2: bool,
+    /// OAuth2 client secret from env var (catalog auth)
+    #[arg(long, requires = "client_id")]
+    pub client_secret_env: Option<String>,
+
+    /// OAuth2 token endpoint (catalog auth)
+    #[arg(long, requires = "client_id")]
+    pub oauth2_endpoint: Option<String>,
+
+    /// OAuth2 scope (catalog auth)
+    #[arg(long, requires = "client_id")]
+    pub oauth2_scope: Option<String>,
+
+    /// AWS region for SigV4 auth (catalog auth)
+    #[arg(long, conflicts_with_all = ["token", "token_env", "client_id"])]
+    pub aws_region: Option<String>,
+
+    /// AWS signing service name (catalog auth)
+    #[arg(long, requires = "aws_region")]
+    pub aws_signing_name: Option<String>,
 }
 
-/// Arguments for config remove-catalog
+/// Arguments for config delete
 #[derive(Parser, Debug)]
-pub struct ConfigRemoveCatalogArgs {
-    /// Catalog name to remove
+pub struct ConfigDeleteArgs {
+    /// Name to delete (searches tables first, then catalogs)
     pub name: String,
 }
 
-/// Arguments for config list
+/// Arguments for config ls
 #[derive(Parser, Debug)]
-pub struct ConfigListArgs {
+pub struct ConfigLsArgs {
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,

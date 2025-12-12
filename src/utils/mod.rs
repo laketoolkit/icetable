@@ -5,7 +5,6 @@
 // CLI utilities
 pub mod box_frame;
 pub mod cancellation;
-pub mod credentials;
 pub mod logging;
 pub mod progress;
 pub mod resources;
@@ -24,8 +23,10 @@ pub use cancellation::{
     register_cleanup_handler, request_cancellation, setup_signal_handlers, temp_dir_with_cleanup,
     with_cancellation,
 };
-pub use credentials::CredentialSource;
 pub use logging::{LogLevel, init_logger};
+
+// Re-export CredentialSource from core::config for backward compatibility
+pub use crate::core::config::CredentialSource;
 pub use progress::ProgressTracker;
 pub use resources::{
     ResourceLimits, current_memory_usage, get_resource_limits, init_resource_limits,

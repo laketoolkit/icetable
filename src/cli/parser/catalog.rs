@@ -1,131 +1,78 @@
 //! Catalog command arguments
+//!
+//! Simplified catalog operations: ls, create, delete
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use std::path::PathBuf;
 
-/// Arguments for catalog command
+/// Arguments for ls command (list namespaces or tables)
 #[derive(Parser, Debug)]
-pub struct CatalogArgs {
-    /// Catalog name (from config)
-    #[arg(short, long, global = true)]
+pub struct LsArgs {
+    /// Catalog name (uses current if not specified)
+    #[arg(short, long)]
     pub catalog: Option<String>,
 
-    /// Namespace (for commands that need it)
-    #[arg(short, long, global = true)]
+    /// Namespace to list tables in (lists namespaces if not specified)
+    #[arg(short, long)]
     pub namespace: Option<String>,
 
     /// Output format (text, json)
-    #[arg(short, long, default_value = "text", global = true)]
+    #[arg(short, long, default_value = "text")]
     pub output: String,
-
-    /// Catalog subcommand
-    #[command(subcommand)]
-    pub command: CatalogCommands,
 }
 
-/// Catalog subcommands
-#[derive(Subcommand, Debug)]
-pub enum CatalogCommands {
-    /// List namespaces in a catalog
-    Namespaces(CatalogNamespacesArgs),
-
-    /// List tables in a namespace
-    Tables(CatalogTablesArgs),
-
-    /// Show catalog information
-    Info,
-
-    /// Create a namespace
-    #[command(name = "create-namespace")]
-    CreateNamespace(CatalogCreateNamespaceArgs),
-
-    /// Drop a namespace
-    #[command(name = "drop-namespace")]
-    DropNamespace(CatalogDropNamespaceArgs),
-
-    /// Create a table
-    #[command(name = "create-table")]
-    CreateTable(CatalogCreateTableArgs),
-
-    /// Drop a table
-    #[command(name = "drop-table")]
-    DropTable(CatalogDropTableArgs),
-}
-
-/// Arguments for catalog namespaces
+/// Arguments for create command (create namespace or table)
 #[derive(Parser, Debug)]
-pub struct CatalogNamespacesArgs {
-    /// Parent namespace (for nested namespaces)
+pub struct CreateArgs {
+    /// Catalog name (uses current if not specified)
     #[arg(short, long)]
-    pub parent: Option<String>,
-}
+    pub catalog: Option<String>,
 
-/// Arguments for catalog tables
-#[derive(Parser, Debug)]
-pub struct CatalogTablesArgs {
-    // Namespace is now a global flag in CatalogArgs
-}
-
-/// Arguments for catalog create-namespace
-#[derive(Parser, Debug)]
-pub struct CatalogCreateNamespaceArgs {
-    /// Namespace name to create
-    pub namespace: String,
-
-    /// Namespace properties (key=value, can be specified multiple times)
-    #[arg(short, long, value_parser = super::parse_key_value)]
-    pub property: Vec<(String, String)>,
-}
-
-/// Arguments for catalog drop-namespace
-#[derive(Parser, Debug)]
-pub struct CatalogDropNamespaceArgs {
-    /// Namespace name to drop
-    pub namespace: String,
-
-    /// Force drop even if namespace is not empty
-    #[arg(long)]
-    pub force: bool,
-}
-
-/// Arguments for catalog create-table
-#[derive(Parser, Debug)]
-pub struct CatalogCreateTableArgs {
-    /// Namespace for the table
+    /// Namespace to create (or namespace for table)
     #[arg(short, long)]
-    pub namespace: String,
+    pub namespace: Option<String>,
 
-    /// Table name
-    pub name: String,
+    /// Table name to create (requires namespace and schema)
+    #[arg(short, long)]
+    pub table: Option<String>,
 
-    /// Schema file (JSON format)
+    /// Schema file for table creation (JSON format)
     #[arg(long)]
-    pub schema: PathBuf,
+    pub schema: Option<PathBuf>,
 
-    /// Partition columns (comma-separated)
+    /// Partition columns for table (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 
-    /// Table location (optional, catalog may provide default)
+    /// Table location (optional)
     #[arg(long)]
     pub location: Option<String>,
 
-    /// Table properties (key=value, can be specified multiple times)
+    /// Properties (key=value, can be specified multiple times)
     #[arg(short, long, value_parser = super::parse_key_value)]
     pub property: Vec<(String, String)>,
 }
 
-/// Arguments for catalog drop-table
+/// Arguments for delete command (delete namespace or table)
 #[derive(Parser, Debug)]
-pub struct CatalogDropTableArgs {
-    /// Namespace of the table
+pub struct DeleteArgs {
+    /// Tables to delete (uses context namespace if -n not specified)
+    #[arg(value_name = "TABLE")]
+    pub tables: Vec<String>,
+
+    /// Catalog name (uses current if not specified)
     #[arg(short, long)]
-    pub namespace: String,
+    pub catalog: Option<String>,
 
-    /// Table name to drop
-    pub name: String,
+    /// Namespace to delete (or namespace of tables)
+    #[arg(short, long)]
+    pub namespace: Option<String>,
 
-    /// Also delete data files (purge)
+    /// Force delete namespace even if not empty
+    #[arg(long)]
+    pub force: bool,
+
+    /// Purge table data files when deleting tables
     #[arg(long)]
     pub purge: bool,
 }

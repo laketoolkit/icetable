@@ -5,7 +5,7 @@
 //! be run separately with the catalog available.
 
 use icetable::core::catalog::{CatalogConfig, TableCommitter};
-use icetable::utils::credentials::CredentialSource;
+use icetable::core::config::CredentialSource;
 
 /// Test that TableCommitter can be created for direct mode (no catalog)
 #[test]

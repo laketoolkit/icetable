@@ -3,16 +3,18 @@
 //! Shows detailed information about table structure, metadata, and statistics.
 //! Uses IcebergTableInspector from core::operations for the actual inspection logic.
 
+use std::sync::Arc;
+
 use colored::Colorize;
 
-use super::common::resolve_table_path;
+use super::common::resolve_table;
 use crate::cli::output::format_timestamp_ms;
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use crate::cli::parser::InspectArgs;
 use crate::core::operations::inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
 };
-use crate::core::{format_bytes, format_number, CatalogConfig, TableLoader};
+use crate::core::{format_bytes, format_number, CatalogConfig, TableLoader, IcebergTable};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -28,11 +30,22 @@ impl InspectCommand {
     }
 
     async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // Resolve table path (supports catalog resolution)
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        use super::common::TableResolution;
 
-        // Load table using unified TableLoader
-        let table = TableLoader::load_table(&table_path, catalog_config.as_ref()).await?;
+        // Resolve table - get catalog table directly when using catalog
+        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+
+        // Get table: use catalog table directly, or load from storage path
+        let table: Arc<IcebergTable> = match resolution {
+            TableResolution::CatalogTable { table, .. } => {
+                // Use the catalog table's metadata directly
+                Arc::new(*table)
+            }
+            TableResolution::Path(path) => {
+                // Load from storage using unified TableLoader
+                TableLoader::load_table(&path, None).await?
+            }
+        };
 
         // Build inspection options from CLI args
         let options = IcebergInspectOptions::from_cli(args.verbose);

@@ -93,23 +93,60 @@ impl IcebergMetadataService {
         })
     }
 
-    /// Create a new Iceberg metadata service with a catalog committer
-    pub async fn new_with_committer(
-        table_path: String,
+    /// Create a new Iceberg metadata service from a catalog-loaded table
+    ///
+    /// This ensures we use the metadata from the catalog, not from storage,
+    /// which is required for proper catalog commit consistency.
+    pub async fn from_catalog_table(
+        catalog_table: &crate::core::IcebergTable,
         branch: Option<String>,
         committer: TableCommitter,
     ) -> Result<Self> {
+        let table_path = catalog_table.metadata().location().to_string();
         let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
-        let table = Self::load_static_table(&table_path, &file_io, &storage).await?;
+
+        // Create StaticTable from the catalog table's metadata
+        // This ensures UUID and snapshot IDs match the catalog
+        let table_ident = catalog_table.identifier().clone();
+        let static_table = StaticTable::from_metadata(catalog_table.metadata().clone(), table_ident, file_io.clone())
+            .await
+            .map_err(|e| Error::General(format!("Failed to create static table from catalog metadata: {}", e)))?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
-            table,
+            table: static_table,
             target_branch: branch,
             committer: Some(committer),
+        })
+    }
+
+    /// Create a read-only Iceberg metadata service from a catalog-loaded table
+    ///
+    /// Use this for read-only operations (analyze, inspect) that don't need
+    /// to commit changes. Uses catalog metadata for consistency but without a committer.
+    pub async fn from_catalog_table_readonly(
+        catalog_table: &crate::core::IcebergTable,
+    ) -> Result<Self> {
+        let table_path = catalog_table.metadata().location().to_string();
+        let file_io = create_file_io(&table_path)?;
+        let storage = create_object_store(&table_path).await?;
+
+        // Create StaticTable from the catalog table's metadata
+        let table_ident = catalog_table.identifier().clone();
+        let static_table = StaticTable::from_metadata(catalog_table.metadata().clone(), table_ident, file_io.clone())
+            .await
+            .map_err(|e| Error::General(format!("Failed to create static table from catalog metadata: {}", e)))?;
+
+        Ok(Self {
+            table_path,
+            file_io,
+            storage,
+            table: static_table,
+            target_branch: None,
+            committer: None,
         })
     }
 
@@ -320,6 +357,14 @@ impl MetadataService for IcebergMetadataService {
         operation: OperationType,
         summary: HashMap<String, String>,
     ) -> Result<SnapshotInfo> {
+        // Write operations require a catalog for proper atomicity and concurrency control
+        let use_catalog = self.committer.as_ref().is_some_and(|c| c.uses_catalog());
+        if !use_catalog {
+            return Err(Error::CatalogRequiredForWrite {
+                operation: format!("{:?}", operation).to_lowercase(),
+            });
+        }
+
         // Load current metadata
         let (metadata, _current_version) = self.load_metadata().await?;
         let partition_spec = metadata.default_partition_spec();
@@ -428,29 +473,12 @@ impl MetadataService for IcebergMetadataService {
             schema_id,
         );
 
-        // Commit the snapshot - either via catalog or direct write
-        let use_catalog = self.committer.as_ref().is_some_and(|c| c.uses_catalog());
-
-        if use_catalog {
-            // Catalog mode: commit via REST API
-            self.committer
-                .as_ref()
-                .unwrap()
-                .commit_add_snapshot(&metadata, snapshot, target_branch)
-                .await?;
-        } else {
-            // Direct mode: write metadata file to storage
-            let current_metadata_path = self.current_metadata_path().await?;
-            let new_metadata = writer.update_metadata_for_branch(
-                (*metadata).clone(),
-                snapshot,
-                &current_metadata_path,
-                target_branch,
-            )?;
-            writer
-                .write_metadata_file(&new_metadata, &current_metadata_path)
-                .await?;
-        }
+        // Commit via catalog (required - validated at function entry)
+        self.committer
+            .as_ref()
+            .expect("catalog required - validated at entry")
+            .commit_add_snapshot(&metadata, snapshot, target_branch)
+            .await?;
 
         Ok(SnapshotInfo {
             id: snapshot_id,

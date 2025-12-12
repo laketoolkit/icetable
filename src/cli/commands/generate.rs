@@ -1,6 +1,6 @@
 //! Generate command implementation
 //!
-//! Thin wrapper that delegates to core::operations::generate
+//! Generates synthetic test data into Iceberg tables via REST catalogs.
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -8,14 +8,15 @@ use std::sync::Arc;
 use colored::Colorize;
 
 use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate};
+use crate::config::Config;
+use crate::core::catalog::RestCatalogClient;
 use crate::core::operations::generate::{
-    ExistingTableInfo, GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate,
+    ExistingTableInfo, GenerateOperation, GenerateResult, SchemaTemplate,
     parse_schema_string,
 };
 use crate::core::format_bytes;
 use super::common::print_json;
 use crate::error::Result;
-use crate::utils::{temp_dir_with_cleanup, with_resource_limits};
 
 /// Handler for generate command
 pub struct GenerateCommand;
@@ -23,62 +24,134 @@ pub struct GenerateCommand;
 impl GenerateCommand {
     /// Execute generate command
     pub async fn execute(args: GenerateArgs) -> Result<()> {
-        let schema = Self::resolve_schema(&args)?;
+        let config = Config::load()?;
 
-        if args.dry_run {
-            return Self::print_dry_run(&args, &schema);
-        }
+        // Get catalog name from args or context
+        let catalog_name = args
+            .catalog
+            .clone()
+            .or_else(|| config.get_current_catalog().map(String::from));
 
-        // Check if table already exists
-        let existing_table = GenerateOperation::table_exists(&args.path).await;
-
-        // If table exists and --force not specified, prompt for confirmation
-        if let Some(ref table_info) = existing_table
-            && !args.force
-            && !Self::confirm_append(table_info)?
-        {
-            println!("{}", "Operation cancelled.".yellow());
+        let Some(catalog_name) = catalog_name else {
+            println!("{} No catalog specified", "!".yellow());
+            println!(
+                "  Use {} or specify {}",
+                "icetable config use <catalog>".dimmed(),
+                "-c <catalog>".dimmed()
+            );
             return Ok(());
-        }
-
-        let config = GenerateConfig {
-            path: args.path.clone(),
-            schema: Arc::new(schema),
-            rows: args.rows,
-            files: args.files,
-            partition_columns: args.partition_by.clone().unwrap_or_default(),
-            seed: args.seed.unwrap_or(42),
-            target_file_size: args.target_file_size,
         };
 
-        let action = if existing_table.is_some() {
-            "Appending to existing"
+        // Get catalog config
+        let Some(catalog_config) = config.catalogs.get(&catalog_name) else {
+            println!(
+                "{} Catalog not found: {}",
+                "!".yellow(),
+                catalog_name.cyan()
+            );
+            return Ok(());
+        };
+
+        // Get namespace from args, context, or catalog default
+        let namespace = args
+            .namespace
+            .clone()
+            .or_else(|| config.get_current_namespace())
+            .or_else(|| catalog_config.default_namespace.clone());
+
+        let Some(namespace) = namespace else {
+            println!("{} No namespace specified", "!".yellow());
+            println!(
+                "  Use {} or specify {}",
+                "icetable config use <catalog> -n <namespace>".dimmed(),
+                "-n <namespace>".dimmed()
+            );
+            return Ok(());
+        };
+
+        // Get table name from args or context
+        let table_name = args.table.clone().or_else(|| {
+            config.get_current_table().map(String::from)
+        });
+
+        let Some(table_name) = table_name else {
+            println!("{} No table specified", "!".yellow());
+            println!(
+                "  Use {} or specify {}",
+                "icetable config use <catalog> -n <namespace> -t <table>".dimmed(),
+                "-t <table>".dimmed()
+            );
+            return Ok(());
+        };
+        let ns_parts: Vec<String> = namespace.split('.').map(String::from).collect();
+
+        // Create REST client
+        let client = RestCatalogClient::new(catalog_config).await?;
+
+        // Resolve schema from args
+        let arrow_schema = Self::resolve_schema(&args)?;
+
+        if args.dry_run {
+            return Self::print_dry_run(&args, &namespace, &table_name, &arrow_schema);
+        }
+
+        // Check if table exists
+        let table_exists = client.table_exists(&ns_parts, &table_name).await?;
+
+        // Get or create table via catalog
+        let table = if table_exists {
+            // Load existing table
+            let table = client.load_table(&ns_parts, &table_name).await?;
+            let location = table.metadata().location().to_string();
+
+            // Check existing table info for append confirmation
+            if !args.force {
+                let existing_info = GenerateOperation::table_exists(&location).await;
+                if let Some(ref info) = existing_info {
+                    if !Self::confirm_append(info)? {
+                        println!("{}", "Operation cancelled.".yellow());
+                        return Ok(());
+                    }
+                }
+            }
+            table
         } else {
-            "Creating new"
+            // Create new table via catalog
+            let iceberg_schema = Self::arrow_to_iceberg_schema(&arrow_schema)?;
+            client
+                .create_table(&ns_parts, &table_name, iceberg_schema, None, Default::default())
+                .await?
+        };
+
+        let table_location = table.metadata().location().to_string();
+
+        let action = if table_exists {
+            "Appending to"
+        } else {
+            "Generating"
         };
 
         println!(
-            "{} {} Iceberg table...",
+            "{} {} {}.{} ...",
             "->".cyan().bold(),
-            action
+            action,
+            namespace.cyan(),
+            table_name.cyan()
         );
-        println!("  Location: {}", config.path);
-        println!("  Schema: {} columns", config.schema.fields().len());
-        println!("  Rows: {}", config.rows);
-        println!("  Files: {}", config.files);
+        println!("  Location: {}", table_location.dimmed());
+        println!("  Schema: {} columns", arrow_schema.fields().len());
+        println!("  Rows: {}", args.rows);
+        println!("  Files: {}", args.files);
 
-        // Apply resource limits (timeout, cancellation, memory tracking)
-        let estimated_memory = Self::estimate_memory_usage(&config);
-        let is_append = existing_table.is_some();
-        let result = with_resource_limits(estimated_memory, async {
-            // Create temp directory for intermediate files (will be cleaned up on cancellation)
-            let _temp_dir = temp_dir_with_cleanup()?;
-            if is_append {
-                GenerateOperation::execute_append(config).await
-            } else {
-                GenerateOperation::execute(config).await
-            }
-        })
+        // Execute with catalog for proper commits
+        let result = GenerateOperation::execute_with_catalog(
+            table,
+            client.catalog(),
+            Arc::new(arrow_schema),
+            args.rows,
+            args.files,
+            args.seed.unwrap_or(42),
+        )
         .await?;
 
         Self::print_result(&result, &args.output);
@@ -137,14 +210,14 @@ impl GenerateCommand {
         }
     }
 
-    fn print_dry_run(args: &GenerateArgs, schema: &arrow::datatypes::Schema) -> Result<()> {
+    fn print_dry_run(args: &GenerateArgs, namespace: &str, table_name: &str, schema: &arrow::datatypes::Schema) -> Result<()> {
         let rows_per_file = (args.rows / args.files as u64).max(1);
         let partition_cols = args.partition_by.clone().unwrap_or_default();
 
         println!("{} Dry run - no data will be generated", "->".cyan().bold());
         println!();
         println!("Configuration:");
-        println!("  Location: {}", args.path);
+        println!("  Table: {}.{}", namespace, table_name);
         println!("  Total rows: {}", args.rows);
         println!("  Files: {}", args.files);
         println!("  Rows per file: ~{}", rows_per_file);
@@ -184,7 +257,7 @@ impl GenerateCommand {
         for file in &result.data_files {
             println!(
                 "  {} Written {} ({} rows, {} bytes)",
-                "v".green(),
+                "✓".green(),
                 file.path.split('/').next_back().unwrap_or(&file.path),
                 file.record_count,
                 file.size
@@ -198,7 +271,7 @@ impl GenerateCommand {
         };
         println!(
             "  {} {} (snapshot {})",
-            "v".green(),
+            "✓".green(),
             metadata_action,
             result.snapshot_id
         );
@@ -210,7 +283,7 @@ impl GenerateCommand {
         };
         println!(
             "\n{} {} {} rows in {} files ({})",
-            "v".green().bold(),
+            "✓".green().bold(),
             action,
             result.total_rows,
             result.files_created,
@@ -235,26 +308,38 @@ impl GenerateCommand {
         }
     }
 
-    /// Estimate memory usage for generation
-    fn estimate_memory_usage(config: &GenerateConfig) -> u64 {
-        // Estimate based on:
-        // 1. Schema metadata: ~100 bytes per column
-        // 2. Batch buffers: rows * avg column size
-        // 3. Parquet buffers: ~1.5x batch size
+    /// Convert Arrow schema to Iceberg schema
+    fn arrow_to_iceberg_schema(arrow_schema: &arrow::datatypes::Schema) -> Result<iceberg::spec::Schema> {
+        use arrow::datatypes::DataType;
+        use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 
-        let schema_size = config.schema.fields().len() as u64 * 100;
+        let mut fields = Vec::new();
+        for (idx, field) in arrow_schema.fields().iter().enumerate() {
+            let iceberg_type = match field.data_type() {
+                DataType::Boolean => Type::Primitive(PrimitiveType::Boolean),
+                DataType::Int8 | DataType::Int16 | DataType::Int32 => Type::Primitive(PrimitiveType::Int),
+                DataType::Int64 => Type::Primitive(PrimitiveType::Long),
+                DataType::Float32 => Type::Primitive(PrimitiveType::Float),
+                DataType::Float64 => Type::Primitive(PrimitiveType::Double),
+                DataType::Utf8 | DataType::LargeUtf8 => Type::Primitive(PrimitiveType::String),
+                DataType::Binary | DataType::LargeBinary => Type::Primitive(PrimitiveType::Binary),
+                DataType::Date32 | DataType::Date64 => Type::Primitive(PrimitiveType::Date),
+                DataType::Timestamp(_, _) => Type::Primitive(PrimitiveType::Timestamp),
+                DataType::Time32(_) | DataType::Time64(_) => Type::Primitive(PrimitiveType::Time),
+                _ => Type::Primitive(PrimitiveType::String), // Fallback
+            };
 
-        // Average column size estimation
-        let avg_column_size_bytes = 32; // Conservative estimate for mixed types
+            let nested_field = if field.is_nullable() {
+                NestedField::optional(idx as i32 + 1, field.name(), iceberg_type)
+            } else {
+                NestedField::required(idx as i32 + 1, field.name(), iceberg_type)
+            };
+            fields.push(nested_field.into());
+        }
 
-        let rows_per_file = (config.rows / config.files as u64).max(1);
-        let batch_size =
-            rows_per_file * config.schema.fields().len() as u64 * avg_column_size_bytes;
-
-        // Parquet compression buffers
-        let parquet_buffer_size = batch_size * 3 / 2;
-
-        // Total for one file at a time (streaming)
-        schema_size + batch_size + parquet_buffer_size
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .map_err(|e| crate::error::Error::General(format!("Failed to build Iceberg schema: {}", e)))
     }
 }

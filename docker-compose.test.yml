@@ -27,13 +27,30 @@ services:
       exit 0;
       "
 
-  # Optional: Nessie catalog for catalog integration tests
+  # Nessie catalog with Iceberg REST API support
   nessie:
-    image: projectnessie/nessie:latest
+    image: ghcr.io/projectnessie/nessie:latest
     ports:
       - "19120:19120"
     environment:
-      - NESSIE_VERSION_STORE_TYPE=IN_MEMORY
+      # Version store (in-memory for testing)
+      - nessie.version.store.type=IN_MEMORY
+      # Catalog configuration - enables Iceberg REST API
+      - nessie.catalog.default-warehouse=warehouse
+      - nessie.catalog.warehouses.warehouse.location=s3://iceberg-warehouse/
+      # S3 configuration for MinIO
+      - nessie.catalog.service.s3.default-options.endpoint=http://minio:9000
+      - nessie.catalog.service.s3.default-options.path-style-access=true
+      - nessie.catalog.service.s3.default-options.region=us-east-1
+      - nessie.catalog.service.s3.default-options.auth-type=STATIC
+      - nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key
+      - nessie.catalog.secrets.access-key.name=minioadmin
+      - nessie.catalog.secrets.access-key.secret=minioadmin
+      # Disable authentication for testing
+      - nessie.server.authentication.enabled=false
+    depends_on:
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
       interval: 5s

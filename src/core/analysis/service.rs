@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures::TryStreamExt;
-use iceberg::spec::TableMetadata;
+use iceberg::spec::{ManifestStatus, TableMetadata};
 
 use super::types::{
     DataCompactionAnalysis, ManifestCompactionAnalysis, OrphanFilesAnalysis,
@@ -33,6 +33,8 @@ pub struct AnalysisConfig {
     pub min_file_size: u64,
     /// Whether to skip orphan file analysis (can be slow for large tables)
     pub skip_orphans: bool,
+    /// Whether to check all snapshots (default: only current snapshot)
+    pub all_snapshots: bool,
 }
 
 impl Default for AnalysisConfig {
@@ -40,6 +42,7 @@ impl Default for AnalysisConfig {
         Self {
             min_file_size: 16 * 1024 * 1024, // 16 MB
             skip_orphans: false,
+            all_snapshots: true, // Check all snapshots for consistency with vacuum
         }
     }
 }
@@ -279,49 +282,75 @@ impl AnalyzeService {
 
     /// Analyze for orphan files
     ///
-    /// Scans all snapshots to find files that exist on storage but are not
-    /// referenced by any snapshot, and files that are referenced but missing.
+    /// By default, only checks the current snapshot to avoid false positives
+    /// from older snapshots whose scan may fail silently.
+    /// With `all_snapshots: true`, uses manifest list loading to get files from all snapshots.
     pub async fn analyze_orphans(
         &self,
         service: &IcebergMetadataService,
     ) -> Result<OrphanFilesAnalysis> {
         let table = service.table();
         let metadata = table.metadata();
-        let snapshots: Vec<_> = metadata.snapshots().collect();
 
-        // Helper to normalize paths - extract just the relative path after table location
+        // Helper to normalize paths - extract just the filename for consistent comparison
+        // This handles different path formats: s3://bucket/table/data/xxx.parquet vs data/xxx.parquet
         let normalize_path = |path: &str| -> String {
-            // If path contains /data/, extract from /data/ onwards
-            if let Some(idx) = path.find("/data/") {
-                return path[idx + 1..].to_string(); // "data/..."
-            }
-            // Fallback: just the filename
+            // Extract just the filename - this is guaranteed to be unique per file
             path.rsplit('/').next().unwrap_or(path).to_string()
         };
 
-        // Collect all referenced files from all snapshots using native scan API
+        // Collect all referenced files
         let mut referenced: HashSet<String> = HashSet::new();
 
-        for snapshot in &snapshots {
-            let scan = match table.scan()
-                .snapshot_id(snapshot.snapshot_id())
-                .build()
-            {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-
-            let tasks: Vec<_> = match scan.plan_files().await {
-                Ok(stream) => match stream.try_collect().await {
-                    Ok(t) => t,
+        if self.config.all_snapshots {
+            // --all-snapshots: Use manifest list loading for reliability across all snapshots
+            let snapshots: Vec<_> = metadata.snapshots().collect();
+            let file_io = service.file_io();
+            for snapshot in &snapshots {
+                let manifest_list = match snapshot
+                    .load_manifest_list(file_io, metadata.as_ref())
+                    .await
+                {
+                    Ok(ml) => ml,
                     Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
+                };
 
-            for task in tasks {
-                let path = task.data_file_path().to_string();
-                referenced.insert(normalize_path(&path));
+                for manifest_entry in manifest_list.entries() {
+                    // Load each manifest to get the data files
+                    let manifest = match manifest_entry.load_manifest(file_io).await {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+
+                    for entry in manifest.entries() {
+                        if entry.status() != ManifestStatus::Deleted {
+                            let path = entry.data_file().file_path().to_string();
+                            referenced.insert(normalize_path(&path));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Default: Only check current snapshot using scan API (reliable for current)
+            if let Some(snapshot) = metadata.current_snapshot() {
+                let scan = table
+                    .scan()
+                    .snapshot_id(snapshot.snapshot_id())
+                    .build()
+                    .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
+
+                let tasks: Vec<_> = scan
+                    .plan_files()
+                    .await
+                    .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+                    .try_collect()
+                    .await
+                    .map_err(|e| Error::General(format!("Failed to collect tasks: {}", e)))?;
+
+                for task in tasks {
+                    let path = task.data_file_path().to_string();
+                    referenced.insert(normalize_path(&path));
+                }
             }
         }
 

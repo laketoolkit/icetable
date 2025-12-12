@@ -54,12 +54,25 @@ impl VacuumService {
     }
 
     /// Analyze files that would be deleted (works with any storage backend)
-    pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
-        let service = IcebergMetadataService::new_async(table_path.to_string())
-            .await
-            .map_err(|_| Error::TableNotFound {
-                path: table_path.to_string(),
-            })?;
+    /// If metadata_service is provided, uses it; otherwise creates one from table_path
+    pub async fn analyze_with_service(
+        &self,
+        table_path: &str,
+        metadata_service: Option<&IcebergMetadataService>,
+    ) -> Result<VacuumAnalysis> {
+        // Use provided service or create one
+        let owned_service;
+        let service = match metadata_service {
+            Some(s) => s,
+            None => {
+                owned_service = IcebergMetadataService::new_async(table_path.to_string())
+                    .await
+                    .map_err(|_| Error::TableNotFound {
+                        path: table_path.to_string(),
+                    })?;
+                &owned_service
+            }
+        };
 
         let table = service.table();
         let metadata = table.metadata();
@@ -136,9 +149,19 @@ impl VacuumService {
         })
     }
 
+    /// Analyze files that would be deleted - convenience method using table path
+    pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
+        self.analyze_with_service(table_path, None).await
+    }
+
     /// Execute vacuum operation - deletes orphan files
-    pub async fn execute(&self, table_path: &str) -> Result<VacuumResult> {
-        let analysis = self.analyze(table_path).await?;
+    /// If metadata_service is provided, uses it; otherwise creates one from table_path
+    pub async fn execute_with_service(
+        &self,
+        table_path: &str,
+        metadata_service: Option<&IcebergMetadataService>,
+    ) -> Result<VacuumResult> {
+        let analysis = self.analyze_with_service(table_path, metadata_service).await?;
 
         if analysis.orphan_files.is_empty() {
             return Ok(VacuumResult {
@@ -185,6 +208,11 @@ impl VacuumService {
             dry_run: false,
             analysis,
         })
+    }
+
+    /// Execute vacuum operation - convenience method using table path
+    pub async fn execute(&self, table_path: &str) -> Result<VacuumResult> {
+        self.execute_with_service(table_path, None).await
     }
 
     /// Convert vacuum result to MaintenanceResult for consistent output

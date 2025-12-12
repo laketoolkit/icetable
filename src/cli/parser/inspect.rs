@@ -120,6 +120,10 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     pub skip_orphans: bool,
 
+    /// Check all snapshots for orphans/missing (default: true for consistency with vacuum)
+    #[arg(long, default_value_t = true)]
+    pub all_snapshots: bool,
+
     /// Show detailed partition-level information
     #[arg(short, long)]
     pub verbose: bool,

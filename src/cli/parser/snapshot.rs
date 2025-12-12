@@ -14,7 +14,8 @@ pub struct SnapshotArgs {
 #[derive(Subcommand, Debug)]
 pub enum SnapshotCommands {
     /// List all snapshots
-    List(SnapshotListArgs),
+    #[command(name = "ls")]
+    Ls(SnapshotListArgs),
 
     /// Create a new snapshot/checkpoint
     Create(SnapshotCreateArgs),

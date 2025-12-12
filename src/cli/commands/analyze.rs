@@ -6,7 +6,7 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_spinner, extract_table_name, print_json, resolve_table_path};
+use super::common::{create_spinner, extract_table_name, print_json, resolve_table, TableResolution};
 use crate::cli::output::create_styled_table;
 use crate::cli::parser::AnalyzeArgs;
 use crate::core::analysis::{
@@ -25,14 +25,15 @@ pub struct AnalyzeCommand;
 impl AnalyzeCommand {
     /// Execute analyze command
     pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+        let table_path = resolution.location();
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for analysis
-        with_resource_limits(ESTIMATED_MEMORY, Self::analyze_iceberg(&table_path, &args)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::analyze_iceberg(&table_path, &args, &resolution)).await
     }
 
-    async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs) -> Result<()> {
+    async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs, resolution: &TableResolution) -> Result<()> {
         let is_json = args.output == "json";
 
         if !is_json {
@@ -43,13 +44,23 @@ impl AnalyzeCommand {
             println!();
         }
 
-        // Load metadata service
-        let service = IcebergMetadataService::new_async(table_path.to_string()).await?;
+        // Load metadata service: use catalog table when available for proper metadata consistency
+        let service = match resolution {
+            TableResolution::CatalogTable { table, .. } => {
+                // Use catalog table's metadata - read-only, no committer needed
+                IcebergMetadataService::from_catalog_table_readonly(table).await?
+            }
+            TableResolution::Path(_) => {
+                // Direct path - use storage metadata
+                IcebergMetadataService::new_async(table_path.to_string()).await?
+            }
+        };
 
         // Create analysis service with configuration from args
         let config = AnalysisConfig {
             min_file_size: args.min_file_size,
             skip_orphans: args.skip_orphans,
+            all_snapshots: args.all_snapshots,
         };
         let analyze_service = AnalyzeService::with_config(config);
 

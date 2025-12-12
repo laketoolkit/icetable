@@ -7,6 +7,7 @@ pub mod analysis;
 pub mod arrow_compat;
 pub mod catalog;
 pub mod commit;
+pub mod config;
 pub mod context;
 pub mod formats;
 pub mod inspection;
@@ -18,8 +19,10 @@ pub mod table_loader;
 pub mod validation;
 
 // Re-export commonly used types
-pub use catalog::{
-    CatalogClient, CatalogConfig, CatalogType, RestCatalogClient, TableCommitter, TableRef,
+pub use catalog::{CatalogClient, RestCatalogClient, TableCommitter, TableRef};
+pub use config::{
+    CatalogAuth, CatalogConfig, CatalogType, Config, CredentialSource, ResolvedTable, ResolvePath,
+    ResolveTableRef,
 };
 pub use context::{TableContext, TableContextBuilder};
 pub use formats::{FormatHandler, FormatHandlerFactory};

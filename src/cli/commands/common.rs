@@ -17,6 +17,8 @@ pub enum TableResolution {
         namespace: Vec<String>,
         /// Table name
         name: String,
+        /// Catalog configuration (needed for committer creation)
+        catalog_config: CatalogConfig,
     },
 }
 
@@ -111,6 +113,7 @@ async fn resolve_from_catalog(
         table: Box::new(table),
         namespace,
         name,
+        catalog_config: catalog.clone(),
     })
 }
 
@@ -136,21 +139,25 @@ pub fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
 ///
 /// Returns None if the table is a direct path (not from catalog)
 pub fn create_committer(
-    catalog_config: Option<&CatalogConfig>,
+    cli_catalog: Option<&CatalogConfig>,
     resolution: &TableResolution,
 ) -> Option<TableCommitter> {
-    match (catalog_config, resolution) {
-        (
-            Some(config),
-            TableResolution::CatalogTable {
-                namespace, name, ..
-            },
-        ) => Some(TableCommitter::with_catalog(
-            config.clone(),
-            namespace.clone(),
-            name.clone(),
-        )),
-        _ => None,
+    match resolution {
+        TableResolution::CatalogTable {
+            namespace,
+            name,
+            catalog_config,
+            ..
+        } => {
+            // Prefer CLI catalog config if provided, otherwise use the one from resolution
+            let config = cli_catalog.unwrap_or(catalog_config);
+            Some(TableCommitter::with_catalog(
+                config.clone(),
+                namespace.clone(),
+                name.clone(),
+            ))
+        }
+        TableResolution::Path(_) => None,
     }
 }
 

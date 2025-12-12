@@ -223,6 +223,13 @@ pub enum Error {
         table_ref: String,
     },
 
+    /// Write operations require a catalog
+    #[error("Write operations require a catalog.\n  → icetable config add-catalog <name> --uri <URL>")]
+    CatalogRequiredForWrite {
+        /// The write operation that was attempted
+        operation: String,
+    },
+
     /// Failed to load Iceberg table
     #[error("Failed to load Iceberg table at {path}: {source}")]
     IcebergLoad {

@@ -15,12 +15,13 @@
 //! ```
 
 mod committer;
-mod config;
 mod rest;
 
 pub use committer::TableCommitter;
-pub use config::{CatalogConfig, CatalogType};
 pub use rest::RestCatalogClient;
+
+// Re-export from core::config for backward compatibility
+pub use super::config::{CatalogAuth, CatalogConfig, CatalogType};
 
 use crate::error::{Error, Result};
 use iceberg::table::Table;

@@ -63,10 +63,12 @@
 
 // Internal modules (implementation details)
 pub mod cli;
-pub mod config;
 pub mod core;
 pub mod error;
 pub mod utils;
+
+// Re-export config from core for backward compatibility
+pub use core::config as config;
 
 // Stable public API (v1.x)
 pub mod v1;

@@ -490,11 +490,40 @@ impl OptimizeService {
         })
     }
 
-    /// Convert a file path string to an ObjectPath relative to the table base
+    /// Convert a file path string to an ObjectPath
     ///
-    /// Uses centralized path normalization to handle `file://` prefixes consistently.
+    /// For S3/cloud storage, extracts the path within the bucket (everything after bucket name).
+    /// For local paths, computes path relative to table base.
     fn path_to_object_path(&self, path: &str, table_base: &str) -> Result<ObjectPath> {
-        // Use centralized normalization to compute relative path
+        // For S3 URLs, extract the path within the bucket
+        // s3://bucket/path/to/file -> path/to/file
+        if let Some(s3_path) = path.strip_prefix("s3://") {
+            // Find the first slash after bucket name
+            if let Some(slash_pos) = s3_path.find('/') {
+                let object_path = &s3_path[slash_pos + 1..];
+                return Ok(ObjectPath::from(object_path));
+            }
+        }
+
+        // For gs:// (GCS) URLs
+        if let Some(gcs_path) = path.strip_prefix("gs://") {
+            if let Some(slash_pos) = gcs_path.find('/') {
+                let object_path = &gcs_path[slash_pos + 1..];
+                return Ok(ObjectPath::from(object_path));
+            }
+        }
+
+        // For az:// or azure:// URLs
+        for prefix in ["az://", "azure://"] {
+            if let Some(az_path) = path.strip_prefix(prefix) {
+                if let Some(slash_pos) = az_path.find('/') {
+                    let object_path = &az_path[slash_pos + 1..];
+                    return Ok(ObjectPath::from(object_path));
+                }
+            }
+        }
+
+        // For local paths, use relative path from table base
         if let Some(relative) = normalize_relative_path(path, table_base) {
             return Ok(ObjectPath::from(relative));
         }

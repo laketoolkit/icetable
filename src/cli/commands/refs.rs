@@ -354,7 +354,7 @@ impl BranchCommand {
 
     async fn execute_inner(args: BranchArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         match args.command {
-            BranchCommands::List(a) => {
+            BranchCommands::Ls(a) => {
                 let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
                 RefCommands::list(&iceberg.ctx, RefType::Branch, &a.output, true).await
             }
@@ -405,7 +405,7 @@ impl TagCommand {
 
     async fn execute_inner(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
         match args.command {
-            TagCommands::List(a) => {
+            TagCommands::Ls(a) => {
                 let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
                 RefCommands::list(&iceberg.ctx, RefType::Tag, &a.output, false).await
             }

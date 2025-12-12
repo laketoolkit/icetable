@@ -14,7 +14,8 @@ pub struct BranchArgs {
 #[derive(Subcommand, Debug)]
 pub enum BranchCommands {
     /// List all branches
-    List(BranchListArgs),
+    #[command(name = "ls")]
+    Ls(BranchListArgs),
 
     /// Create a new branch
     Create(BranchCreateArgs),
@@ -140,7 +141,8 @@ pub struct TagArgs {
 #[derive(Subcommand, Debug)]
 pub enum TagCommands {
     /// List all tags
-    List(TagListArgs),
+    #[command(name = "ls")]
+    Ls(TagListArgs),
 
     /// Create a new tag
     Create(TagCreateArgs),

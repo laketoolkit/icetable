@@ -16,16 +16,24 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use iceberg::arrow::FieldMatchMode;
+use iceberg::spec::DataFileFormat;
+use iceberg::table::Table;
+use iceberg::transaction::Transaction;
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{DefaultFileNameGenerator, DefaultLocationGenerator};
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+use iceberg::Catalog;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::core::metadata::{DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType, SnapshotWriter};
-use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, create_file_io, to_path};
+use crate::core::metadata::{DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType};
+use crate::core::storage::{ObjectStoreExt, create_object_store, to_path};
 use crate::error::{Error, Result};
 use crate::utils::track_memory_usage;
 use crate::utils::core::find_latest_metadata;
-use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct, Summary};
 
 /// Configuration for data generation
 #[derive(Debug, Clone)]
@@ -112,74 +120,158 @@ impl GenerateOperation {
     }
 
     /// Execute the generate operation - creates a complete valid Iceberg table
-    pub async fn execute(config: GenerateConfig) -> Result<GenerateResult> {
-        let storage = create_object_store(&config.path).await?;
-        let base_path = config.path.trim_end_matches('/').to_string();
+    ///
+    /// NOTE: This operation requires a catalog. Direct path writes are not supported.
+    pub async fn execute(_config: GenerateConfig) -> Result<GenerateResult> {
+        Err(Error::CatalogRequiredForWrite {
+            operation: "generate".to_string(),
+        })
+    }
 
-        let rows_per_file = (config.rows / config.files as u64).max(1);
-        let mut data_files = Vec::new();
+    /// Execute generate/append operation using an Iceberg catalog for commits.
+    ///
+    /// This is the recommended way to generate data as it properly integrates
+    /// with the catalog for atomic commits.
+    pub async fn execute_with_catalog(
+        table: Table,
+        catalog: &dyn Catalog,
+        schema: Arc<Schema>,
+        rows: u64,
+        files: u32,
+        seed: u64,
+    ) -> Result<GenerateResult> {
+        use iceberg::transaction::ApplyTransactionAction;
+
+        let table_location = table.metadata().location().to_string();
+        let base_path = table_location.trim_end_matches('/').to_string();
+
+        let rows_per_file = (rows / files as u64).max(1);
+
+        // Get resources from table for writers
+        let file_io = table.file_io().clone();
+        let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
+            .map_err(|e| Error::General(format!("Failed to create location generator: {}", e)))?;
+        let partition_spec_id = table.metadata().default_partition_spec_id();
+
+        // Generate unique prefix for file names using timestamp
+        let timestamp_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after UNIX epoch")
+            .as_nanos();
+        let unique_prefix = format!("{:016x}", timestamp_nanos as u64);
+
         let mut total_bytes = 0u64;
+        let mut data_files_info = Vec::new();
+        let mut all_data_files = Vec::new();
 
-        // Step 1: Generate and write parquet data files
-        for file_idx in 0..config.files {
-            let file_rows = if file_idx == config.files - 1 {
-                config.rows - (rows_per_file * (config.files - 1) as u64)
+        // Generate and write data files - one writer per file
+        for file_idx in 0..files {
+            let file_rows = if file_idx == files - 1 {
+                rows - (rows_per_file * (files - 1) as u64)
             } else {
                 rows_per_file
             };
 
-            let batch =
-                Self::generate_batch(&config.schema, file_rows, config.seed + file_idx as u64)?;
+            let batch = Self::generate_batch(&schema, file_rows, seed + file_idx as u64)?;
 
-            let file_id = format!(
-                "{:016x}",
-                config
-                    .seed
-                    .wrapping_mul(1000003)
-                    .wrapping_add(file_idx as u64)
+            // Create a new writer for each file with unique prefix
+            let file_name_gen = DefaultFileNameGenerator::new(
+                format!("{}-{:05}", unique_prefix, file_idx),
+                None,
+                DataFileFormat::Parquet,
             );
-            let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
 
-            // Relative path for storage (PrefixStore adds the table prefix)
-            let storage_path = format!("data/{}", file_name);
-            // Absolute path for Iceberg metadata
-            let iceberg_path = format!("{}/data/{}", base_path, file_name);
+            let parquet_writer = ParquetWriterBuilder::new_with_match_mode(
+                WriterProperties::default(),
+                table.metadata().current_schema().clone(),
+                None,
+                FieldMatchMode::Name,
+                file_io.clone(),
+                location_gen.clone(),
+                file_name_gen,
+            );
 
-            let parquet_bytes = Self::write_parquet_bytes(&batch)?;
-            let file_size = parquet_bytes.len() as u64;
-            total_bytes += file_size;
+            let mut writer = DataFileWriterBuilder::new(parquet_writer, None, partition_spec_id)
+                .build()
+                .await
+                .map_err(|e| Error::General(format!("Failed to build data file writer: {}", e)))?;
 
-            storage
-                .put_bytes(&to_path(&storage_path), Bytes::from(parquet_bytes))
-                .await?;
+            // Write batch
+            writer.write(batch)
+                .await
+                .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
 
-            data_files.push(DataFileInfo {
-                path: iceberg_path,
-                size: file_size,
-                record_count: file_rows,
-                partition: HashMap::new(),
-            });
+            // Close writer and collect data files
+            let data_files = writer.close()
+                .await
+                .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
+
+            for df in data_files {
+                total_bytes += df.file_size_in_bytes() as u64;
+                data_files_info.push(DataFileInfo {
+                    path: df.file_path().to_string(),
+                    size: df.file_size_in_bytes() as u64,
+                    record_count: df.record_count() as u64,
+                    partition: HashMap::new(),
+                });
+                all_data_files.push(df);
+            }
         }
 
-        // Step 2: Create complete Iceberg metadata with manifest, manifest list, and snapshot
-        let (metadata_file_path, snapshot_id) = Self::create_complete_iceberg_table(
-            &storage,
-            &base_path,
-            &config.schema,
-            &data_files,
-            &config.partition_columns,
-        )
-        .await?;
+        // Calculate snapshot summary stats manually
+        // This is a workaround for iceberg-rs 0.7.0 bug where mem::take() in
+        // write_added_manifest() clears added_data_files before summary() is called.
+        // See: https://github.com/apache/iceberg-rust/pull/1767
+        //
+        // Note: We only set the "added-*" properties here. iceberg-rs's update_snapshot_summaries()
+        // will calculate the "total-*" properties by adding our added values to the previous totals.
+        // However, there's another bug where iceberg-rs can't find the previous snapshot correctly
+        // (it looks for self.snapshot_id which doesn't exist yet), so totals may be incorrect
+        // when appending. This is acceptable as "added-*" stats are the most important for
+        // tracking what changed in each snapshot.
+        let added_records: u64 = all_data_files.iter().map(|f| f.record_count()).sum();
+        let added_data_files_count = all_data_files.len() as u32;
+        let added_file_size: u64 = all_data_files.iter().map(|f| f.file_size_in_bytes() as u64).sum();
+
+        // Build snapshot properties with added stats only
+        // Note: total-* properties are calculated by iceberg-rs update_snapshot_summaries()
+        let mut snapshot_properties = HashMap::new();
+        snapshot_properties.insert("added-records".to_string(), added_records.to_string());
+        snapshot_properties.insert("added-data-files".to_string(), added_data_files_count.to_string());
+        snapshot_properties.insert("added-files-size".to_string(), added_file_size.to_string());
+
+        // Commit using transaction API
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append()
+            .set_snapshot_properties(snapshot_properties)
+            .add_data_files(all_data_files);
+
+        // Apply action to transaction and commit
+        let tx = action.apply(tx)
+            .map_err(|e| Error::General(format!("Failed to apply transaction: {}", e)))?;
+
+        let updated_table = tx.commit(catalog)
+            .await
+            .map_err(|e| Error::General(format!("Failed to commit transaction: {}", e)))?;
+
+        let snapshot_id = updated_table.metadata()
+            .current_snapshot()
+            .map(|s| s.snapshot_id())
+            .unwrap_or(0);
+
+        let metadata_path = updated_table.metadata_location()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{}/metadata/latest.json", base_path));
 
         Ok(GenerateResult {
             table_path: base_path,
-            total_rows: config.rows,
-            files_created: config.files,
+            total_rows: rows,
+            files_created: files,
             total_bytes,
-            data_files,
-            metadata_path: metadata_file_path,
+            data_files: data_files_info,
+            metadata_path,
             snapshot_id,
-            appended: false,
+            appended: true,
         })
     }
 
@@ -222,17 +314,17 @@ impl GenerateOperation {
             );
             let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
 
-            // Relative path for storage (PrefixStore adds the table prefix)
-            let storage_path = format!("data/{}", file_name);
-            // Absolute path for Iceberg metadata
+            // Full path for Iceberg metadata (s3://bucket/table/data/file.parquet)
             let iceberg_path = format!("{}/data/{}", base_path, file_name);
 
             let parquet_bytes = Self::write_parquet_bytes(&batch)?;
             let file_size = parquet_bytes.len() as u64;
             total_bytes += file_size;
 
+            // Use to_path to extract the relative path from the full URL
+            // e.g., s3://bucket/table/data/file.parquet -> table/data/file.parquet
             storage
-                .put_bytes(&to_path(&storage_path), Bytes::from(parquet_bytes))
+                .put_bytes(&to_path(&iceberg_path), Bytes::from(parquet_bytes))
                 .await?;
 
             data_files.push(DataFileInfo {
@@ -274,198 +366,6 @@ impl GenerateOperation {
             snapshot_id: snapshot_info.id,
             appended: true,
         })
-    }
-
-    /// Create a complete Iceberg table with manifest, manifest list, snapshot, and metadata
-    async fn create_complete_iceberg_table(
-        storage: &Storage,
-        base_path: &str,
-        arrow_schema: &Schema,
-        data_files: &[DataFileInfo],
-        partition_cols: &[String],
-    ) -> Result<(String, i64)> {
-        use crate::utils::core::{metadata_location_filename, new_metadata_location};
-
-        // Convert Arrow schema to Iceberg schema
-        let iceberg_schema = Self::arrow_to_iceberg_schema(arrow_schema)?;
-
-        // Build partition spec
-        let partition_spec = if !partition_cols.is_empty() {
-            let mut unbound_fields = Vec::new();
-            for (idx, col) in partition_cols.iter().enumerate() {
-                let field_id = iceberg_schema
-                    .as_struct()
-                    .fields()
-                    .iter()
-                    .find(|f| f.name == *col)
-                    .map(|f| f.id)
-                    .ok_or_else(|| Error::ColumnNotFound {
-                        column: col.clone(),
-                    })?;
-
-                unbound_fields.push(
-                    iceberg::spec::UnboundPartitionField::builder()
-                        .source_id(field_id)
-                        .field_id(1000 + idx as i32)
-                        .name(col.clone())
-                        .transform(iceberg::spec::Transform::Identity)
-                        .build(),
-                );
-            }
-            iceberg::spec::UnboundPartitionSpec::builder()
-                .with_spec_id(0)
-                .add_partition_fields(unbound_fields)
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to add partition fields: {}", e),
-                })?
-                .build()
-                .bind(iceberg_schema.clone())
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build partition spec: {}", e),
-                })?
-        } else {
-            iceberg::spec::PartitionSpec::unpartition_spec()
-        };
-
-        let sort_order = iceberg::spec::SortOrder::unsorted_order();
-
-        // Build initial table metadata (without snapshot)
-        let build_result = iceberg::spec::TableMetadataBuilder::new(
-            iceberg_schema.clone(),
-            partition_spec.clone(),
-            sort_order,
-            base_path.to_string(),
-            iceberg::spec::FormatVersion::V2,
-            HashMap::new(),
-        )
-        .map_err(|e| Error::Metadata {
-            message: format!("Failed to create metadata builder: {}", e),
-        })?
-        .build()
-        .map_err(|e| Error::Metadata {
-            message: format!("Failed to build table metadata: {}", e),
-        })?;
-
-        let initial_metadata = build_result.metadata;
-
-        // Generate snapshot ID and sequence number
-        let snapshot_id = chrono::Utc::now().timestamp_millis();
-        let sequence_number = 1i64;
-        let timestamp_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time is after UNIX epoch")
-            .as_nanos();
-
-        // Create FileIO for writing manifests
-        let file_io = create_file_io(base_path)?;
-
-        // Create snapshot writer
-        let snapshot_writer = SnapshotWriter::new(base_path.to_string(), file_io);
-
-        // Convert our DataFileInfo to Iceberg DataFile
-        let iceberg_data_files: Vec<iceberg::spec::DataFile> = data_files
-            .iter()
-            .map(|df| {
-                DataFileBuilder::default()
-                    .content(DataContentType::Data)
-                    .file_path(df.path.clone())
-                    .file_format(DataFileFormat::Parquet)
-                    .partition(Struct::empty())
-                    .partition_spec_id(partition_spec.spec_id())
-                    .record_count(df.record_count)
-                    .file_size_in_bytes(df.size)
-                    .build()
-                    .map_err(|e| Error::Metadata {
-                        message: format!("Failed to build DataFile: {}", e),
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Write manifest file
-        let manifest_file = snapshot_writer
-            .write_manifest(
-                &iceberg_data_files,
-                snapshot_id,
-                sequence_number,
-                &initial_metadata,
-                timestamp_nanos,
-            )
-            .await?;
-
-        // Write manifest list
-        let manifest_list_path = snapshot_writer
-            .write_manifest_list(
-                manifest_file,
-                snapshot_id,
-                None, // No parent snapshot
-                sequence_number,
-                timestamp_nanos,
-            )
-            .await?;
-
-        // Calculate summary statistics
-        let total_records: u64 = data_files.iter().map(|f| f.record_count).sum();
-        let total_size: u64 = data_files.iter().map(|f| f.size).sum();
-
-        let summary = Summary {
-            operation: iceberg::spec::Operation::Append,
-            additional_properties: HashMap::from([
-                ("added-data-files".to_string(), data_files.len().to_string()),
-                ("added-records".to_string(), total_records.to_string()),
-                ("added-files-size".to_string(), total_size.to_string()),
-                ("total-records".to_string(), total_records.to_string()),
-                ("total-data-files".to_string(), data_files.len().to_string()),
-            ]),
-        };
-
-        // Build snapshot
-        let snapshot = snapshot_writer.build_snapshot(
-            snapshot_id,
-            None, // No parent
-            sequence_number,
-            manifest_list_path,
-            summary,
-            initial_metadata.current_schema().schema_id(),
-        );
-
-        // Update metadata with snapshot - need new version
-        let _initial_location = new_metadata_location(base_path);
-        let metadata_location = new_metadata_location(base_path);
-        let metadata_with_snapshot = iceberg::spec::TableMetadataBuilder::new_from_metadata(
-            initial_metadata,
-            Some(metadata_location_filename(&metadata_location)),
-        )
-        .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
-        .map_err(|e| Error::Metadata {
-            message: format!("Failed to set snapshot: {}", e),
-        })?
-        .build()
-        .map_err(|e| Error::Metadata {
-            message: format!("Failed to build metadata with snapshot: {}", e),
-        })?;
-
-        let final_metadata = metadata_with_snapshot.metadata;
-
-        // Serialize and write final metadata
-        let metadata_json = serde_json::to_string_pretty(&final_metadata)
-            .map_err(|e| Error::Serialization {
-                message: format!("Failed to serialize metadata: {}", e),
-            })?;
-
-        let metadata_filename = metadata_location_filename(&metadata_location);
-        // Relative path for storage
-        let storage_metadata_path = format!("metadata/{}", metadata_filename);
-        // Absolute path for result
-        let iceberg_metadata_path = format!("{}/metadata/{}", base_path, metadata_filename);
-
-        storage
-            .put_bytes(&to_path(&storage_metadata_path), Bytes::from(metadata_json))
-            .await?;
-
-        // Note: We do NOT write version-hint.text as it's Hadoop legacy format
-        // Standard Iceberg format uses metadata/00000-<uuid>.metadata.json naming
-
-        Ok((iceberg_metadata_path, snapshot_id))
     }
 
     /// Generate a record batch with synthetic data
@@ -657,43 +557,6 @@ impl GenerateOperation {
         crate::utils::resources::release_memory(estimated_memory);
 
         Ok(buf)
-    }
-
-    fn arrow_to_iceberg_schema(arrow_schema: &Schema) -> Result<iceberg::spec::Schema> {
-        use iceberg::spec::{NestedField, PrimitiveType, Type};
-
-        let mut fields = Vec::new();
-
-        for (idx, field) in arrow_schema.fields().iter().enumerate() {
-            let field_id = (idx + 1) as i32;
-            let iceberg_type = match field.data_type() {
-                DataType::Int32 => Type::Primitive(PrimitiveType::Int),
-                DataType::Int64 => Type::Primitive(PrimitiveType::Long),
-                DataType::Float32 => Type::Primitive(PrimitiveType::Float),
-                DataType::Float64 => Type::Primitive(PrimitiveType::Double),
-                DataType::Utf8 => Type::Primitive(PrimitiveType::String),
-                DataType::Boolean => Type::Primitive(PrimitiveType::Boolean),
-                DataType::Timestamp(_, _) => Type::Primitive(PrimitiveType::Timestamp),
-                DataType::Date32 => Type::Primitive(PrimitiveType::Date),
-                DataType::Binary => Type::Primitive(PrimitiveType::Binary),
-                _ => Type::Primitive(PrimitiveType::String),
-            };
-
-            let nested_field = if field.is_nullable() {
-                NestedField::optional(field_id, field.name(), iceberg_type)
-            } else {
-                NestedField::required(field_id, field.name(), iceberg_type)
-            };
-
-            fields.push(nested_field.into());
-        }
-
-        iceberg::spec::Schema::builder()
-            .with_fields(fields)
-            .build()
-            .map_err(|e| Error::SchemaValidation {
-                message: format!("Failed to build Iceberg schema: {}", e),
-            })
     }
 }
 

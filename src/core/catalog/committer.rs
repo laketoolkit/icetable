@@ -49,6 +49,16 @@ const DEFAULT_MAX_RETRIES: u32 = 3;
 /// Base delay between retries (with exponential backoff)
 const RETRY_BASE_DELAY_MS: u64 = 100;
 
+/// OAuth token response structure
+#[derive(Debug, serde::Deserialize)]
+struct OAuthTokenResponse {
+    access_token: String,
+    #[serde(default)]
+    token_type: String,
+    #[serde(default)]
+    expires_in: Option<i64>,
+}
+
 /// A committer that can use either catalog transactions or direct storage writes
 pub struct TableCommitter {
     /// REST catalog configuration (if available)
@@ -102,6 +112,76 @@ impl TableCommitter {
     /// Get the catalog config if using catalog mode
     pub fn catalog_config(&self) -> Option<&CatalogConfig> {
         self.catalog_config.as_ref()
+    }
+
+    /// Get an access token for the catalog
+    ///
+    /// For OAuth2 auth: exchanges credentials for an access token
+    /// For Bearer auth: returns the configured token
+    /// For no auth: returns None
+    async fn get_access_token(&self, config: &CatalogConfig) -> Result<Option<String>> {
+        use crate::core::CatalogAuth;
+
+        match &config.auth {
+            CatalogAuth::None => Ok(None),
+            CatalogAuth::Bearer { token } => Ok(token.resolve()?),
+            CatalogAuth::OAuth2 {
+                client_id,
+                client_secret,
+                token_endpoint,
+                scope,
+            } => {
+                // Build token endpoint URL
+                // OAuth endpoint is at /v1/oauth/tokens (without warehouse prefix)
+                let endpoint = token_endpoint.clone().unwrap_or_else(|| {
+                    let base = config.uri.trim_end_matches('/');
+                    format!("{}/v1/oauth/tokens", base)
+                });
+
+                let secret = client_secret.resolve()?.unwrap_or_default();
+
+                // Build form data for client credentials grant
+                let mut form: Vec<(&str, String)> = vec![
+                    ("grant_type", "client_credentials".to_string()),
+                    ("client_id", client_id.clone()),
+                    ("client_secret", secret),
+                ];
+                if let Some(s) = scope {
+                    form.push(("scope", s.clone()));
+                }
+
+                let response = self
+                    .http_client
+                    .post(&endpoint)
+                    .form(&form)
+                    .send()
+                    .await
+                    .map_err(|e| Error::General(format!("Failed to fetch OAuth token: {}", e)))?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(Error::General(format!(
+                        "OAuth token request failed ({}): {}",
+                        status, body
+                    )));
+                }
+
+                let token_response: OAuthTokenResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| Error::General(format!("Failed to parse OAuth response: {}", e)))?;
+
+                Ok(Some(token_response.access_token))
+            }
+            CatalogAuth::SigV4 { .. } => {
+                // SigV4 auth is handled differently (AWS SDK signing)
+                // For now, we don't support it in the committer
+                Err(Error::General(
+                    "SigV4 authentication not yet supported for catalog commits".to_string(),
+                ))
+            }
+        }
     }
 
     /// Commit snapshot removal (expire snapshots)
@@ -201,17 +281,29 @@ impl TableCommitter {
         requirements: Vec<TableRequirement>,
     ) -> Result<()> {
         let namespace: Vec<String> = ident.namespace().as_ref().to_vec();
+        let namespace_display = namespace.join("."); // For error messages
         let table_name = ident.name().to_string();
 
         // Build the endpoint URL
         // REST catalog spec: POST /v1/{prefix}/namespaces/{namespace}/tables/{table}
+        // If warehouse is configured, include it as the prefix (e.g., Polaris catalogs)
         let namespace_path = namespace.join("%1F"); // Use unit separator for multi-level namespaces
-        let endpoint = format!(
-            "{}/v1/namespaces/{}/tables/{}",
-            config.uri.trim_end_matches('/'),
-            namespace_path,
-            table_name
-        );
+        let endpoint = if let Some(ref warehouse) = config.warehouse {
+            format!(
+                "{}/v1/{}/namespaces/{}/tables/{}",
+                config.uri.trim_end_matches('/'),
+                warehouse,
+                namespace_path,
+                table_name
+            )
+        } else {
+            format!(
+                "{}/v1/namespaces/{}/tables/{}",
+                config.uri.trim_end_matches('/'),
+                namespace_path,
+                table_name
+            )
+        };
 
         let request_body = CommitTableRequest {
             identifier: TableIdentifier {
@@ -222,6 +314,9 @@ impl TableCommitter {
             updates,
         };
 
+        // Get access token (handles OAuth2 token exchange if needed)
+        let access_token = self.get_access_token(config).await?;
+
         // Retry loop with exponential backoff
         let mut attempt = 0;
         loop {
@@ -229,15 +324,9 @@ impl TableCommitter {
 
             let mut request = self.http_client.post(&endpoint).json(&request_body);
 
-            // Add credential if configured
-            if let Some(credential) = config.resolve_credential()? {
-                // Basic auth or bearer token
-                if credential.contains(':') {
-                    let parts: Vec<&str> = credential.splitn(2, ':').collect();
-                    request = request.basic_auth(parts[0], Some(parts[1]));
-                } else {
-                    request = request.bearer_auth(&credential);
-                }
+            // Add bearer token if we have one
+            if let Some(ref token) = access_token {
+                request = request.bearer_auth(token);
             }
 
             let response = request
@@ -248,20 +337,27 @@ impl TableCommitter {
             match response.status() {
                 reqwest::StatusCode::OK => return Ok(()),
                 reqwest::StatusCode::CONFLICT => {
+                    let body = response.text().await.unwrap_or_default();
                     if attempt >= self.max_retries {
                         return Err(Error::General(format!(
                             "Commit conflict: table was modified by another writer. \
-                             Exhausted {} retry attempts.",
-                            self.max_retries
+                             Exhausted {} retry attempts. Last response: {}",
+                            self.max_retries, body
                         )));
                     }
+                    eprintln!("Commit conflict (attempt {}): {}", attempt, body);
                     // Exponential backoff: 100ms, 200ms, 400ms...
                     let delay = Duration::from_millis(RETRY_BASE_DELAY_MS * (1 << (attempt - 1)));
                     tokio::time::sleep(delay).await;
                     continue;
                 }
                 reqwest::StatusCode::NOT_FOUND => {
-                    return Err(Error::General(format!("Table not found: {}", ident.name())));
+                    return Err(Error::General(format!(
+                        "Table not found: {}.{} (endpoint: {})",
+                        namespace_display,
+                        ident.name(),
+                        endpoint
+                    )));
                 }
                 status => {
                     let body = response

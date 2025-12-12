@@ -8,6 +8,33 @@ use icetable::cli::commands::*;
 use icetable::cli::parser::{Cli, Commands, ImportCommands};
 use icetable::utils::{ResourceLimits, init_resource_limits, is_cancelled};
 
+/// Print all global options (kubectl style)
+fn print_global_options() {
+    println!("The following options can be passed to any command:\n");
+
+    println!("{}", "Global Options:".bold());
+    println!("      --quiet, -q                Suppress non-error output");
+    println!("      --log-level <LEVEL>        Log level: off, error, warn, info, debug, trace [default: off]");
+    println!("      --log-file <PATH>          Log to file");
+    println!();
+
+    println!("{}", "Catalog Override:".bold());
+    println!("      --catalog-uri <URI>        REST Catalog URI [env: ICETABLE_CATALOG_URI]");
+    println!("      --catalog-warehouse <WH>   Catalog warehouse [env: ICETABLE_CATALOG_WAREHOUSE]");
+    println!("      --catalog-credential <C>   Credential as client_id:secret [env: ICETABLE_CATALOG_CREDENTIAL]");
+    println!("      --catalog-credential-env   Credential from env var [env: ICETABLE_CATALOG_CREDENTIAL_ENV]");
+    println!("      --catalog-credential-file  Credential from file [env: ICETABLE_CATALOG_CREDENTIAL_FILE]");
+    println!("      --catalog-use-iam-role     Use IAM role for auth (AWS, GCP, Azure)");
+    println!("      --catalog-use-oauth2       Use OAuth2 client credentials flow");
+    println!();
+
+    println!("{}", "Resource Limits:".bold());
+    println!("      --max-memory <SIZE>        Max memory (e.g., 2GB). 0 = unlimited [env: ICETABLE_MAX_MEMORY]");
+    println!("      --timeout <SECS>           Operation timeout. 0 = none [env: ICETABLE_TIMEOUT]");
+    println!("      --max-concurrency <N>      Max concurrent ops [env: ICETABLE_MAX_CONCURRENCY]");
+    println!("      --max-threads <N>          Max worker threads. 0 = auto [env: ICETABLE_MAX_THREADS]");
+}
+
 fn main() {
     // Parse command-line arguments first (before runtime setup)
     let cli = Cli::parse();
@@ -68,6 +95,9 @@ async fn async_main(cli: Cli) -> i32 {
 
     // Execute command and handle errors
     let result = match cli.command {
+        Commands::Ls(args) => LsCommand::execute(args).await,
+        Commands::Create(args) => CreateCommand::execute(args).await,
+        Commands::Delete(args) => DeleteCommand::execute(args).await,
         Commands::Analyze(args) => AnalyzeCommand::execute(args, catalog_config.clone()).await,
         Commands::Init(args) => InitCommand::execute(args).await,
         Commands::Inspect(args) => InspectCommand::execute(args, catalog_config.clone()).await,
@@ -86,13 +116,16 @@ async fn async_main(cli: Cli) -> i32 {
         Commands::Branch(args) => BranchCommand::execute(args, catalog_config.clone()).await,
         Commands::Tag(args) => TagCommand::execute(args, catalog_config.clone()).await,
         Commands::Config(args) => ConfigCommand::execute(args).await,
-        Commands::Catalog(args) => CatalogCommand::execute(args).await,
         Commands::Generate(args) => GenerateCommand::execute(args).await,
         Commands::Completions(args) => {
             args.generate();
             Ok(())
         }
         Commands::Doctor(args) => DoctorCommand::execute(args).await,
+        Commands::Options => {
+            print_global_options();
+            Ok(())
+        }
         #[cfg(feature = "tui")]
         Commands::Tui(args) => TuiCommand::execute(args).await,
     };
@@ -105,11 +138,10 @@ async fn async_main(cli: Cli) -> i32 {
             130
         }
         Err(e) => {
-            eprintln!("{}", "Error:".red().bold());
-            eprintln!("{}", e.user_message());
+            eprintln!("{} {}", "Error:".red().bold(), e.user_message());
 
             if std::env::var("RUST_BACKTRACE").is_ok() {
-                eprintln!("\n{}", "Backtrace:".yellow());
+                eprintln!("\n{}", "Debug:".yellow());
                 eprintln!("{:?}", e);
             }
 

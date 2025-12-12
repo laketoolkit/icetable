@@ -172,32 +172,24 @@ impl TableLoader {
                 #[cfg(feature = "rest-catalog")]
                 {
                     use iceberg_catalog_rest::RestCatalogBuilder;
-                    
+
                     let mut props = std::collections::HashMap::new();
                     props.insert("uri".to_string(), config.uri.clone());
-                    
+
                     if let Some(warehouse) = &config.warehouse {
                         props.insert("warehouse".to_string(), warehouse.clone());
                     }
-                    
-                    // Add credentials if provided
-                    if let Some(credential) = &config.credential
-                        && let Ok(Some(token)) = credential.resolve() {
-                            props.insert("token".to_string(), token);
-                        }
-                    
-                    // Add any additional properties
-                    for (k, v) in &config.properties {
-                        props.insert(k.clone(), v.clone());
-                    }
-                    
+
+                    // Add auth and custom properties
+                    props.extend(config.to_catalog_properties()?);
+
                     let catalog = RestCatalogBuilder::default()
                         .load("rest", props)
                         .await
                         .map_err(|e| Error::CatalogBuild {
                             source: e.into(),
                         })?;
-                    
+
                     Ok(Arc::new(catalog))
                 }
                 #[cfg(not(feature = "rest-catalog"))]

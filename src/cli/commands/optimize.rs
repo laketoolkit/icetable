@@ -8,7 +8,7 @@
 
 use colored::Colorize;
 
-use super::common::{create_committer, print_dry_run_header, print_json, resolve_table};
+use super::common::{create_committer, print_dry_run_header, print_json, resolve_table, TableResolution};
 use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
 use crate::core::catalog::TableCommitter;
 use crate::core::maintenance::{
@@ -45,8 +45,6 @@ impl OptimizeCommand {
         let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
         let table_path = resolution.location().to_string();
 
-        let committer = create_committer(catalog_config.as_ref(), &resolution);
-
         let max_bytes = args
             .max_bytes
             .as_ref()
@@ -71,7 +69,7 @@ impl OptimizeCommand {
         let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
         let result = with_resource_limits(
             estimated_memory,
-            Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), committer),
+            Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), &resolution, catalog_config.as_ref()),
         )
         .await?;
 
@@ -103,7 +101,8 @@ impl OptimizeCommand {
         table_path: &str,
         service: &OptimizeService,
         branch: Option<&str>,
-        committer: Option<TableCommitter>,
+        resolution: &TableResolution,
+        cli_catalog: Option<&CatalogConfig>,
     ) -> Result<MaintenanceResult> {
         use crate::core::metadata::IcebergMetadataService;
 
@@ -118,16 +117,26 @@ impl OptimizeCommand {
             println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
         }
 
-        let metadata_service = match committer {
-            Some(c) => {
-                IcebergMetadataService::new_with_committer(
-                    table_path.to_string(),
+        // For write operations (non-dry-run), we need a catalog
+        // Read-only operations can use storage directly
+        let metadata_service = match resolution {
+            TableResolution::CatalogTable { table, namespace, name, catalog_config } => {
+                // Use catalog table's metadata for proper UUID/snapshot consistency
+                let config = cli_catalog.unwrap_or(catalog_config);
+                let committer = crate::core::TableCommitter::with_catalog(
+                    config.clone(),
+                    namespace.clone(),
+                    name.clone(),
+                );
+                IcebergMetadataService::from_catalog_table(
+                    table,
                     branch.map(|s| s.to_string()),
-                    c,
+                    committer,
                 )
                 .await?
             }
-            None => {
+            TableResolution::Path(_) => {
+                // Direct path - read-only operations only
                 IcebergMetadataService::new_with_branch(
                     table_path.to_string(),
                     branch.map(|s| s.to_string()),
