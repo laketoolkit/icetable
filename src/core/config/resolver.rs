@@ -64,11 +64,7 @@ impl ResolvePath for Option<String> {
             None => config
                 .get_current_context()
                 .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    Error::General(
-                        "No table specified. Use -t <path> or set default with 'icetable config use <path>'".to_string()
-                    )
-                })?,
+                .ok_or(Error::NoTable)?,
         };
 
         match config.resolve_table(&reference)? {
@@ -80,10 +76,12 @@ impl ResolvePath for Option<String> {
             } => {
                 // For ResolvePath we only support direct paths
                 // Use ResolveTableRef for catalog support
-                Err(Error::General(format!(
-                    "Use inspect command with catalog tables: {}.{}",
-                    catalog_name, table_name
-                )))
+                Err(Error::UnsupportedFeature {
+                    feature: format!(
+                        "Direct path resolution for catalog tables ({}.{}). Use ResolveTableRef or inspect command instead",
+                        catalog_name, table_name
+                    ),
+                })
             }
         }
     }
@@ -108,37 +106,24 @@ impl ResolveTableRef for Option<String> {
         }
 
         // No explicit table - check if context includes a table
-        let context = config.get_current_context().ok_or_else(|| {
-            Error::General(
-                "No table specified. Use -t <table> or set context with 'icetable config use <catalog> -n <ns> -t <table>'".to_string()
-            )
-        })?;
+        let context = config.get_current_context().ok_or(Error::NoTable)?;
 
         // Parse context: catalog, catalog.namespace, or catalog.namespace.table
         let parts: Vec<&str> = context.splitn(3, '.').collect();
 
         match parts.len() {
-            1 => {
-                // Just catalog name - no table specified
-                Err(Error::General(format!(
-                    "No table specified. Use -t <table> or set a default:\n\
-                    icetable config use {} -n <namespace> -t <table>",
-                    parts[0]
-                )))
-            }
-            2 => {
-                // catalog.namespace - no table specified
-                Err(Error::General(format!(
-                    "No table specified. Use -t <table> or set a default:\n\
-                    icetable config use {} -n {} -t <table>",
-                    parts[0], parts[1]
-                )))
+            1 | 2 => {
+                // Just catalog name or catalog.namespace - no table specified
+                Err(Error::NoTable)
             }
             3 => {
                 // catalog.namespace.table - full context, resolve it
                 config.resolve_table(context)
             }
-            _ => Err(Error::General(format!("Invalid context: {}", context))),
+            _ => Err(Error::Parse {
+                message: format!("Invalid context format: '{}'", context),
+                source: None,
+            }),
         }
     }
 }

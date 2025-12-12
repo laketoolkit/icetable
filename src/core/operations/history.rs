@@ -40,7 +40,10 @@ pub struct HistoryService;
 
 impl HistoryService {
     /// Get history entries from an Iceberg table
-    pub fn get_history(table: &Arc<IcebergTable>, config: &HistoryConfig) -> Result<Vec<HistoryEntry>> {
+    pub fn get_history(
+        table: &Arc<IcebergTable>,
+        config: &HistoryConfig,
+    ) -> Result<Vec<HistoryEntry>> {
         let (metadata, _) = table.metadata_with_version();
         let current_snapshot_id = metadata.current_snapshot_id();
 

@@ -13,8 +13,8 @@ pub use format_detection::{
 };
 pub use fs::{ScannedFile, normalize_path, normalize_relative_path, scan_parquet_files};
 pub use iceberg::{
-    WriteMetadataResult, extract_version_from_path, find_latest_metadata, metadata_location_filename,
-    new_metadata_location, next_metadata_location, write_metadata_file,
+    WriteMetadataResult, extract_version_from_path, find_latest_metadata,
+    metadata_location_filename, new_metadata_location, next_metadata_location, write_metadata_file,
 };
 pub use parquet::read_parquet_record_count;
 pub use snapshot::{

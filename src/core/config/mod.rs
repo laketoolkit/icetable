@@ -14,7 +14,7 @@ mod resolver;
 pub use catalog::{CatalogAuth, CatalogConfig, CatalogType};
 pub use credentials::CredentialSource;
 pub use manager::Config;
-pub use resolver::{ResolvedTable, ResolvePath, ResolveTableRef};
+pub use resolver::{ResolvePath, ResolveTableRef, ResolvedTable};
 
 /// Check if a string looks like a direct path
 pub fn is_direct_path(s: &str) -> bool {

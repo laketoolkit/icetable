@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use crate::core::storage::Storage;
-use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 use crate::error::{Error, Result};
+use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 
 /// Result of conflict detection
 #[derive(Debug)]

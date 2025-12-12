@@ -191,9 +191,12 @@ pub enum Error {
         path: String,
     },
 
-    /// General errors with context (use sparingly - prefer specific variants)
-    #[error("{0}")]
-    General(String),
+    /// Storage/filesystem operation errors
+    #[error("Storage error: {message}")]
+    Storage {
+        /// The error message describing what failed
+        message: String,
+    },
 
     /// Concurrent modification conflict (optimistic concurrency)
     #[error("Conflict: {0}")]
@@ -224,7 +227,9 @@ pub enum Error {
     },
 
     /// Write operations require a catalog
-    #[error("Write operations require a catalog.\n  → icetable config add-catalog <name> --uri <URL>")]
+    #[error(
+        "Write operations require a catalog.\n  → icetable config add-catalog <name> --uri <URL>"
+    )]
     CatalogRequiredForWrite {
         /// The write operation that was attempted
         operation: String,
@@ -302,6 +307,55 @@ pub enum Error {
         /// Description of why the argument is required
         description: String,
     },
+
+    // =========================================================================
+    // CLI-specific errors
+    // =========================================================================
+    /// No catalog configured or specified
+    #[error("No catalog specified. Use 'icetable config use <catalog>' or specify -c <catalog>")]
+    NoCatalog,
+
+    /// Catalog not found in configuration
+    #[error("Catalog '{name}' not found in configuration")]
+    CatalogNotFound {
+        /// The catalog name that was not found
+        name: String,
+    },
+
+    /// No namespace specified when required
+    #[error(
+        "No namespace specified. Use 'icetable config use <catalog> -n <namespace>' or specify -n <namespace>"
+    )]
+    NoNamespace,
+
+    /// Namespace not found in catalog
+    #[error("Namespace '{name}' not found in catalog")]
+    NamespaceNotFound {
+        /// The namespace name that was not found
+        name: String,
+    },
+
+    /// No table specified when required
+    #[error(
+        "No table specified. Use 'icetable config use <catalog> -n <namespace> -t <table>' or specify -t <table>"
+    )]
+    NoTable,
+
+    /// Invalid namespace format
+    #[error("Invalid namespace '{value}': {reason}")]
+    InvalidNamespace {
+        /// The invalid namespace value
+        value: String,
+        /// Why it's invalid
+        reason: String,
+    },
+
+    /// Catalog operation failed
+    #[error("Catalog operation failed: {message}")]
+    CatalogOperation {
+        /// Description of what failed
+        message: String,
+    },
 }
 
 /// Result type alias for TableTools operations
@@ -312,7 +366,7 @@ fn format_errors(errors: &[Error]) -> String {
     if errors.is_empty() {
         return "No errors".to_string();
     }
-    
+
     let mut result = String::new();
     for (i, error) in errors.iter().enumerate() {
         result.push_str(&format!("{}. {}\n", i + 1, error));

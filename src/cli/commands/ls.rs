@@ -7,10 +7,8 @@
 
 use colored::Colorize;
 
-use super::common::print_json;
-use crate::cli::parser::LsArgs;
-use crate::config::Config;
-use crate::core::catalog::RestCatalogClient;
+use super::common::{CatalogResolution, print_json, resolve_catalog_from_context};
+use crate::cli::parser::{LsArgs, TableContext};
 use crate::core::metadata::{IcebergMetadataService, MetadataService};
 use crate::error::Result;
 
@@ -24,83 +22,42 @@ pub struct LsCommand;
 
 impl LsCommand {
     /// Execute ls command
-    pub async fn execute(args: LsArgs) -> Result<()> {
-        let config = Config::load()?;
-
-        // Get catalog name from args or context
-        let catalog_name = args
-            .catalog
-            .clone()
-            .or_else(|| config.get_current_catalog().map(String::from));
-
-        let Some(catalog_name) = catalog_name else {
-            println!("{} No catalog specified", "!".yellow());
-            println!(
-                "  Use {} or specify {}",
-                "icetable config use <catalog>".dimmed(),
-                "-c <catalog>".dimmed()
-            );
-            return Ok(());
-        };
-
-        // Get catalog config
-        let Some(catalog_config) = config.catalogs.get(&catalog_name) else {
-            println!(
-                "{} Catalog not found: {}",
-                "!".yellow(),
-                catalog_name.cyan()
-            );
-            return Ok(());
-        };
-
-        // Check if context points to a table (and no explicit args override)
-        let table_from_context = if args.catalog.is_none() && args.namespace.is_none() {
-            config.get_current_table().map(String::from)
-        } else {
-            None
-        };
-
-        // Get namespace from args or context
-        let namespace = args.namespace.or_else(|| config.get_current_namespace());
-
-        // Create REST client
-        let client = RestCatalogClient::new(catalog_config).await?;
+    pub async fn execute(args: LsArgs, ctx: &TableContext) -> Result<()> {
+        // Resolve catalog context (error propagates with full context)
+        let catalog = resolve_catalog_from_context(ctx, args.catalog.as_deref()).await?;
 
         // If we have a table in context, show table info
-        if let Some(table_name) = table_from_context {
-            if let Some(ref ns) = namespace {
-                return Self::show_table_info(&client, &catalog_name, ns, &table_name, &args.output).await;
-            }
+        if let (Some(table_name), Some(ns)) = (catalog.table(), catalog.namespace()) {
+            return Self::show_table_info(&catalog, ns, table_name, &args.output).await;
         }
 
         // Otherwise, list tables or namespaces
-        if let Some(ref ns) = namespace {
+        if let Some(ns) = catalog.namespace() {
             // List tables in namespace
-            let ns_parts: Vec<String> = ns.split('.').map(String::from).collect();
-            let tables = client.list_tables(&ns_parts).await?;
+            let tables = catalog.list_tables().await?;
 
             if args.output == "json" {
                 let json = serde_json::json!({
-                    "catalog": catalog_name,
+                    "catalog": catalog.catalog_name,
                     "namespace": ns,
                     "tables": tables,
                 });
                 print_json(&json)?;
             } else {
-                Self::print_tables_tree(&catalog_name, ns, &tables);
+                Self::print_tables_tree(&catalog.catalog_name, ns, &tables);
             }
         } else {
             // List namespaces
-            let namespaces = client.list_namespaces(None).await?;
+            let namespaces = catalog.list_namespaces().await?;
 
             if args.output == "json" {
                 let json = serde_json::json!({
-                    "catalog": catalog_name,
+                    "catalog": catalog.catalog_name,
                     "namespaces": namespaces.iter().map(|ns| ns.join(".")).collect::<Vec<_>>(),
                 });
                 print_json(&json)?;
             } else {
-                Self::print_namespaces_tree(&catalog_name, &namespaces);
+                Self::print_namespaces_tree(&catalog.catalog_name, &namespaces);
             }
         }
 
@@ -109,20 +66,23 @@ impl LsCommand {
 
     /// Show table information (snapshots, branches, tags)
     async fn show_table_info(
-        client: &RestCatalogClient,
-        catalog: &str,
+        catalog: &CatalogResolution,
         namespace: &str,
         table_name: &str,
         output: &str,
     ) -> Result<()> {
-        let ns_parts: Vec<String> = namespace.split('.').map(String::from).collect();
-        let table = client.load_table(&ns_parts, table_name).await?;
+        let table = catalog.load_table(table_name).await?;
         let location = table.metadata().location();
 
-        // Load metadata service for detailed info
-        let metadata = IcebergMetadataService::new_async(location.to_string()).await?;
-        let snapshots = metadata.list_snapshots(None).await.unwrap_or_default();
-        let refs = metadata.list_refs().await.unwrap_or_default();
+        // Create metadata service from catalog table (uses catalog metadata for consistency)
+        // Note: This is a special case - ls works from config context, not table args,
+        // so we create the service directly from the already-loaded catalog table
+        let metadata_service = IcebergMetadataService::from_catalog_table_readonly(&table).await?;
+        let snapshots = metadata_service
+            .list_snapshots(None)
+            .await
+            .unwrap_or_default();
+        let refs = metadata_service.list_refs().await.unwrap_or_default();
 
         // Separate branches and tags
         let branches: Vec<_> = refs.iter().filter(|r| r.ref_type == "branch").collect();
@@ -130,7 +90,7 @@ impl LsCommand {
 
         if output == "json" {
             let json = serde_json::json!({
-                "catalog": catalog,
+                "catalog": &catalog.catalog_name,
                 "namespace": namespace,
                 "table": table_name,
                 "location": location,
@@ -140,7 +100,14 @@ impl LsCommand {
             });
             print_json(&json)?;
         } else {
-            Self::print_table_info_tree(catalog, namespace, table_name, &snapshots, &branches, &tags);
+            Self::print_table_info_tree(
+                &catalog.catalog_name,
+                namespace,
+                table_name,
+                &snapshots,
+                &branches,
+                &tags,
+            );
         }
 
         Ok(())
@@ -164,7 +131,11 @@ impl LsCommand {
 
         // Snapshots
         let is_last_section = branches.is_empty() && tags.is_empty();
-        let prefix = if is_last_section { TREE_LAST } else { TREE_BRANCH };
+        let prefix = if is_last_section {
+            TREE_LAST
+        } else {
+            TREE_BRANCH
+        };
         println!(
             "{}{} {}",
             prefix,
@@ -176,7 +147,11 @@ impl LsCommand {
         let recent: Vec<_> = snapshots.iter().take(3).collect();
         let indent = if is_last_section { "    " } else { TREE_INDENT };
         for (i, snap) in recent.iter().enumerate() {
-            let snap_prefix = if i == recent.len() - 1 { TREE_LAST } else { TREE_BRANCH };
+            let snap_prefix = if i == recent.len() - 1 {
+                TREE_LAST
+            } else {
+                TREE_BRANCH
+            };
             println!(
                 "{}{}#{} {}",
                 indent,
@@ -186,13 +161,22 @@ impl LsCommand {
             );
         }
         if snapshots.len() > 3 {
-            println!("{}{}... and {} more", indent, TREE_LAST, snapshots.len() - 3);
+            println!(
+                "{}{}... and {} more",
+                indent,
+                TREE_LAST,
+                snapshots.len() - 3
+            );
         }
 
         // Branches
         if !branches.is_empty() || !tags.is_empty() {
             let is_last_section = tags.is_empty();
-            let prefix = if is_last_section { TREE_LAST } else { TREE_BRANCH };
+            let prefix = if is_last_section {
+                TREE_LAST
+            } else {
+                TREE_BRANCH
+            };
             println!(
                 "{}{} {}",
                 prefix,
@@ -205,7 +189,13 @@ impl LsCommand {
                 let is_last = i == branches.len() - 1;
                 let branch_prefix = if is_last { TREE_LAST } else { TREE_BRANCH };
                 let current_marker = if branch.name == "main" { " *" } else { "" };
-                println!("{}{}{}{}", indent, branch_prefix, branch.name, current_marker.green());
+                println!(
+                    "{}{}{}{}",
+                    indent,
+                    branch_prefix,
+                    branch.name,
+                    current_marker.green()
+                );
             }
         }
 

@@ -19,7 +19,6 @@ pub mod validate;
 // Re-export operation types
 pub use convert::ConvertOperation;
 pub use diff::{DiffConfig, DiffService, SnapshotDiffResult, SnapshotRef};
-pub use stats::{PartitionStats, StatsConfig, StatsResult, StatsService, TableStats};
 pub use generate::{
     GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
 };
@@ -29,5 +28,6 @@ pub use init::{ColumnDefinition, InitConfig, InitResult, InitService, SchemaDefi
 pub use inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector, InspectOperation,
 };
+pub use stats::{PartitionStats, StatsConfig, StatsResult, StatsService, TableStats};
 pub use transform::{TransformConfig, apply_transforms};
 pub use validate::ValidateOperation;

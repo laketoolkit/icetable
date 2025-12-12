@@ -47,8 +47,26 @@ use crate::core::config::CredentialSource;
 #[command(version, about, long_about = None)]
 #[command(disable_help_flag = true)]
 pub struct Cli {
+    /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
+    #[arg(
+        short = 't',
+        long = "table",
+        global = true,
+        help_heading = "Global Options"
+    )]
+    pub table: Option<String>,
+
+    /// Namespace (e.g., "db.schema")
+    #[arg(
+        short = 'n',
+        long = "namespace",
+        global = true,
+        help_heading = "Global Options"
+    )]
+    pub namespace: Option<String>,
+
     /// Suppress non-error output
-    #[arg(short, long, global = true, help_heading = "Global Options")]
+    #[arg(short = 'q', long, global = true, help_heading = "Global Options")]
     pub quiet: bool,
 
     /// Log level [default: off]
@@ -62,7 +80,6 @@ pub struct Cli {
     // ═══════════════════════════════════════════════════════════════════════════
     // Hidden global options - use `icetable options` to see all
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// REST Catalog URI for ad-hoc catalog access
     #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide = true)]
     pub catalog_uri: Option<String>,
@@ -76,11 +93,21 @@ pub struct Cli {
     pub catalog_credential: Option<String>,
 
     /// Catalog credential from environment variable
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_ENV", hide = true)]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL_ENV",
+        hide = true
+    )]
     pub catalog_credential_env: Option<String>,
 
     /// Catalog credential from file
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_FILE", hide = true)]
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL_FILE",
+        hide = true
+    )]
     pub catalog_credential_file: Option<std::path::PathBuf>,
 
     /// Use IAM role for authentication (AWS, GCP, Azure)
@@ -92,19 +119,43 @@ pub struct Cli {
     pub catalog_use_oauth2: bool,
 
     /// Maximum memory usage (e.g., 2GB, 512MB). 0 = unlimited
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_MEMORY", hide = true)]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_MEMORY",
+        hide = true
+    )]
     pub max_memory: String,
 
     /// Operation timeout in seconds. 0 = no timeout
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_TIMEOUT", hide = true)]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_TIMEOUT",
+        hide = true
+    )]
     pub timeout: u64,
 
     /// Maximum concurrent operations
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_CONCURRENCY", hide = true)]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_CONCURRENCY",
+        hide = true
+    )]
     pub max_concurrency: u32,
 
     /// Maximum worker threads for runtime. 0 = use system default
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_THREADS", hide = true)]
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_THREADS",
+        hide = true
+    )]
     pub max_threads: usize,
 
     /// Print help
@@ -192,6 +243,48 @@ pub enum Commands {
     Tui(TuiArgs),
 }
 
+/// Global context for table operations
+///
+/// Contains the global options from CLI that are relevant to table operations.
+/// This is passed to commands instead of individual parameters.
+#[derive(Debug, Clone)]
+pub struct TableContext {
+    /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
+    pub table: Option<String>,
+    /// Namespace (e.g., "db.schema")
+    pub namespace: Option<String>,
+    /// Catalog configuration from CLI
+    pub catalog_config: Option<crate::core::CatalogConfig>,
+}
+
+impl TableContext {
+    /// Get the full table reference, combining namespace and table if both are present
+    ///
+    /// If both namespace and table are specified, returns "namespace.table".
+    /// If only table is specified, returns the table as-is.
+    /// If neither is specified, returns None.
+    pub fn table_ref(&self) -> Option<String> {
+        match (&self.namespace, &self.table) {
+            (Some(ns), Some(t)) => {
+                // If table already contains namespace (has '.'), use it as-is
+                if t.contains('.')
+                    || t.starts_with("s3://")
+                    || t.starts_with("gs://")
+                    || t.starts_with("az://")
+                    || t.starts_with("file://")
+                    || t.starts_with("/")
+                {
+                    Some(t.clone())
+                } else {
+                    Some(format!("{}.{}", ns, t))
+                }
+            }
+            (None, Some(t)) => Some(t.clone()),
+            _ => None,
+        }
+    }
+}
+
 impl Cli {
     /// Build catalog configuration from CLI options
     pub fn catalog_config(&self) -> Option<crate::core::CatalogConfig> {
@@ -217,6 +310,15 @@ impl Cli {
 
             config
         })
+    }
+
+    /// Build table context from CLI global options
+    pub fn table_context(&self) -> TableContext {
+        TableContext {
+            table: self.table.clone(),
+            namespace: self.namespace.clone(),
+            catalog_config: self.catalog_config(),
+        }
     }
 }
 

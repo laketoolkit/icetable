@@ -25,8 +25,8 @@
 //!     .await?;
 //! ```
 
-mod traits;
 mod direct_committer;
+mod traits;
 
-pub use traits::{CommitResult, SnapshotCommitter};
 pub use direct_committer::DirectCommitter;
+pub use traits::{CommitResult, SnapshotCommitter};

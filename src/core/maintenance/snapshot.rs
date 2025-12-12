@@ -15,10 +15,10 @@ use iceberg::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMeta
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
 use crate::core::storage::create_object_store;
+use crate::error::{Error, Result};
 use crate::utils::core::snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
 };
-use crate::error::{Error, Result};
 use crate::utils::parse_timestamp;
 
 /// Information about a snapshot for display purposes
@@ -280,7 +280,9 @@ impl SnapshotService {
                 .into_builder(Some(metadata_file_path.clone()))
                 .remove_snapshots(&to_expire)
                 .build()
-                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to build metadata: {}", e),
+                })?;
 
             let new_metadata = build_result.metadata;
 
@@ -317,7 +319,9 @@ impl SnapshotService {
         // Verify snapshot exists
         let _ = metadata
             .snapshot_by_id(target_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", target_id)))?;
+            .ok_or_else(|| Error::SnapshotNotFound {
+                snapshot_id: target_id,
+            })?;
 
         let previous_id = metadata.current_snapshot_id();
 
@@ -359,9 +363,13 @@ impl SnapshotService {
             let build_result = metadata_clone
                 .into_builder(Some(metadata_file_path.clone()))
                 .set_ref(MAIN_BRANCH, branch_ref)
-                .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to set snapshot: {}", e),
+                })?
                 .build()
-                .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to build metadata: {}", e),
+                })?;
 
             let new_metadata = build_result.metadata;
 
@@ -402,18 +410,18 @@ impl SnapshotService {
         let metadata_file = metadata_dir.join(metadata_filename);
 
         if !metadata_file.exists() {
-            return Err(Error::General(format!(
-                "Metadata file not found: {}",
-                metadata_file.display()
-            )));
+            return Err(Error::FileNotFound {
+                path: metadata_file.clone(),
+            });
         }
 
         // Create backup with timestamp
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let backup_file = metadata_dir.join(format!("{}.{}.backup", metadata_filename, timestamp));
 
-        std::fs::copy(&metadata_file, &backup_file)
-            .map_err(|e| Error::General(format!("Failed to create backup: {}", e)))?;
+        std::fs::copy(&metadata_file, &backup_file).map_err(|e| Error::Metadata {
+            message: format!("Failed to create backup: {}", e),
+        })?;
 
         let backup_size = std::fs::metadata(&backup_file)
             .map(|m| m.len())
@@ -444,13 +452,15 @@ impl SnapshotService {
         // - Partition spec compatibility
         //
         // For now, users should use catalog tools (e.g., Spark, Trino) for cherry-pick.
-        Err(Error::General(format!(
-            "Cherry-pick is not yet implemented. Snapshot {} cannot be cherry-picked.\n\
-             This feature requires the iceberg-rs Transaction API.\n\
-             Workaround: Use Spark or Trino SQL: \
-             CALL system.cherrypick_snapshot('table', {})",
-            snapshot_id, snapshot_id
-        )))
+        Err(Error::UnsupportedFeature {
+            feature: format!(
+                "Cherry-pick is not yet implemented. Snapshot {} cannot be cherry-picked. \
+                 This feature requires the iceberg-rs Transaction API. \
+                 Workaround: Use Spark or Trino SQL: \
+                 CALL system.cherrypick_snapshot('table', {})",
+                snapshot_id, snapshot_id
+            ),
+        })
     }
 
     /// Get the lineage of a snapshot (chain of ancestors to root)
@@ -468,11 +478,12 @@ impl SnapshotService {
         let current_id = metadata.current_snapshot_id();
 
         // Get starting snapshot
-        let start_id = snapshot_id.or(current_id).ok_or_else(|| {
-            Error::General(
-                "No snapshot specified and table has no current snapshot".to_string(),
-            )
-        })?;
+        let start_id = snapshot_id
+            .or(current_id)
+            .ok_or_else(|| Error::MissingArgument {
+                argument: "snapshot_id".to_string(),
+                description: "No snapshot specified and table has no current snapshot".to_string(),
+            })?;
 
         // Build parent map for quick lookup
         let parent_map: HashMap<i64, Option<i64>> = metadata
@@ -540,7 +551,9 @@ impl SnapshotService {
             }
         }
 
-        best.ok_or_else(|| Error::General(format!("No snapshot found before {}", timestamp)))
+        best.ok_or_else(|| Error::Metadata {
+            message: format!("No snapshot found before {}", timestamp),
+        })
     }
 
     // =========================================================================
@@ -607,14 +620,19 @@ impl SnapshotService {
             (None, None, Some(branch_name), _) => metadata
                 .snapshot_for_ref(&branch_name)
                 .map(|s| s.snapshot_id())
-                .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name))),
+                .ok_or_else(|| Error::Metadata {
+                    message: format!("Branch '{}' not found", branch_name),
+                }),
             (None, None, None, Some(tag_name)) => metadata
                 .snapshot_for_ref(&tag_name)
                 .map(|s| s.snapshot_id())
-                .ok_or_else(|| Error::General(format!("Tag '{}' not found", tag_name))),
-            (None, None, None, None) => Err(Error::General(
-                "Must specify --id, --as-of, --branch, or --tag".to_string(),
-            )),
+                .ok_or_else(|| Error::Metadata {
+                    message: format!("Tag '{}' not found", tag_name),
+                }),
+            (None, None, None, None) => Err(Error::MissingArgument {
+                argument: "id, as-of, branch, or tag".to_string(),
+                description: "Must specify --id, --as-of, --branch, or --tag".to_string(),
+            }),
         }
     }
 
@@ -626,7 +644,8 @@ impl SnapshotService {
         _current_version: i32, // Kept for API compatibility, version derived from metadata path
     ) -> Result<i64> {
         let storage = create_object_store(table_path).await?;
-        let result = crate::utils::core::write_metadata_file(table_path, metadata, &storage).await?;
+        let result =
+            crate::utils::core::write_metadata_file(table_path, metadata, &storage).await?;
         Ok(result.version)
     }
 }

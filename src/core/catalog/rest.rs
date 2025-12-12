@@ -34,13 +34,34 @@ fn clean_catalog_message(msg: &str) -> String {
 
     // Common patterns to simplify
     let simplified = msg
-        .replace("Tried to create a namespace that already exists", "Namespace already exists")
-        .replace("Tried to create a table under a namespace that does not exist", "Namespace does not exist")
-        .replace("Tried to create a table that already exists", "Table already exists")
-        .replace("Tried to drop a namespace that is not empty", "Namespace is not empty")
-        .replace("Tried to drop a namespace that does not exist", "Namespace does not exist")
-        .replace("Tried to drop a table that does not exist", "Table does not exist")
-        .replace("Tried to load a table that does not exist", "Table does not exist");
+        .replace(
+            "Tried to create a namespace that already exists",
+            "Namespace already exists",
+        )
+        .replace(
+            "Tried to create a table under a namespace that does not exist",
+            "Namespace does not exist",
+        )
+        .replace(
+            "Tried to create a table that already exists",
+            "Table already exists",
+        )
+        .replace(
+            "Tried to drop a namespace that is not empty",
+            "Namespace is not empty",
+        )
+        .replace(
+            "Tried to drop a namespace that does not exist",
+            "Namespace does not exist",
+        )
+        .replace(
+            "Tried to drop a table that does not exist",
+            "Table does not exist",
+        )
+        .replace(
+            "Tried to load a table that does not exist",
+            "Table does not exist",
+        );
 
     // Capitalize first letter if needed
     let mut chars = simplified.chars();
@@ -71,7 +92,9 @@ impl RestCatalogClient {
         let catalog = RestCatalogBuilder::default()
             .load("rest", props)
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))?;
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })?;
 
         Ok(Self {
             catalog: Arc::new(catalog),
@@ -87,7 +110,9 @@ impl RestCatalogClient {
             .catalog
             .list_namespaces(parent_ident.as_ref())
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))?;
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })?;
 
         Ok(namespaces
             .into_iter()
@@ -97,42 +122,62 @@ impl RestCatalogClient {
 
     /// List tables in a namespace
     pub async fn list_tables(&self, namespace: &[String]) -> Result<Vec<String>> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
-        let tables = self
-            .catalog
-            .list_tables(&ns_ident)
-            .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))?;
+        let tables =
+            self.catalog
+                .list_tables(&ns_ident)
+                .await
+                .map_err(|e| Error::CatalogOperation {
+                    message: clean_iceberg_error(&e),
+                })?;
 
         Ok(tables.into_iter().map(|t| t.name().to_string()).collect())
     }
 
     /// Load a table from the catalog
     pub async fn load_table(&self, namespace: &[String], name: &str) -> Result<Table> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
         let table_ident = TableIdent::new(ns_ident, name.to_string());
 
         self.catalog
             .load_table(&table_ident)
             .await
-            .map_err(|e| Error::General(format!("Table '{}': {}", name, clean_iceberg_error(&e))))
+            .map_err(|e| Error::TableNotFound {
+                path: format!(
+                    "{}.{} ({})",
+                    namespace.join("."),
+                    name,
+                    clean_iceberg_error(&e)
+                ),
+            })
     }
 
     /// Check if a table exists
     pub async fn table_exists(&self, namespace: &[String], name: &str) -> Result<bool> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
         let table_ident = TableIdent::new(ns_ident, name.to_string());
 
         self.catalog
             .table_exists(&table_ident)
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })
     }
 
     /// Get the underlying catalog for advanced operations
@@ -151,26 +196,36 @@ impl RestCatalogClient {
         namespace: &[String],
         properties: HashMap<String, String>,
     ) -> Result<()> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
         self.catalog
             .create_namespace(&ns_ident, properties)
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))?;
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })?;
 
         Ok(())
     }
 
     /// Delete a namespace from the catalog
     pub async fn delete_namespace(&self, namespace: &[String]) -> Result<()> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
         self.catalog
             .drop_namespace(&ns_ident)
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })
     }
 
     /// Create a table in the catalog
@@ -182,8 +237,11 @@ impl RestCatalogClient {
         location: Option<&str>,
         properties: HashMap<String, String>,
     ) -> Result<Table> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
         let creation = TableCreation::builder()
             .name(name.to_string())
@@ -195,7 +253,9 @@ impl RestCatalogClient {
         self.catalog
             .create_table(&ns_ident, creation)
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })
     }
 
     /// Delete a table from the catalog
@@ -205,8 +265,11 @@ impl RestCatalogClient {
     /// it by loading the table location first, then dropping from catalog, then
     /// deleting the storage location.
     pub async fn delete_table(&self, namespace: &[String], name: &str, purge: bool) -> Result<()> {
-        let ns_ident = NamespaceIdent::from_vec(namespace.to_vec())
-            .map_err(|e| Error::General(format!("Invalid namespace: {}", e)))?;
+        let ns_ident =
+            NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
+                value: namespace.join("."),
+                reason: e.to_string(),
+            })?;
 
         let table_ident = TableIdent::new(ns_ident, name.to_string());
 
@@ -224,7 +287,9 @@ impl RestCatalogClient {
         self.catalog
             .drop_table(&table_ident)
             .await
-            .map_err(|e| Error::General(clean_iceberg_error(&e)))?;
+            .map_err(|e| Error::CatalogOperation {
+                message: clean_iceberg_error(&e),
+            })?;
 
         // If purge requested and we have a location, delete storage
         if let Some(location) = table_location {
@@ -239,7 +304,7 @@ impl RestCatalogClient {
 
     /// Delete all files at a table location (for purge)
     async fn purge_table_storage(location: &str) -> Result<()> {
-        use crate::core::storage::{create_object_store, to_path, ObjectStoreExt};
+        use crate::core::storage::{ObjectStoreExt, create_object_store, to_path};
 
         let store = create_object_store(location).await?;
         let prefix = to_path(location);
@@ -253,9 +318,15 @@ impl RestCatalogClient {
 
         // Delete all objects
         for meta in objects {
-            store.delete(&meta.location).await.map_err(|e| {
-                Error::General(format!("Failed to delete {}: {}", meta.location, e))
-            })?;
+            store
+                .delete(&meta.location)
+                .await
+                .map_err(|e| Error::CloudStorage {
+                    provider: "object_store".to_string(),
+                    message: format!("Failed to delete {}: {}", meta.location, e),
+                    error_code: None,
+                    http_status: None,
+                })?;
         }
 
         Ok(())

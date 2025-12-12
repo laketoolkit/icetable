@@ -8,16 +8,17 @@
 
 use colored::Colorize;
 
-use super::common::{create_committer, print_dry_run_header, print_json, resolve_table, TableResolution};
-use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs};
-use crate::core::catalog::TableCommitter;
+use super::common::{
+    TableResolution, print_dry_run_header, print_json, resolve_table_from_context,
+};
+use crate::cli::parser::{OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs, TableContext};
 use crate::core::maintenance::{
     MaintenanceConfig, ManifestConfig, ManifestService, OptimizeService,
 };
 use crate::core::metadata::MaintenanceResult;
-use crate::utils::core::parse_bytes;
 use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
+use crate::utils::core::parse_bytes;
 use crate::utils::with_resource_limits;
 
 /// Handler for optimize command
@@ -25,24 +26,16 @@ pub struct OptimizeCommand;
 
 impl OptimizeCommand {
     /// Execute optimize command
-    pub async fn execute(
-        cmd: OptimizeCommands,
-        catalog_config: Option<CatalogConfig>,
-    ) -> Result<()> {
+    pub async fn execute(cmd: OptimizeCommands, ctx: &TableContext) -> Result<()> {
         match cmd {
-            OptimizeCommands::Data(args) => Self::execute_data(args, catalog_config).await,
-            OptimizeCommands::Manifests(args) => {
-                Self::execute_manifests(args, catalog_config).await
-            }
+            OptimizeCommands::Data(args) => Self::execute_data(args, ctx).await,
+            OptimizeCommands::Manifests(args) => Self::execute_manifests(args, ctx).await,
         }
     }
 
     /// Execute optimize data subcommand
-    async fn execute_data(
-        args: OptimizeDataArgs,
-        catalog_config: Option<CatalogConfig>,
-    ) -> Result<()> {
-        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+    async fn execute_data(args: OptimizeDataArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 
         let max_bytes = args
@@ -50,7 +43,10 @@ impl OptimizeCommand {
             .as_ref()
             .map(|s| parse_bytes(s))
             .transpose()
-            .map_err(Error::General)?;
+            .map_err(|e| Error::Parse {
+                message: format!("Invalid --max-bytes value: {}", e),
+                source: None,
+            })?;
 
         let config = MaintenanceConfig {
             target_size: args.target_size,
@@ -69,7 +65,13 @@ impl OptimizeCommand {
         let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
         let result = with_resource_limits(
             estimated_memory,
-            Self::optimize_iceberg_data(&table_path, &service, args.branch.as_deref(), &resolution, catalog_config.as_ref()),
+            Self::optimize_iceberg_data(
+                &table_path,
+                &service,
+                args.branch.as_deref(),
+                &resolution,
+                ctx.catalog_config.as_ref(),
+            ),
         )
         .await?;
 
@@ -78,20 +80,20 @@ impl OptimizeCommand {
     }
 
     /// Execute optimize manifests subcommand
-    async fn execute_manifests(
-        args: OptimizeManifestsArgs,
-        catalog_config: Option<CatalogConfig>,
-    ) -> Result<()> {
-        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+    async fn execute_manifests(args: OptimizeManifestsArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
-
-        let committer = create_committer(catalog_config.as_ref(), &resolution);
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         let estimated_memory = args.target_size * 2;
         with_resource_limits(
             estimated_memory,
-            Self::rewrite_iceberg_manifests(&table_path, &args, committer),
+            Self::rewrite_iceberg_manifests(
+                &table_path,
+                &args,
+                &resolution,
+                ctx.catalog_config.as_ref(),
+            ),
         )
         .await
     }
@@ -104,8 +106,6 @@ impl OptimizeCommand {
         resolution: &TableResolution,
         cli_catalog: Option<&CatalogConfig>,
     ) -> Result<MaintenanceResult> {
-        use crate::core::metadata::IcebergMetadataService;
-
         if let Some(b) = branch {
             println!(
                 "{} Iceberg table at {} (branch: {})",
@@ -117,33 +117,8 @@ impl OptimizeCommand {
             println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
         }
 
-        // For write operations (non-dry-run), we need a catalog
-        // Read-only operations can use storage directly
-        let metadata_service = match resolution {
-            TableResolution::CatalogTable { table, namespace, name, catalog_config } => {
-                // Use catalog table's metadata for proper UUID/snapshot consistency
-                let config = cli_catalog.unwrap_or(catalog_config);
-                let committer = crate::core::TableCommitter::with_catalog(
-                    config.clone(),
-                    namespace.clone(),
-                    name.clone(),
-                );
-                IcebergMetadataService::from_catalog_table(
-                    table,
-                    branch.map(|s| s.to_string()),
-                    committer,
-                )
-                .await?
-            }
-            TableResolution::Path(_) => {
-                // Direct path - read-only operations only
-                IcebergMetadataService::new_with_branch(
-                    table_path.to_string(),
-                    branch.map(|s| s.to_string()),
-                )
-                .await?
-            }
-        };
+        // Create metadata service using factory method - handles catalog vs path context automatically
+        let metadata_service = resolution.to_writable_service(cli_catalog, branch).await?;
         service.execute(&metadata_service).await
     }
 
@@ -151,7 +126,8 @@ impl OptimizeCommand {
     async fn rewrite_iceberg_manifests(
         table_path: &str,
         args: &OptimizeManifestsArgs,
-        committer: Option<TableCommitter>,
+        resolution: &TableResolution,
+        cli_catalog: Option<&CatalogConfig>,
     ) -> Result<()> {
         let target_branch = args.branch.as_deref().unwrap_or("main");
 
@@ -180,13 +156,18 @@ impl OptimizeCommand {
 
         let service = ManifestService::with_config(config);
 
+        // Create metadata service using factory method - handles catalog vs path context automatically
+        let metadata_service = resolution
+            .to_writable_service(cli_catalog, args.branch.as_deref())
+            .await?;
+
         if args.dry_run {
             // Dry-run mode: analyze only
-            let analysis = service.analyze(table_path).await?;
+            let analysis = service.analyze(&metadata_service).await?;
             Self::output_manifest_analysis(&analysis, &args.output)?;
         } else {
             // Execute rewrite
-            let result = service.rewrite(table_path, committer).await?;
+            let result = service.rewrite(&metadata_service).await?;
             Self::output_manifest_result(&result, &args.output)?;
         }
 

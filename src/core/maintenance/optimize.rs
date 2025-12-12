@@ -33,8 +33,8 @@ use super::{FileGroup, MaintenanceConfig, group_files_by_partition};
 use crate::core::metadata::{
     DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
-use crate::utils::core::{format_bytes, generate_unique_id, normalize_relative_path};
 use crate::error::{Error, Result};
+use crate::utils::core::{format_bytes, generate_unique_id, normalize_relative_path};
 use crate::utils::register_cleanup_handler;
 
 /// Result of compacting a single partition group
@@ -364,23 +364,21 @@ impl OptimizeService {
 
             let builder = ParquetRecordBatchStreamBuilder::new(reader)
                 .await
-                .map_err(|e| {
-                    Error::General(format!(
-                        "Failed to create parquet reader for {}: {}",
-                        file.path, e
-                    ))
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to open parquet reader for {}: {}", file.path, e),
                 })?;
 
-            let mut stream = builder.build().map_err(|e| {
-                Error::General(format!(
-                    "Failed to build record batch stream for {}: {}",
+            let mut stream = builder.build().map_err(|e| Error::Metadata {
+                message: format!(
+                    "Failed to open record batch stream for {}: {}",
                     file.path, e
-                ))
+                ),
             })?;
 
             // Stream each batch
-            while let Some(batch) = stream.try_next().await.map_err(|e| {
-                Error::General(format!("Failed to read batch from {}: {}", file.path, e))
+            while let Some(batch) = stream.try_next().await.map_err(|e| Error::Parse {
+                message: format!("Failed to read batch from {}: {}", file.path, e),
+                source: None,
             })? {
                 let coerced = Self::coerce_batch_to_schema(&batch, table_schema)?;
                 let batch_size_estimate = coerced.get_array_memory_size() as u64;
@@ -395,14 +393,16 @@ impl OptimizeService {
                     if let (Some(writer), Some(ref out_path)) =
                         (current_writer.take(), current_path.take())
                     {
-                        writer.close().await.map_err(|e| {
-                            Error::General(format!("Failed to close writer: {}", e))
+                        writer.close().await.map_err(|e| Error::Metadata {
+                            message: format!("Failed to close writer: {}", e),
                         })?;
 
                         let out_object_path =
                             self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
                         let meta = object_store.head(&out_object_path).await.map_err(|e| {
-                            Error::General(format!("Failed to get file metadata: {}", e))
+                            Error::Metadata {
+                                message: format!("Failed to get file metadata: {}", e),
+                            }
                         })?;
 
                         let file_path = out_path.to_string_lossy().to_string();
@@ -442,7 +442,9 @@ impl OptimizeService {
                         table_schema.clone(),
                         Some(props.clone()),
                     )
-                    .map_err(|e| Error::General(format!("Failed to create async writer: {}", e)))?;
+                    .map_err(|e| Error::Metadata {
+                        message: format!("Failed to create async writer: {}", e),
+                    })?;
 
                     current_writer = Some(async_writer);
                     current_path = Some(output_path);
@@ -452,27 +454,27 @@ impl OptimizeService {
                 if let Some(ref mut writer) = current_writer {
                     current_records += coerced.num_rows() as u64;
                     current_bytes_estimate += batch_size_estimate;
-                    writer
-                        .write(&coerced)
-                        .await
-                        .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+                    writer.write(&coerced).await.map_err(|e| Error::Metadata {
+                        message: format!("Failed to write batch: {}", e),
+                    })?;
                 }
             }
         }
 
         // Finalize the last writer
         if let (Some(writer), Some(ref out_path)) = (current_writer, current_path) {
-            writer
-                .close()
-                .await
-                .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
+            writer.close().await.map_err(|e| Error::Metadata {
+                message: format!("Failed to close writer: {}", e),
+            })?;
 
             let out_object_path =
                 self.path_to_object_path(&out_path.to_string_lossy(), table_base)?;
             let meta = object_store
                 .head(&out_object_path)
                 .await
-                .map_err(|e| Error::General(format!("Failed to get file metadata: {}", e)))?;
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to get file metadata: {}", e),
+                })?;
 
             let file_path = out_path.to_string_lossy().to_string();
             temp_tracker.add_file(file_path.clone());
@@ -585,11 +587,11 @@ impl OptimizeService {
                         if source_type == target_type {
                             Ok(source_column.clone())
                         } else {
-                            cast(source_column, target_type).map_err(|e| {
-                                Error::General(format!(
+                            cast(source_column, target_type).map_err(|e| Error::DataValidation {
+                                message: format!(
                                     "Failed to cast column '{}' from {:?} to {:?}: {}",
                                     target_name, source_type, target_type, e
-                                ))
+                                ),
                             })
                         }
                     }
@@ -602,8 +604,9 @@ impl OptimizeService {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        RecordBatch::try_new(target_schema.clone(), columns)
-            .map_err(|e| Error::General(format!("Failed to create coerced batch: {}", e)))
+        RecordBatch::try_new(target_schema.clone(), columns).map_err(|e| Error::DataValidation {
+            message: format!("Failed to create coerced batch: {}", e),
+        })
     }
 }
 

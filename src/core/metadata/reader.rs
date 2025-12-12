@@ -11,9 +11,9 @@ use iceberg::spec::TableMetadata;
 use iceberg::table::StaticTable;
 use iceberg::{NamespaceIdent, TableIdent};
 
-use crate::core::storage::{Storage, create_object_store, create_file_io};
-use crate::utils::core::find_latest_metadata;
+use crate::core::storage::{Storage, create_file_io, create_object_store};
 use crate::error::{Error, Result};
+use crate::utils::core::find_latest_metadata;
 
 /// Result of loading metadata
 #[derive(Debug, Clone)]
@@ -68,7 +68,6 @@ impl StaticMetadataReader {
             file_io,
         }
     }
-
 }
 
 #[async_trait]
@@ -83,16 +82,13 @@ impl MetadataReader for StaticMetadataReader {
             "table".to_string(),
         );
 
-        let static_table = StaticTable::from_metadata_file(
-            &metadata_location,
-            table_ident,
-            self.file_io.clone(),
-        )
-        .await
-        .map_err(|e| Error::IcebergLoad {
-            path: self.table_path.clone(),
-            source: e.into(),
-        })?;
+        let static_table =
+            StaticTable::from_metadata_file(&metadata_location, table_ident, self.file_io.clone())
+                .await
+                .map_err(|e| Error::IcebergLoad {
+                    path: self.table_path.clone(),
+                    source: e.into(),
+                })?;
 
         let table = static_table.into_table();
         let metadata = table.metadata().clone();
@@ -139,7 +135,8 @@ impl CatalogMetadataReader {
 #[async_trait]
 impl MetadataReader for CatalogMetadataReader {
     async fn load(&self) -> Result<MetadataLoadResult> {
-        let table = self.catalog
+        let table = self
+            .catalog
             .load_table(&self.table_ident)
             .await
             .map_err(|e| Error::CatalogLoad {
@@ -148,7 +145,8 @@ impl MetadataReader for CatalogMetadataReader {
             })?;
 
         let metadata = table.metadata().clone();
-        let metadata_location = table.metadata_location()
+        let metadata_location = table
+            .metadata_location()
             .map(|s| s.to_string())
             .unwrap_or_default();
 

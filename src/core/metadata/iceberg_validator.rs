@@ -165,10 +165,9 @@ pub fn validate_or_error(metadata: &TableMetadata) -> Result<()> {
             .map(|e| format!("[{}] {}", e.code, e.message))
             .collect();
 
-        return Err(Error::General(format!(
-            "Metadata validation failed:\n{}",
-            error_messages.join("\n")
-        )));
+        return Err(Error::Metadata {
+            message: format!("Metadata validation failed:\n{}", error_messages.join("\n")),
+        });
     }
 
     Ok(())

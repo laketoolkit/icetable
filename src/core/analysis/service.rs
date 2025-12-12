@@ -19,7 +19,7 @@ use super::types::{
 };
 use crate::core::maintenance::PartitionFilter;
 use crate::core::maintenance::group_files_by_partition;
-use crate::core::metadata::{iceberg_partition, DataFileInfo, IcebergMetadataService};
+use crate::core::metadata::{DataFileInfo, IcebergMetadataService, iceberg_partition};
 use crate::core::storage::ObjectStoreExt;
 use crate::error::{Error, Result};
 
@@ -113,23 +113,37 @@ impl AnalyzeService {
         }
 
         // Use native scan API - automatically filters deleted files
-        let scan = table.scan().build()
-            .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
+        let scan = table.scan().build().map_err(|e| Error::Parse {
+            message: format!("Failed to build scan: {}", e),
+            source: Some(Box::new(e)),
+        })?;
 
-        let tasks: Vec<_> = scan.plan_files().await
-            .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
-            .try_collect().await
-            .map_err(|e| Error::General(format!("Failed to collect tasks: {}", e)))?;
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .map_err(|e| Error::Parse {
+                message: format!("Failed to plan files: {}", e),
+                source: Some(Box::new(e)),
+            })?
+            .try_collect()
+            .await
+            .map_err(|e| Error::Parse {
+                message: format!("Failed to collect tasks: {}", e),
+                source: Some(Box::new(e)),
+            })?;
 
-        let files: Vec<DataFileInfo> = tasks.iter().map(|task| {
-            let path = task.data_file_path().to_string();
-            DataFileInfo {
-                path: path.clone(),
-                size: task.length,
-                record_count: task.record_count.unwrap_or(0),
-                partition: iceberg_partition::extract_partition_from_path_static(&path),
-            }
-        }).collect();
+        let files: Vec<DataFileInfo> = tasks
+            .iter()
+            .map(|task| {
+                let path = task.data_file_path().to_string();
+                DataFileInfo {
+                    path: path.clone(),
+                    size: task.length,
+                    record_count: task.record_count.unwrap_or(0),
+                    partition: iceberg_partition::extract_partition_from_path_static(&path),
+                }
+            })
+            .collect();
 
         // Calculate statistics
         let total_files = files.len();
@@ -234,7 +248,10 @@ impl AnalyzeService {
         let manifest_list = snapshot
             .load_manifest_list(service.file_io(), metadata.as_ref())
             .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
+            .map_err(|e| Error::Parse {
+                message: format!("Failed to load manifest list: {}", e),
+                source: Some(Box::new(e)),
+            })?;
 
         let total_manifests = manifest_list.entries().len();
 
@@ -337,15 +354,24 @@ impl AnalyzeService {
                     .scan()
                     .snapshot_id(snapshot.snapshot_id())
                     .build()
-                    .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
+                    .map_err(|e| Error::Parse {
+                        message: format!("Failed to build scan: {}", e),
+                        source: Some(Box::new(e)),
+                    })?;
 
                 let tasks: Vec<_> = scan
                     .plan_files()
                     .await
-                    .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+                    .map_err(|e| Error::Parse {
+                        message: format!("Failed to plan files: {}", e),
+                        source: Some(Box::new(e)),
+                    })?
                     .try_collect()
                     .await
-                    .map_err(|e| Error::General(format!("Failed to collect tasks: {}", e)))?;
+                    .map_err(|e| Error::Parse {
+                        message: format!("Failed to collect tasks: {}", e),
+                        source: Some(Box::new(e)),
+                    })?;
 
                 for task in tasks {
                     let path = task.data_file_path().to_string();
@@ -414,7 +440,10 @@ pub async fn get_partition_stats(
     // Create metadata service to list files
     let service = IcebergMetadataService::new_async(table_path.to_string())
         .await
-        .map_err(|e| Error::General(format!("Failed to load table: {}", e)))?;
+        .map_err(|e| Error::Parse {
+            message: format!("Failed to load table: {}", e),
+            source: None,
+        })?;
 
     // Get all data files
     let all_files = service.list_data_files().await?;

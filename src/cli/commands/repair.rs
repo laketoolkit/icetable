@@ -4,12 +4,12 @@
 
 use colored::Colorize;
 
-use super::common::{print_dry_run_header, resolve_table, TableResolution};
+use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
+use crate::cli::parser::{RepairArgs, TableContext};
 use crate::core::extract_filename;
-use crate::cli::parser::RepairArgs;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
-use crate::core::{CatalogConfig, TableCommitter, format_bytes};
+use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
@@ -27,28 +27,31 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(args: RepairArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+    pub async fn execute(args: RepairArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for repair operations
-        with_resource_limits(ESTIMATED_MEMORY, Self::repair_inner(table_path, args, &resolution, catalog_config.as_ref())).await
+        with_resource_limits(
+            ESTIMATED_MEMORY,
+            Self::repair_inner(table_path, args, &resolution, ctx.catalog_config.as_ref()),
+        )
+        .await
     }
 
     async fn repair_inner(
         table_path: String,
-        mut args: RepairArgs,
+        args: RepairArgs,
         resolution: &TableResolution,
-        cli_catalog: Option<&CatalogConfig>,
+        cli_catalog: Option<&crate::core::CatalogConfig>,
     ) -> Result<()> {
-        args.path = Some(table_path.clone());
-
         // Validate at least one repair option is specified
         if !args.sync_metadata && !args.remove_missing && !args.add_orphans {
-            return Err(Error::General(
-                "Must specify at least one repair option: --sync-metadata, --remove-missing, or --add-orphans".to_string(),
-            ));
+            return Err(Error::MissingArgument {
+                argument: "repair option".to_string(),
+                description: "Must specify at least one of: --sync-metadata, --remove-missing, or --add-orphans".to_string(),
+            });
         }
 
         // Determine repair options
@@ -65,7 +68,15 @@ impl RepairCommand {
 
         let service = RepairService::with_config(config);
 
-        Self::repair_iceberg(&args, &service, options, &table_path, resolution, cli_catalog).await
+        Self::repair_iceberg(
+            &args,
+            &service,
+            options,
+            &table_path,
+            resolution,
+            cli_catalog,
+        )
+        .await
     }
 
     /// Repair Iceberg table
@@ -77,7 +88,6 @@ impl RepairCommand {
         resolution: &TableResolution,
         cli_catalog: Option<&CatalogConfig>,
     ) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
         println!(
             "{} Iceberg table at {}",
             if args.dry_run {
@@ -89,28 +99,8 @@ impl RepairCommand {
             table_path
         );
 
-        // Create metadata service: use catalog table when available for proper metadata consistency
-        let metadata_service = match resolution {
-            TableResolution::CatalogTable { table, namespace, name, catalog_config } => {
-                // Use catalog table's metadata for proper UUID/snapshot consistency
-                let config = cli_catalog.unwrap_or(catalog_config);
-                let committer = TableCommitter::with_catalog(
-                    config.clone(),
-                    namespace.clone(),
-                    name.clone(),
-                );
-                IcebergMetadataService::from_catalog_table(
-                    table,
-                    None, // branch
-                    committer,
-                )
-                .await?
-            }
-            TableResolution::Path(_) => {
-                // Direct path - read-only analysis, writes will fail
-                IcebergMetadataService::new_async(table_path.to_string()).await?
-            }
-        };
+        // Create metadata service using factory method - handles catalog vs path context automatically
+        let metadata_service = resolution.to_writable_service(cli_catalog, None).await?;
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;

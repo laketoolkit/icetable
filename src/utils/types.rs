@@ -63,13 +63,16 @@ pub fn parse_data_type(type_str: &str) -> Result<DataType> {
             None,
         )),
 
-        _ => Err(Error::General(format!(
-            "Unsupported data type '{}'. Supported types: \
-             Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, \
-             Float32, Float64, String, LargeString, Boolean, \
-             Date32, Date64, Timestamp (with optional suffixes: _s, _ms, _us, _ns)",
-            type_str
-        ))),
+        _ => Err(Error::Parse {
+            message: format!(
+                "Unsupported data type '{}'. Supported types: \
+                 Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, \
+                 Float32, Float64, String, LargeString, Boolean, \
+                 Date32, Date64, Timestamp (with optional suffixes: _s, _ms, _us, _ns)",
+                type_str
+            ),
+            source: None,
+        }),
     }
 }
 

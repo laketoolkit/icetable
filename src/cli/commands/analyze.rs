@@ -6,16 +6,14 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{create_spinner, extract_table_name, print_json, resolve_table, TableResolution};
+use super::common::{create_spinner, extract_table_name, print_json, resolve_table_from_context};
 use crate::cli::output::create_styled_table;
-use crate::cli::parser::AnalyzeArgs;
+use crate::cli::parser::{AnalyzeArgs, TableContext};
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
 };
-use crate::core::metadata::IcebergMetadataService;
 use crate::core::{format_bytes, format_count};
-use crate::core::CatalogConfig;
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -24,16 +22,24 @@ pub struct AnalyzeCommand;
 
 impl AnalyzeCommand {
     /// Execute analyze command
-    pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+    pub async fn execute(args: AnalyzeArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for analysis
-        with_resource_limits(ESTIMATED_MEMORY, Self::analyze_iceberg(&table_path, &args, &resolution)).await
+        with_resource_limits(
+            ESTIMATED_MEMORY,
+            Self::analyze_iceberg(&table_path, &args, &resolution),
+        )
+        .await
     }
 
-    async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs, resolution: &TableResolution) -> Result<()> {
+    async fn analyze_iceberg(
+        table_path: &str,
+        args: &AnalyzeArgs,
+        resolution: &super::common::TableResolution,
+    ) -> Result<()> {
         let is_json = args.output == "json";
 
         if !is_json {
@@ -44,17 +50,8 @@ impl AnalyzeCommand {
             println!();
         }
 
-        // Load metadata service: use catalog table when available for proper metadata consistency
-        let service = match resolution {
-            TableResolution::CatalogTable { table, .. } => {
-                // Use catalog table's metadata - read-only, no committer needed
-                IcebergMetadataService::from_catalog_table_readonly(table).await?
-            }
-            TableResolution::Path(_) => {
-                // Direct path - use storage metadata
-                IcebergMetadataService::new_async(table_path.to_string()).await?
-            }
-        };
+        // Load metadata service using factory method - handles catalog vs path context automatically
+        let service = resolution.to_readonly_service().await?;
 
         // Create analysis service with configuration from args
         let config = AnalysisConfig {
@@ -69,9 +66,7 @@ impl AnalyzeCommand {
         let data_analysis = analyze_service.analyze_data_compaction(&service).await?;
         pb.finish_and_clear();
 
-        let manifest_analysis = analyze_service
-            .analyze_manifests(&service)
-            .await?;
+        let manifest_analysis = analyze_service.analyze_manifests(&service).await?;
         let (metadata, _) = service.load_metadata().await?;
         let snapshot_analysis = analyze_service.analyze_snapshots(&metadata);
 

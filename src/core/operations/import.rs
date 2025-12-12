@@ -9,7 +9,7 @@ use crate::core::metadata::{
     DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType,
 };
 use crate::core::storage::{ObjectMeta, ObjectStoreExt, Storage};
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Result of an import operation
 #[derive(Debug, Clone)]
@@ -52,23 +52,16 @@ impl ImportService {
     /// Import Parquet files into an Iceberg table
     ///
     /// Reads parquet file metadata to get row counts and adds them to the table.
+    /// The metadata_service should be pre-configured with the appropriate committer
+    /// for catalog-aware operations.
     pub async fn import_parquet(
         &self,
-        target_path: &str,
+        metadata_service: &IcebergMetadataService,
         files: &[&ObjectMeta],
         storage: &Storage,
     ) -> Result<ImportResult> {
+        use crate::error::Error;
         use parquet::file::reader::FileReader;
-
-        // Load Iceberg table
-        let metadata_service = IcebergMetadataService::new_async(target_path.to_string())
-            .await
-            .map_err(|_| {
-                Error::General(format!(
-                    "Target Iceberg table does not exist at '{}'. Use 'icetable init iceberg {}' first.",
-                    target_path, target_path
-                ))
-            })?;
 
         // Build data file changes
         let mut changes = DataFileChanges::new();
@@ -79,8 +72,12 @@ impl ImportService {
             // Read parquet file to get row count
             let file_path = file.location.to_string();
             let data = storage.get_bytes_str(&file_path).await?;
-            let reader = parquet::file::reader::SerializedFileReader::new(data)
-                .map_err(|e| Error::General(format!("Failed to read parquet: {}", e)))?;
+            let reader = parquet::file::reader::SerializedFileReader::new(data).map_err(|e| {
+                Error::Parse {
+                    message: format!("Failed to read parquet file: {}", e),
+                    source: Some(Box::new(e)),
+                }
+            })?;
             let metadata = reader.metadata();
             let row_count: i64 = metadata.row_groups().iter().map(|rg| rg.num_rows()).sum();
 
@@ -119,22 +116,14 @@ impl ImportService {
     /// Import Delta Lake files into an Iceberg table
     ///
     /// Takes pre-extracted file information from Delta Lake and adds them to Iceberg.
+    /// The metadata_service should be pre-configured with the appropriate committer
+    /// for catalog-aware operations.
     pub async fn import_delta(
         &self,
-        target_path: &str,
+        metadata_service: &IcebergMetadataService,
         source_path: &str,
         files: &[deltalake::kernel::Add],
     ) -> Result<ImportResult> {
-        // Load Iceberg table
-        let metadata_service = IcebergMetadataService::new_async(target_path.to_string())
-            .await
-            .map_err(|_| {
-                Error::General(format!(
-                    "Target Iceberg table does not exist at '{}'. Use 'icetable init iceberg {}' first.",
-                    target_path, target_path
-                ))
-            })?;
-
         // Build data file changes
         let mut changes = DataFileChanges::new();
         let mut total_records = 0u64;

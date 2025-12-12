@@ -16,24 +16,28 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use iceberg::Catalog;
 use iceberg::arrow::FieldMatchMode;
 use iceberg::spec::DataFileFormat;
 use iceberg::table::Table;
 use iceberg::transaction::Transaction;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
-use iceberg::writer::file_writer::location_generator::{DefaultFileNameGenerator, DefaultLocationGenerator};
 use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::Catalog;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::core::metadata::{DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType};
+use crate::core::metadata::{
+    DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType,
+};
 use crate::core::storage::{ObjectStoreExt, create_object_store, to_path};
 use crate::error::{Error, Result};
-use crate::utils::track_memory_usage;
 use crate::utils::core::find_latest_metadata;
+use crate::utils::track_memory_usage;
 
 /// Configuration for data generation
 #[derive(Debug, Clone)]
@@ -88,7 +92,6 @@ pub struct ExistingTableInfo {
     pub total_records: u64,
 }
 
-
 /// Operation for generating synthetic Iceberg tables
 pub struct GenerateOperation;
 
@@ -105,7 +108,9 @@ impl GenerateOperation {
         }
 
         // Table exists, try to load it to get stats
-        let metadata_service = IcebergMetadataService::new_async(path.to_string()).await.ok()?;
+        let metadata_service = IcebergMetadataService::new_async(path.to_string())
+            .await
+            .ok()?;
         let snapshots = metadata_service.list_snapshots(None).await.ok()?;
         let data_files = metadata_service.list_data_files().await.ok()?;
 
@@ -149,8 +154,12 @@ impl GenerateOperation {
 
         // Get resources from table for writers
         let file_io = table.file_io().clone();
-        let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
-            .map_err(|e| Error::General(format!("Failed to create location generator: {}", e)))?;
+        let location_gen =
+            DefaultLocationGenerator::new(table.metadata().clone()).map_err(|e| {
+                Error::Metadata {
+                    message: format!("Failed to create location generator: {}", e),
+                }
+            })?;
         let partition_spec_id = table.metadata().default_partition_spec_id();
 
         // Generate unique prefix for file names using timestamp
@@ -194,17 +203,22 @@ impl GenerateOperation {
             let mut writer = DataFileWriterBuilder::new(parquet_writer, None, partition_spec_id)
                 .build()
                 .await
-                .map_err(|e| Error::General(format!("Failed to build data file writer: {}", e)))?;
+                .map_err(|e| Error::Serialization {
+                    message: format!("Failed to build data file writer: {}", e),
+                })?;
 
             // Write batch
-            writer.write(batch)
+            writer
+                .write(batch)
                 .await
-                .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+                .map_err(|e| Error::Serialization {
+                    message: format!("Failed to write batch: {}", e),
+                })?;
 
             // Close writer and collect data files
-            let data_files = writer.close()
-                .await
-                .map_err(|e| Error::General(format!("Failed to close writer: {}", e)))?;
+            let data_files = writer.close().await.map_err(|e| Error::Serialization {
+                message: format!("Failed to close writer: {}", e),
+            })?;
 
             for df in data_files {
                 total_bytes += df.file_size_in_bytes() as u64;
@@ -231,35 +245,45 @@ impl GenerateOperation {
         // tracking what changed in each snapshot.
         let added_records: u64 = all_data_files.iter().map(|f| f.record_count()).sum();
         let added_data_files_count = all_data_files.len() as u32;
-        let added_file_size: u64 = all_data_files.iter().map(|f| f.file_size_in_bytes() as u64).sum();
+        let added_file_size: u64 = all_data_files
+            .iter()
+            .map(|f| f.file_size_in_bytes() as u64)
+            .sum();
 
         // Build snapshot properties with added stats only
         // Note: total-* properties are calculated by iceberg-rs update_snapshot_summaries()
         let mut snapshot_properties = HashMap::new();
         snapshot_properties.insert("added-records".to_string(), added_records.to_string());
-        snapshot_properties.insert("added-data-files".to_string(), added_data_files_count.to_string());
+        snapshot_properties.insert(
+            "added-data-files".to_string(),
+            added_data_files_count.to_string(),
+        );
         snapshot_properties.insert("added-files-size".to_string(), added_file_size.to_string());
 
         // Commit using transaction API
         let tx = Transaction::new(&table);
-        let action = tx.fast_append()
+        let action = tx
+            .fast_append()
             .set_snapshot_properties(snapshot_properties)
             .add_data_files(all_data_files);
 
         // Apply action to transaction and commit
-        let tx = action.apply(tx)
-            .map_err(|e| Error::General(format!("Failed to apply transaction: {}", e)))?;
+        let tx = action.apply(tx).map_err(|e| Error::Metadata {
+            message: format!("Failed to apply transaction: {}", e),
+        })?;
 
-        let updated_table = tx.commit(catalog)
-            .await
-            .map_err(|e| Error::General(format!("Failed to commit transaction: {}", e)))?;
+        let updated_table = tx.commit(catalog).await.map_err(|e| Error::Metadata {
+            message: format!("Failed to commit transaction: {}", e),
+        })?;
 
-        let snapshot_id = updated_table.metadata()
+        let snapshot_id = updated_table
+            .metadata()
             .current_snapshot()
             .map(|s| s.snapshot_id())
             .unwrap_or(0);
 
-        let metadata_path = updated_table.metadata_location()
+        let metadata_path = updated_table
+            .metadata_location()
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("{}/metadata/latest.json", base_path));
 
@@ -651,9 +675,11 @@ pub fn parse_schema_string(schema_str: &str) -> Result<Schema> {
 
     for part in schema_str.split(',') {
         let part = part.trim();
-        let (name, type_str) = part.split_once(':').ok_or_else(|| Error::SchemaValidation {
-            message: format!("Invalid schema format '{}'. Expected 'name:type'", part),
-        })?;
+        let (name, type_str) = part
+            .split_once(':')
+            .ok_or_else(|| Error::SchemaValidation {
+                message: format!("Invalid schema format '{}'. Expected 'name:type'", part),
+            })?;
 
         let data_type = parse_arrow_type(type_str.trim())?;
         fields.push(Field::new(name.trim(), data_type, true));

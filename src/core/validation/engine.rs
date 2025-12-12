@@ -100,10 +100,14 @@ impl ValidationEngine {
     pub async fn load_rules(path: &str) -> Result<ValidationRules> {
         let content = tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| Error::General(format!("Failed to read rules file: {}", e)))?;
+            .map_err(|e| Error::FileNotFound {
+                path: std::path::PathBuf::from(format!("{} ({})", path, e)),
+            })?;
 
-        serde_yaml::from_str(&content)
-            .map_err(|e| Error::General(format!("Failed to parse rules file: {}", e)))
+        serde_yaml::from_str(&content).map_err(|e| Error::Parse {
+            message: format!("Failed to parse rules file '{}': {}", path, e),
+            source: None,
+        })
     }
 
     /// Execute all enabled rules
@@ -313,7 +317,9 @@ impl ValidationEngine {
             let schema = self.handler.read_schema().await?;
             let col_idx = schema
                 .index_of(col_name)
-                .map_err(|_| Error::General(format!("Column '{}' not found", col_name)))?;
+                .map_err(|_| Error::ColumnNotFound {
+                    column: col_name.clone(),
+                })?;
 
             let mut total_rows = 0usize;
             let mut null_count = 0usize;
@@ -396,7 +402,9 @@ impl ValidationEngine {
     ) -> Result<RuleResult> {
         let field = schema
             .field_with_name(column)
-            .map_err(|_| Error::General(format!("Column '{}' not found", column)))?;
+            .map_err(|_| Error::ColumnNotFound {
+                column: column.to_string(),
+            })?;
 
         let actual_type = format!("{:?}", field.data_type());
 
@@ -427,7 +435,9 @@ impl ValidationEngine {
     ) -> Result<RuleResult> {
         let size = metadata
             .compressed_size
-            .ok_or_else(|| Error::General("File size not available".to_string()))?;
+            .ok_or_else(|| Error::DataValidation {
+                message: "File size not available in metadata".to_string(),
+            })?;
 
         if let Some(min) = min_bytes
             && size < min
@@ -511,8 +521,9 @@ impl ValidationEngine {
         schema: &Schema,
         pattern: &str,
     ) -> Result<RuleResult> {
-        let regex = Regex::new(pattern)
-            .map_err(|e| Error::General(format!("Invalid regex pattern: {}", e)))?;
+        let regex = Regex::new(pattern).map_err(|e| Error::DataValidation {
+            message: format!("Invalid regex pattern '{}': {}", pattern, e),
+        })?;
 
         let invalid_columns: Vec<&str> = schema
             .fields()

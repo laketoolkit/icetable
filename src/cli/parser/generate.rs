@@ -5,17 +5,9 @@ use clap::Parser;
 /// Arguments for generate command
 #[derive(Parser, Debug)]
 pub struct GenerateArgs {
-    /// Table name (uses current from context if not specified)
-    #[arg(short = 't', long = "table")]
-    pub table: Option<String>,
-
     /// Catalog name (uses current if not specified)
     #[arg(short = 'c', long)]
     pub catalog: Option<String>,
-
-    /// Namespace (uses current if not specified)
-    #[arg(short = 'n', long)]
-    pub namespace: Option<String>,
 
     /// Schema definition as "col:type,col:type" (e.g., "id:int,name:string,ts:timestamp")
     #[arg(long)]

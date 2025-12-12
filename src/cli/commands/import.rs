@@ -5,14 +5,13 @@
 
 use colored::Colorize;
 
-use crate::cli::parser::ImportDeltaArgs;
-use crate::cli::parser::ImportParquetArgs;
-use crate::core::operations::{ImportConfig, ImportService};
-use crate::core::storage::{create_object_store, ObjectStoreExt};
-use crate::core::format_bytes;
-use crate::error::{Error, Result};
-use super::common::print_dry_run_header;
+use super::common::{print_dry_run_header, resolve_table};
+use crate::cli::parser::{ImportDeltaArgs, ImportParquetArgs, TableContext};
 use crate::core::extract_filename;
+use crate::core::format_bytes;
+use crate::core::operations::{ImportConfig, ImportService};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
+use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
 /// Handler for import commands
@@ -20,18 +19,23 @@ pub struct ImportCommand;
 
 impl ImportCommand {
     /// Import from Delta Lake table
-    pub async fn delta(args: ImportDeltaArgs) -> Result<()> {
+    pub async fn delta(args: ImportDeltaArgs, ctx: &TableContext) -> Result<()> {
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for Delta operations
-        with_resource_limits(ESTIMATED_MEMORY, Self::delta_inner(args)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::delta_inner(args, ctx)).await
     }
 
-    async fn delta_inner(args: ImportDeltaArgs) -> Result<()> {
+    async fn delta_inner(args: ImportDeltaArgs, ctx: &TableContext) -> Result<()> {
         use deltalake::DeltaTableBuilder;
 
         println!(
             "{} Delta table from {} to Iceberg at {}",
-            if args.dry_run { "Analyzing" } else { "Importing" }.green(),
+            if args.dry_run {
+                "Analyzing"
+            } else {
+                "Importing"
+            }
+            .green(),
             args.source,
             args.target
         );
@@ -40,26 +44,33 @@ impl ImportCommand {
         let delta_table = DeltaTableBuilder::from_uri(&args.source)
             .load()
             .await
-            .map_err(|e| Error::General(format!("Failed to load Delta table: {}", e)))?;
+            .map_err(|e| Error::TableNotFound {
+                path: format!("{} (Delta error: {})", args.source, e),
+            })?;
 
         let log_store = delta_table.log_store();
-        let snapshot = delta_table
-            .snapshot()
-            .map_err(|e| Error::General(format!("Failed to get Delta snapshot: {}", e)))?;
+        let snapshot = delta_table.snapshot().map_err(|e| Error::Metadata {
+            message: format!("Failed to get Delta snapshot: {}", e),
+        })?;
 
         // Get schema and files from Delta
         let schema = snapshot.schema();
         let files = snapshot
             .file_actions(log_store.as_ref())
             .await
-            .map_err(|e| Error::General(format!("Failed to get Delta files: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to get Delta files: {}", e),
+            })?;
 
         let total_files = files.len();
         let total_bytes: i64 = files.iter().map(|f| f.size).sum();
 
         println!();
         println!("Delta Table Summary:");
-        println!("  Schema columns: {}", schema.fields().len().to_string().cyan());
+        println!(
+            "  Schema columns: {}",
+            schema.fields().len().to_string().cyan()
+        );
         println!("  Data files:     {}", total_files.to_string().cyan());
         println!("  Total size:     {}", format_bytes(total_bytes as u64));
 
@@ -82,12 +93,27 @@ impl ImportCommand {
             return Ok(());
         }
 
+        // Resolve target table and create metadata service with catalog context
+        let resolution = resolve_table(&Some(args.target.clone()), ctx.catalog_config.as_ref())
+            .await
+            .map_err(|e| Error::TableNotFound {
+                path: format!(
+                    "{} ({}). Use 'icetable init iceberg {}' first.",
+                    args.target, e, args.target
+                ),
+            })?;
+        let metadata_service = resolution
+            .to_writable_service(ctx.catalog_config.as_ref(), None)
+            .await?;
+
         // Delegate to ImportService
         let config = ImportConfig {
             source: "delta-import".to_string(),
         };
         let service = ImportService::with_config(config);
-        let result = service.import_delta(&args.target, &args.source, &files).await?;
+        let result = service
+            .import_delta(&metadata_service, &args.source, &files)
+            .await?;
 
         println!();
         println!("{}", "Import complete!".green().bold());
@@ -101,16 +127,21 @@ impl ImportCommand {
     }
 
     /// Import from Parquet files
-    pub async fn parquet(args: ImportParquetArgs) -> Result<()> {
+    pub async fn parquet(args: ImportParquetArgs, ctx: &TableContext) -> Result<()> {
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for Parquet operations
-        with_resource_limits(ESTIMATED_MEMORY, Self::parquet_inner(args)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::parquet_inner(args, ctx)).await
     }
 
-    async fn parquet_inner(args: ImportParquetArgs) -> Result<()> {
+    async fn parquet_inner(args: ImportParquetArgs, ctx: &TableContext) -> Result<()> {
         println!(
             "{} Parquet files from {} to Iceberg at {}",
-            if args.dry_run { "Analyzing" } else { "Importing" }.green(),
+            if args.dry_run {
+                "Analyzing"
+            } else {
+                "Importing"
+            }
+            .green(),
             args.source,
             args.target
         );
@@ -143,10 +174,12 @@ impl ImportCommand {
             .collect();
 
         if parquet_files.is_empty() {
-            return Err(Error::General(format!(
-                "No Parquet files found matching pattern '{}' at '{}'",
-                args.pattern, args.source
-            )));
+            return Err(Error::FileNotFound {
+                path: std::path::PathBuf::from(format!(
+                    "{} (no files matching pattern '{}')",
+                    args.source, args.pattern
+                )),
+            });
         }
 
         let total_files = parquet_files.len();
@@ -172,12 +205,27 @@ impl ImportCommand {
             return Ok(());
         }
 
+        // Resolve target table and create metadata service with catalog context
+        let resolution = resolve_table(&Some(args.target.clone()), ctx.catalog_config.as_ref())
+            .await
+            .map_err(|e| Error::TableNotFound {
+                path: format!(
+                    "{} ({}). Use 'icetable init iceberg {}' first.",
+                    args.target, e, args.target
+                ),
+            })?;
+        let metadata_service = resolution
+            .to_writable_service(ctx.catalog_config.as_ref(), None)
+            .await?;
+
         // Delegate to ImportService
         let config = ImportConfig {
             source: "parquet-import".to_string(),
         };
         let service = ImportService::with_config(config);
-        let result = service.import_parquet(&args.target, &parquet_files, &storage).await?;
+        let result = service
+            .import_parquet(&metadata_service, &parquet_files, &storage)
+            .await?;
 
         println!();
         println!("{}", "Import complete!".green().bold());

@@ -13,26 +13,46 @@ fn print_global_options() {
     println!("The following options can be passed to any command:\n");
 
     println!("{}", "Global Options:".bold());
-    println!("      --quiet, -q                Suppress non-error output");
-    println!("      --log-level <LEVEL>        Log level: off, error, warn, info, debug, trace [default: off]");
+    println!(
+        "  -t, --table <TABLE>            Table name or path (e.g., \"namespace.table\" or \"s3://bucket/path\")"
+    );
+    println!("  -n, --namespace <NAMESPACE>    Namespace (e.g., \"db.schema\")");
+    println!("  -q, --quiet                    Suppress non-error output");
+    println!(
+        "      --log-level <LEVEL>        Log level: off, error, warn, info, debug, trace [default: off]"
+    );
     println!("      --log-file <PATH>          Log to file");
     println!();
 
     println!("{}", "Catalog Override:".bold());
     println!("      --catalog-uri <URI>        REST Catalog URI [env: ICETABLE_CATALOG_URI]");
-    println!("      --catalog-warehouse <WH>   Catalog warehouse [env: ICETABLE_CATALOG_WAREHOUSE]");
-    println!("      --catalog-credential <C>   Credential as client_id:secret [env: ICETABLE_CATALOG_CREDENTIAL]");
-    println!("      --catalog-credential-env   Credential from env var [env: ICETABLE_CATALOG_CREDENTIAL_ENV]");
-    println!("      --catalog-credential-file  Credential from file [env: ICETABLE_CATALOG_CREDENTIAL_FILE]");
+    println!(
+        "      --catalog-warehouse <WH>   Catalog warehouse [env: ICETABLE_CATALOG_WAREHOUSE]"
+    );
+    println!(
+        "      --catalog-credential <C>   Credential as client_id:secret [env: ICETABLE_CATALOG_CREDENTIAL]"
+    );
+    println!(
+        "      --catalog-credential-env   Credential from env var [env: ICETABLE_CATALOG_CREDENTIAL_ENV]"
+    );
+    println!(
+        "      --catalog-credential-file  Credential from file [env: ICETABLE_CATALOG_CREDENTIAL_FILE]"
+    );
     println!("      --catalog-use-iam-role     Use IAM role for auth (AWS, GCP, Azure)");
     println!("      --catalog-use-oauth2       Use OAuth2 client credentials flow");
     println!();
 
     println!("{}", "Resource Limits:".bold());
-    println!("      --max-memory <SIZE>        Max memory (e.g., 2GB). 0 = unlimited [env: ICETABLE_MAX_MEMORY]");
-    println!("      --timeout <SECS>           Operation timeout. 0 = none [env: ICETABLE_TIMEOUT]");
+    println!(
+        "      --max-memory <SIZE>        Max memory (e.g., 2GB). 0 = unlimited [env: ICETABLE_MAX_MEMORY]"
+    );
+    println!(
+        "      --timeout <SECS>           Operation timeout. 0 = none [env: ICETABLE_TIMEOUT]"
+    );
     println!("      --max-concurrency <N>      Max concurrent ops [env: ICETABLE_MAX_CONCURRENCY]");
-    println!("      --max-threads <N>          Max worker threads. 0 = auto [env: ICETABLE_MAX_THREADS]");
+    println!(
+        "      --max-threads <N>          Max worker threads. 0 = auto [env: ICETABLE_MAX_THREADS]"
+    );
 }
 
 fn main() {
@@ -85,8 +105,8 @@ async fn async_main(cli: Cli) -> i32 {
         }
     }
 
-    // Build catalog config from CLI options (if any)
-    let catalog_config = cli.catalog_config();
+    // Build table context from CLI global options
+    let ctx = cli.table_context();
 
     // Register cloud storage handlers (required for Delta Lake S3/GCS/Azure support)
     deltalake::aws::register_handlers(None);
@@ -95,28 +115,28 @@ async fn async_main(cli: Cli) -> i32 {
 
     // Execute command and handle errors
     let result = match cli.command {
-        Commands::Ls(args) => LsCommand::execute(args).await,
-        Commands::Create(args) => CreateCommand::execute(args).await,
-        Commands::Delete(args) => DeleteCommand::execute(args).await,
-        Commands::Analyze(args) => AnalyzeCommand::execute(args, catalog_config.clone()).await,
+        Commands::Ls(args) => LsCommand::execute(args, &ctx).await,
+        Commands::Create(args) => CreateCommand::execute(args, &ctx).await,
+        Commands::Delete(args) => DeleteCommand::execute(args, &ctx).await,
+        Commands::Analyze(args) => AnalyzeCommand::execute(args, &ctx).await,
         Commands::Init(args) => InitCommand::execute(args).await,
-        Commands::Inspect(args) => InspectCommand::execute(args, catalog_config.clone()).await,
-        Commands::Validate(args) => ValidateCommand::execute(args, catalog_config.clone()).await,
-        Commands::Diff(args) => DiffCommand::execute(args, catalog_config.clone()).await,
-        Commands::Stats(args) => StatsCommand::execute(args, catalog_config.clone()).await,
-        Commands::History(args) => HistoryCommand::execute(args, catalog_config.clone()).await,
-        Commands::Vacuum(args) => VacuumCommand::execute(args, catalog_config.clone()).await,
-        Commands::Optimize(args) => OptimizeCommand::execute(args, catalog_config.clone()).await,
-        Commands::Snapshot(args) => SnapshotCommand::execute(args, catalog_config.clone()).await,
-        Commands::Repair(args) => RepairCommand::execute(args, catalog_config.clone()).await,
+        Commands::Inspect(args) => InspectCommand::execute(args, &ctx).await,
+        Commands::Validate(args) => ValidateCommand::execute(args, &ctx).await,
+        Commands::Diff(args) => DiffCommand::execute(args, &ctx).await,
+        Commands::Stats(args) => StatsCommand::execute(args, &ctx).await,
+        Commands::History(args) => HistoryCommand::execute(args, &ctx).await,
+        Commands::Vacuum(args) => VacuumCommand::execute(args, &ctx).await,
+        Commands::Optimize(args) => OptimizeCommand::execute(args, &ctx).await,
+        Commands::Snapshot(args) => SnapshotCommand::execute(args, &ctx).await,
+        Commands::Repair(args) => RepairCommand::execute(args, &ctx).await,
         Commands::Import(cmd) => match cmd {
-            ImportCommands::Delta(args) => ImportCommand::delta(args).await,
-            ImportCommands::Parquet(args) => ImportCommand::parquet(args).await,
+            ImportCommands::Delta(args) => ImportCommand::delta(args, &ctx).await,
+            ImportCommands::Parquet(args) => ImportCommand::parquet(args, &ctx).await,
         },
-        Commands::Branch(args) => BranchCommand::execute(args, catalog_config.clone()).await,
-        Commands::Tag(args) => TagCommand::execute(args, catalog_config.clone()).await,
+        Commands::Branch(args) => BranchCommand::execute(args, &ctx).await,
+        Commands::Tag(args) => TagCommand::execute(args, &ctx).await,
         Commands::Config(args) => ConfigCommand::execute(args).await,
-        Commands::Generate(args) => GenerateCommand::execute(args).await,
+        Commands::Generate(args) => GenerateCommand::execute(args, &ctx).await,
         Commands::Completions(args) => {
             args.generate();
             Ok(())

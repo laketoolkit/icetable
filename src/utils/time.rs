@@ -32,12 +32,15 @@ pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
             .and_utc());
     }
 
-    Err(Error::General(format!(
-        "Invalid timestamp format: '{}'. Expected:\n  \
-         - Relative: 7d (days), 24h (hours), 30m (minutes), 2w (weeks)\n  \
-         - Absolute: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS",
-        s
-    )))
+    Err(Error::Parse {
+        message: format!(
+            "Invalid timestamp format: '{}'. Expected:\n  \
+             - Relative: 7d (days), 24h (hours), 30m (minutes), 2w (weeks)\n  \
+             - Absolute: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS",
+            s
+        ),
+        source: None,
+    })
 }
 
 /// Parse relative duration string (e.g., "7d", "24h", "30m", "2w")

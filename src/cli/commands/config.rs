@@ -7,7 +7,9 @@ use comfy_table::{Cell, CellAlignment};
 
 use super::common::print_json;
 use crate::cli::output::create_styled_table;
-use crate::cli::parser::{ConfigAddArgs, ConfigArgs, ConfigCommands, ConfigLsArgs, ConfigDeleteArgs, ConfigUseArgs};
+use crate::cli::parser::{
+    ConfigAddArgs, ConfigArgs, ConfigCommands, ConfigDeleteArgs, ConfigLsArgs, ConfigUseArgs,
+};
 use crate::config::{CatalogConfig, Config};
 use crate::core::config::{CatalogAuth, CredentialSource};
 use crate::error::Result;
@@ -41,7 +43,10 @@ impl ConfigCommand {
             println!("{} No name specified", "!".yellow());
             println!();
             println!("Usage:");
-            println!("  {} Use a catalog", "icetable config use <catalog>".dimmed());
+            println!(
+                "  {} Use a catalog",
+                "icetable config use <catalog>".dimmed()
+            );
             println!(
                 "  {} With namespace",
                 "icetable config use <catalog> -n <namespace>".dimmed()
@@ -58,25 +63,15 @@ impl ConfigCommand {
         let is_table = config.tables.contains_key(name);
 
         if !is_catalog && !is_table {
-            println!(
-                "{} Not found: {}",
-                "!".yellow(),
-                name.cyan()
-            );
-            println!(
-                "  Use {} to add it first",
-                "icetable config add".dimmed()
-            );
+            println!("{} Not found: {}", "!".yellow(), name.cyan());
+            println!("  Use {} to add it first", "icetable config add".dimmed());
             return Ok(());
         }
 
         if is_table {
             // For tables, -n and -t don't make sense
             if args.namespace.is_some() || args.table.is_some() {
-                println!(
-                    "{} Options -n/-t are only valid for catalogs",
-                    "!".yellow()
-                );
+                println!("{} Options -n/-t are only valid for catalogs", "!".yellow());
                 return Ok(());
             }
             config.set_current_context(name.clone());
@@ -179,7 +174,13 @@ impl ConfigCommand {
     }
 
     /// Add a catalog configuration
-    async fn add_catalog(config: &mut Config, name: &str, uri: &str, args: &ConfigAddArgs, set_as_current: bool) -> Result<()> {
+    async fn add_catalog(
+        config: &mut Config,
+        name: &str,
+        uri: &str,
+        args: &ConfigAddArgs,
+        set_as_current: bool,
+    ) -> Result<()> {
         // Infer auth type from provided options
         let (auth, auth_desc) = if let Some(token) = &args.token {
             // Bearer with inline token
@@ -292,11 +293,7 @@ impl ConfigCommand {
             config.save()?;
             println!("{} Deleted catalog: {}", "✓".green(), args.name.cyan());
         } else {
-            println!(
-                "{} Not found: {}",
-                "!".yellow(),
-                args.name.cyan()
-            );
+            println!("{} Not found: {}", "!".yellow(), args.name.cyan());
         }
 
         Ok(())
@@ -356,7 +353,11 @@ impl ConfigCommand {
                 for name in names {
                     let cat = &config.catalogs[name];
                     let is_current = config.get_current_catalog() == Some(name.as_str());
-                    let marker = if is_current { "●".green().to_string() } else { "".to_string() };
+                    let marker = if is_current {
+                        "●".green().to_string()
+                    } else {
+                        "".to_string()
+                    };
                     let namespace = cat.default_namespace.as_deref().unwrap_or("-");
 
                     table.add_row(vec![

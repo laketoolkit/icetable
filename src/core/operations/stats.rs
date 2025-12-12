@@ -93,7 +93,10 @@ impl StatsService {
         // If partition filter specified, get partition stats
         if let Some(partition_filter_str) = &config.partition {
             let partition_filter = PartitionFilter::parse(partition_filter_str).map_err(|e| {
-                crate::error::Error::General(format!("Invalid partition filter: {}", e))
+                crate::error::Error::Parse {
+                    message: format!("Invalid partition filter: {}", e),
+                    source: None,
+                }
             })?;
 
             let partition_stats = get_partition_stats(table_path, &partition_filter).await?;
@@ -141,8 +144,14 @@ mod tests {
 
     #[test]
     fn test_extract_table_name() {
-        assert_eq!(StatsService::extract_table_name("/path/to/my_table"), "my_table");
-        assert_eq!(StatsService::extract_table_name("s3://bucket/tables/orders"), "orders");
+        assert_eq!(
+            StatsService::extract_table_name("/path/to/my_table"),
+            "my_table"
+        );
+        assert_eq!(
+            StatsService::extract_table_name("s3://bucket/tables/orders"),
+            "orders"
+        );
         assert_eq!(StatsService::extract_table_name("my_table"), "my_table");
     }
 

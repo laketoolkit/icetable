@@ -30,11 +30,23 @@ impl DoctorCommand {
     }
 
     async fn execute_inner(args: DoctorArgs) -> Result<()> {
-        use crate::config::ResolvePath;
+        use crate::config::Config;
 
-        match args.path.resolve() {
-            Ok(path) => Self::execute_table_check(&args, &path).await,
-            Err(_) => Self::execute_environment_check(&args).await,
+        // Try to get a table from current context for table integrity check
+        let config = Config::load().ok();
+        let table_path = config.as_ref().and_then(|c| {
+            c.get_current_table()
+                .and_then(|_| c.get_current_context())
+                .and_then(|ctx| c.resolve_table(ctx).ok())
+                .map(|resolved| match resolved {
+                    crate::config::ResolvedTable::Path(path) => path,
+                    crate::config::ResolvedTable::Catalog { table_name, .. } => table_name,
+                })
+        });
+
+        match table_path {
+            Some(path) => Self::execute_table_check(&args, &path).await,
+            None => Self::execute_environment_check(&args).await,
         }
     }
 

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::{is_direct_path, CatalogConfig, ResolvedTable};
+use super::{CatalogConfig, ResolvedTable, is_direct_path};
 use crate::error::{Error, Result};
 
 /// Configuration file name
@@ -38,7 +38,9 @@ impl Config {
     /// Get the config directory path
     pub fn config_dir() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
-            .ok_or_else(|| Error::General("Could not determine config directory".to_string()))?
+            .ok_or_else(|| Error::Configuration {
+                message: "Could not determine config directory".to_string(),
+            })?
             .join(CONFIG_DIR);
 
         Ok(config_dir)
@@ -54,11 +56,15 @@ impl Config {
         let yaml_path = Self::config_path()?;
 
         if yaml_path.exists() {
-            let content = std::fs::read_to_string(&yaml_path)
-                .map_err(|e| Error::General(format!("Failed to read config file: {}", e)))?;
+            let content =
+                std::fs::read_to_string(&yaml_path).map_err(|e| Error::Configuration {
+                    message: format!("Failed to read config file: {}", e),
+                })?;
 
-            return serde_yaml::from_str(&content)
-                .map_err(|e| Error::General(format!("Failed to parse config file: {}", e)));
+            return serde_yaml::from_str(&content).map_err(|e| Error::Parse {
+                message: format!("Failed to parse config file: {}", e),
+                source: Some(Box::new(e)),
+            });
         }
 
         Ok(Self::default())
@@ -70,14 +76,17 @@ impl Config {
         let config_path = Self::config_path()?;
 
         // Create config directory if it doesn't exist
-        std::fs::create_dir_all(&config_dir)
-            .map_err(|e| Error::General(format!("Failed to create config directory: {}", e)))?;
+        std::fs::create_dir_all(&config_dir).map_err(|e| Error::Configuration {
+            message: format!("Failed to create config directory: {}", e),
+        })?;
 
-        let content = serde_yaml::to_string(self)
-            .map_err(|e| Error::General(format!("Failed to serialize config: {}", e)))?;
+        let content = serde_yaml::to_string(self).map_err(|e| Error::Serialization {
+            message: format!("Failed to serialize config: {}", e),
+        })?;
 
-        std::fs::write(&config_path, content)
-            .map_err(|e| Error::General(format!("Failed to write config file: {}", e)))?;
+        std::fs::write(&config_path, content).map_err(|e| Error::Configuration {
+            message: format!("Failed to write config file: {}", e),
+        })?;
 
         Ok(())
     }
@@ -132,7 +141,11 @@ impl Config {
         match parts.len() {
             1 => Some((parts[0].to_string(), None, None)),
             2 => Some((parts[0].to_string(), Some(parts[1].to_string()), None)),
-            3 => Some((parts[0].to_string(), Some(parts[1].to_string()), Some(parts[2].to_string()))),
+            3 => Some((
+                parts[0].to_string(),
+                Some(parts[1].to_string()),
+                Some(parts[2].to_string()),
+            )),
             _ => None,
         }
     }
@@ -235,7 +248,8 @@ impl Config {
         if let Some(catalog_name) = self.get_current_catalog() {
             if let Some(catalog) = self.catalogs.get(catalog_name) {
                 // Get namespace from context or catalog default
-                let namespace = self.get_current_namespace()
+                let namespace = self
+                    .get_current_namespace()
                     .or_else(|| catalog.default_namespace.clone());
 
                 if let Some(ns) = namespace {
@@ -251,11 +265,12 @@ impl Config {
         }
 
         // 5. Not found
-        Err(Error::General(format!(
-            "Unknown table or catalog reference: '{}'. \
-            Use a direct path (s3://...), a configured table alias, or catalog.table format.",
-            name_or_path
-        )))
+        Err(Error::TableNotFound {
+            path: format!(
+                "{}. Use a direct path (s3://...), a configured table alias, or catalog.table format",
+                name_or_path
+            ),
+        })
     }
 }
 

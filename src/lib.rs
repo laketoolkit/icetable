@@ -68,7 +68,7 @@ pub mod error;
 pub mod utils;
 
 // Re-export config from core for backward compatibility
-pub use core::config as config;
+pub use core::config;
 
 // Stable public API (v1.x)
 pub mod v1;

@@ -5,10 +5,6 @@ use clap::Parser;
 /// Arguments for inspect command
 #[derive(Parser, Debug)]
 pub struct InspectArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Verbose mode - show snapshot history and manifest details
     #[arg(short, long)]
     pub verbose: bool,
@@ -29,10 +25,6 @@ pub struct InspectArgs {
 /// Arguments for validate command
 #[derive(Parser, Debug)]
 pub struct ValidateArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Force specific format (arrow, parquet, csv, json)
     #[arg(short, long)]
     pub format: Option<String>,
@@ -58,7 +50,7 @@ pub struct ValidateArgs {
     pub relax: bool,
 
     /// Quiet mode (no output, just exit code)
-    #[arg(short, long)]
+    #[arg(short = 'Q', long)]
     pub quiet: bool,
 
     /// Output format (text, json)
@@ -73,10 +65,6 @@ pub struct ValidateArgs {
 /// Arguments for diff command
 #[derive(Parser, Debug)]
 pub struct DiffArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Reference to compare (snapshot ID, branch name, or tag name). Defaults to current.
     pub reference: Option<String>,
 
@@ -92,10 +80,6 @@ pub struct DiffArgs {
 /// Arguments for stats command
 #[derive(Parser, Debug)]
 pub struct StatsArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
@@ -108,10 +92,6 @@ pub struct StatsArgs {
 /// Arguments for analyze command
 #[derive(Parser, Debug)]
 pub struct AnalyzeArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Minimum file size to consider "small" (default: 16MB)
     #[arg(long, default_value = "16777216")]
     pub min_file_size: u64,
@@ -136,12 +116,8 @@ pub struct AnalyzeArgs {
 /// Arguments for history command
 #[derive(Parser, Debug)]
 pub struct HistoryArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Maximum number of versions to show
-    #[arg(short = 'n', long, default_value = "10")]
+    #[arg(long, default_value = "10")]
     pub limit: usize,
 
     /// Show all versions (no limit)

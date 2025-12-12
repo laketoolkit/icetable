@@ -27,14 +27,16 @@ impl ResourceLimits {
     /// Parse memory string (e.g., "2GB", "512MB", "1024KB") to bytes
     pub fn parse_memory(s: &str) -> Result<u64> {
         let s = s.trim();
-        
+
         if s == "0" || s.is_empty() {
             return Ok(0);
         }
 
         // Use the shared parse_bytes function but convert error type
-        crate::utils::core::parse_bytes(s)
-            .map_err(|e| Error::General(format!("Invalid memory format: {}", e)))
+        crate::utils::core::parse_bytes(s).map_err(|e| Error::Parse {
+            message: format!("Invalid memory format: {}", e),
+            source: None,
+        })
     }
 
     /// Create limits from CLI arguments
@@ -116,11 +118,13 @@ pub fn track_memory_usage(bytes: u64) -> Result<()> {
 
     if new_total > limits.max_memory_bytes {
         CURRENT_MEMORY.fetch_sub(bytes, Ordering::SeqCst);
-        return Err(Error::General(format!(
-            "Memory limit exceeded: operation requires {} but limit is {}",
-            ResourceLimits::format_memory(new_total),
-            ResourceLimits::format_memory(limits.max_memory_bytes)
-        )));
+        return Err(Error::Configuration {
+            message: format!(
+                "Memory limit exceeded: operation requires {} but limit is {}",
+                ResourceLimits::format_memory(new_total),
+                ResourceLimits::format_memory(limits.max_memory_bytes)
+            ),
+        });
     }
 
     Ok(())
@@ -146,11 +150,8 @@ where
     match limits.timeout {
         Some(duration) => tokio::time::timeout(duration, operation)
             .await
-            .map_err(|_| {
-                Error::General(format!(
-                    "Operation timed out after {} seconds",
-                    duration.as_secs()
-                ))
+            .map_err(|_| Error::Configuration {
+                message: format!("Operation timed out after {} seconds", duration.as_secs()),
             })?,
         None => operation.await,
     }

@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use iceberg::io::FileIO;
 use iceberg::spec::{
-    DataContentType, DataFile, DataFileBuilder, DataFileFormat, ManifestFile,
+    DataContentType, DataFile, DataFileBuilder, DataFileFormat, MAIN_BRANCH, ManifestFile,
     ManifestListWriter, ManifestWriterBuilder, Snapshot, Struct, Summary, TableMetadata,
-    TableMetadataBuilder, MAIN_BRANCH,
+    TableMetadataBuilder,
 };
 
 use crate::core::storage::{ObjectStoreExt, Storage};
@@ -106,7 +106,13 @@ impl SnapshotWriter {
 
         // Write manifest
         let manifest_file = self
-            .write_manifest(&iceberg_files, snapshot_id, sequence_number, metadata, timestamp_nanos)
+            .write_manifest(
+                &iceberg_files,
+                snapshot_id,
+                sequence_number,
+                metadata,
+                timestamp_nanos,
+            )
             .await?;
 
         // Write manifest list
@@ -171,7 +177,9 @@ impl SnapshotWriter {
         let output_file = self
             .file_io
             .new_output(&manifest_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest output: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to create manifest output: {}", e),
+            })?;
 
         let mut manifest_writer = ManifestWriterBuilder::new(
             output_file,
@@ -185,13 +193,17 @@ impl SnapshotWriter {
         for data_file in data_files {
             manifest_writer
                 .add_file(data_file.clone(), sequence_number)
-                .map_err(|e| Error::General(format!("Failed to add file to manifest: {}", e)))?;
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to add file to manifest: {}", e),
+                })?;
         }
 
         manifest_writer
             .write_manifest_file()
             .await
-            .map_err(|e| Error::General(format!("Failed to write manifest: {}", e)))
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to write manifest: {}", e),
+            })
     }
 
     /// Write a manifest list containing the given manifest files
@@ -203,13 +215,16 @@ impl SnapshotWriter {
         sequence_number: i64,
         timestamp_nanos: u128,
     ) -> Result<String> {
-        let manifest_list_filename = format!("snap-{}-0-{:016x}.avro", snapshot_id, timestamp_nanos);
+        let manifest_list_filename =
+            format!("snap-{}-0-{:016x}.avro", snapshot_id, timestamp_nanos);
         let manifest_list_path = format!("{}/{}", self.metadata_dir(), manifest_list_filename);
 
-        let manifest_list_output = self
-            .file_io
-            .new_output(&manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest list output: {}", e)))?;
+        let manifest_list_output =
+            self.file_io
+                .new_output(&manifest_list_path)
+                .map_err(|e| Error::Metadata {
+                    message: format!("Failed to create manifest list output: {}", e),
+                })?;
 
         let mut manifest_list_writer = ManifestListWriter::v2(
             manifest_list_output,
@@ -220,12 +235,16 @@ impl SnapshotWriter {
 
         manifest_list_writer
             .add_manifests(vec![manifest_file].into_iter())
-            .map_err(|e| Error::General(format!("Failed to add manifest to list: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to add manifest to list: {}", e),
+            })?;
 
         manifest_list_writer
             .close()
             .await
-            .map_err(|e| Error::General(format!("Failed to close manifest list: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to close manifest list: {}", e),
+            })?;
 
         Ok(manifest_list_path)
     }
@@ -275,7 +294,9 @@ impl SnapshotWriter {
                     .record_count(info.record_count)
                     .file_size_in_bytes(info.size)
                     .build()
-                    .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))
+                    .map_err(|e| Error::Metadata {
+                        message: format!("Failed to build DataFile: {}", e),
+                    })
             })
             .collect()
     }
@@ -297,7 +318,9 @@ impl SnapshotWriter {
             .record_count(info.record_count)
             .file_size_in_bytes(info.size)
             .build()
-            .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build DataFile: {}", e),
+            })
     }
 
     /// Build a partition Struct from DataFileInfo
@@ -354,9 +377,13 @@ impl SnapshotWriter {
             Some(metadata_filename.to_string()),
         )
         .set_branch_snapshot(snapshot, branch)
-        .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to set snapshot: {}", e),
+        })?
         .build()
-        .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to build metadata: {}", e),
+        })?;
 
         Ok(build_result.metadata)
     }
@@ -374,8 +401,9 @@ impl SnapshotWriter {
             extract_version_from_path, metadata_location_filename, next_metadata_location,
         };
 
-        let storage = self.storage.as_ref().ok_or_else(|| {
-            Error::General("Storage not configured. Use with_storage() to enable metadata writes.".to_string())
+        let storage = self.storage.as_ref().ok_or_else(|| Error::Metadata {
+            message: "Storage not configured. Use with_storage() to enable metadata writes."
+                .to_string(),
         })?;
 
         // Validate metadata before writing
@@ -400,8 +428,10 @@ impl SnapshotWriter {
             metadata_location_filename(&next_location)
         );
 
-        let metadata_json = serde_json::to_string_pretty(metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let metadata_json =
+            serde_json::to_string_pretty(metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         storage
             .put_bytes_str(&metadata_path, Bytes::from(metadata_json))

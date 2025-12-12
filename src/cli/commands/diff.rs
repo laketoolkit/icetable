@@ -5,12 +5,11 @@
 
 use colored::Colorize;
 
-use super::common::{print_json, resolve_table_path};
-use crate::core::extract_filename;
+use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::format_timestamp_ms;
-use crate::cli::parser::DiffArgs;
+use crate::cli::parser::{DiffArgs, TableContext};
+use crate::core::extract_filename;
 use crate::core::operations::{DiffConfig, DiffService, SnapshotDiffResult};
-use crate::core::{CatalogConfig, TableContext};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -19,18 +18,15 @@ pub struct DiffCommand;
 
 impl DiffCommand {
     /// Execute diff command
-    pub async fn execute(args: DiffArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: DiffArgs, ctx: &TableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for diff operations
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: DiffArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // 1. Resolve path (supports catalog resolution) and load table context
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
-        let ctx = TableContext::from_path(Some(table_path)).await?;
-        ctx.require_iceberg()?;
-
-        let service = ctx.iceberg_service().await?;
+    async fn execute_inner(args: DiffArgs, ctx: &TableContext) -> Result<()> {
+        // 1. Resolve table (supports catalog resolution) and create metadata service
+        let resolution = resolve_table_from_context(ctx).await?;
+        let service = resolution.to_readonly_service().await?;
 
         // 2. Build config and delegate to service
         let config = DiffConfig {

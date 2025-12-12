@@ -6,12 +6,12 @@ use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
 use super::common::{
-    create_committer, create_ref_service, print_json, print_ref_delete_dry_run,
-    print_version_if_present, resolve_iceberg_context,
+    print_json, print_ref_delete_dry_run, print_version_if_present, resolve_table_from_context,
 };
 use crate::cli::output::create_styled_table;
+use crate::cli::parser::TableContext;
 use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
-use crate::core::{CatalogConfig, TableCommitter, TableContext};
+use crate::core::metadata::IcebergMetadataService;
 use crate::error::Result;
 
 /// Reference type (branch or tag)
@@ -52,16 +52,15 @@ pub struct RefCommands;
 impl RefCommands {
     /// List references of the given type
     pub async fn list(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         ref_type: RefType,
         output: &str,
         show_current: bool,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
-        let refs = service.list_refs().await?;
+        let refs = metadata_service.list_refs().await?;
 
         let current_snapshot_id = if show_current {
-            let (metadata, _) = ctx.iceberg_metadata().await?;
+            let (metadata, _) = metadata_service.load_metadata().await?;
             metadata.current_snapshot_id()
         } else {
             None
@@ -82,15 +81,19 @@ impl RefCommands {
                         "snapshot_id": r.snapshot_id,
                     });
                     if show_current {
-                        obj["is_current"] =
-                            serde_json::json!(Some(r.snapshot_id) == current_snapshot_id && r.name == "main");
+                        obj["is_current"] = serde_json::json!(
+                            Some(r.snapshot_id) == current_snapshot_id && r.name == "main"
+                        );
                     }
                     obj
                 })
                 .collect();
             print_json(&json_refs)?;
         } else if filtered.is_empty() {
-            println!("{}", format!("No {}s found", ref_type.name_lower()).dimmed());
+            println!(
+                "{}",
+                format!("No {}s found", ref_type.name_lower()).dimmed()
+            );
         } else {
             let mut table = create_styled_table();
 
@@ -131,56 +134,74 @@ impl RefCommands {
 
     /// Create a branch
     pub async fn create_branch(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         name: &str,
         from_snapshot: Option<i64>,
         retention: BranchRetention,
         output: &str,
-        committer: Option<TableCommitter>,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
-        let ref_service = create_ref_service(committer);
+        let table_path = metadata_service.path();
+        let ref_service = Self::create_ref_service(metadata_service.committer());
 
         let result = ref_service
-            .create_branch(&service, &ctx.path, name, from_snapshot, retention)
+            .create_branch(metadata_service, table_path, name, from_snapshot, retention)
             .await?;
 
-        Self::print_create_result(RefType::Branch, &result.name, result.snapshot_id, result.new_version, output)
+        Self::print_create_result(
+            RefType::Branch,
+            &result.name,
+            result.snapshot_id,
+            result.new_version,
+            output,
+        )
     }
 
     /// Create a tag
     pub async fn create_tag(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         name: &str,
         snapshot_id: Option<i64>,
         max_ref_age_ms: Option<i64>,
         output: &str,
-        committer: Option<TableCommitter>,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
-        let ref_service = create_ref_service(committer);
+        let table_path = metadata_service.path();
+        let ref_service = Self::create_ref_service(metadata_service.committer());
 
         let result = ref_service
-            .create_tag(&service, &ctx.path, name, snapshot_id, max_ref_age_ms)
+            .create_tag(
+                metadata_service,
+                table_path,
+                name,
+                snapshot_id,
+                max_ref_age_ms,
+            )
             .await?;
 
-        Self::print_create_result(RefType::Tag, &result.name, result.snapshot_id, result.new_version, output)
+        Self::print_create_result(
+            RefType::Tag,
+            &result.name,
+            result.snapshot_id,
+            result.new_version,
+            output,
+        )
     }
 
     /// Delete a reference (branch or tag)
     pub async fn delete(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         ref_type: RefType,
         name: &str,
         dry_run: bool,
         output: &str,
-        committer: Option<TableCommitter>,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
+        let table_path = metadata_service.path();
         let config = RefConfig { dry_run };
-        let ref_service = RefService::with_config_and_committer(config, committer);
+        let ref_service =
+            RefService::with_config_and_committer(config, metadata_service.committer());
 
-        let result = ref_service.delete_ref(&service, &ctx.path, name).await?;
+        let result = ref_service
+            .delete_ref(metadata_service, table_path, name)
+            .await?;
 
         if output == "json" {
             let json = serde_json::json!({
@@ -207,53 +228,64 @@ impl RefCommands {
 
     /// Rename a branch
     pub async fn rename_branch(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         old_name: &str,
         new_name: &str,
         output: &str,
-        committer: Option<TableCommitter>,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
-        let ref_service = create_ref_service(committer);
+        let table_path = metadata_service.path();
+        let ref_service = Self::create_ref_service(metadata_service.committer());
 
         let result = ref_service
-            .rename_branch(&service, &ctx.path, old_name, new_name)
+            .rename_branch(metadata_service, table_path, old_name, new_name)
             .await?;
 
-        Self::print_rename_result(RefType::Branch, old_name, &result.name, result.snapshot_id, result.new_version, output)
+        Self::print_rename_result(
+            RefType::Branch,
+            old_name,
+            &result.name,
+            result.snapshot_id,
+            result.new_version,
+            output,
+        )
     }
 
     /// Rename a tag
     pub async fn rename_tag(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         old_name: &str,
         new_name: &str,
         output: &str,
-        committer: Option<TableCommitter>,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
-        let ref_service = create_ref_service(committer);
+        let table_path = metadata_service.path();
+        let ref_service = Self::create_ref_service(metadata_service.committer());
 
         let result = ref_service
-            .rename_tag(&service, &ctx.path, old_name, new_name)
+            .rename_tag(metadata_service, table_path, old_name, new_name)
             .await?;
 
-        Self::print_rename_result(RefType::Tag, old_name, &result.name, result.snapshot_id, result.new_version, output)
+        Self::print_rename_result(
+            RefType::Tag,
+            old_name,
+            &result.name,
+            result.snapshot_id,
+            result.new_version,
+            output,
+        )
     }
 
     /// Fast-forward a branch (branch-only operation)
     pub async fn fast_forward_branch(
-        ctx: &TableContext,
+        metadata_service: &IcebergMetadataService,
         name: &str,
         to: &str,
         output: &str,
-        committer: Option<TableCommitter>,
     ) -> Result<()> {
-        let service = ctx.iceberg_service().await?;
-        let ref_service = create_ref_service(committer);
+        let table_path = metadata_service.path();
+        let ref_service = Self::create_ref_service(metadata_service.committer());
 
         let result = ref_service
-            .fast_forward_branch(&service, &ctx.path, name, to)
+            .fast_forward_branch(metadata_service, table_path, name, to)
             .await?;
 
         if output == "json" {
@@ -274,6 +306,14 @@ impl RefCommands {
         }
 
         Ok(())
+    }
+
+    // Helper: create RefService with optional committer
+    fn create_ref_service(committer: Option<crate::core::TableCommitter>) -> RefService {
+        match committer {
+            Some(c) => RefService::with_committer(c),
+            None => RefService::new(),
+        }
     }
 
     // Helper: print create result
@@ -347,41 +387,62 @@ pub struct BranchCommand;
 
 impl BranchCommand {
     /// Execute the branch command with the given arguments
-    pub async fn execute(args: BranchArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: BranchArgs, ctx: &TableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: BranchArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    async fn execute_inner(args: BranchArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
+
         match args.command {
             BranchCommands::Ls(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                RefCommands::list(&iceberg.ctx, RefType::Branch, &a.output, true).await
+                let metadata_service = resolution.to_readonly_service().await?;
+                RefCommands::list(&metadata_service, RefType::Branch, &a.output, true).await
             }
             BranchCommands::Create(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
                 let retention = BranchRetention {
                     min_snapshots_to_keep: a.min_snapshots_to_keep,
                     max_snapshot_age_ms: a.max_snapshot_age_ms,
                     max_ref_age_ms: a.max_ref_age_ms,
                 };
-                RefCommands::create_branch(&iceberg.ctx, &a.name, a.from_snapshot, retention, &a.output, committer).await
+                RefCommands::create_branch(
+                    &metadata_service,
+                    &a.name,
+                    a.from_snapshot,
+                    retention,
+                    &a.output,
+                )
+                .await
             }
             BranchCommands::Delete(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
-                RefCommands::delete(&iceberg.ctx, RefType::Branch, &a.name, a.dry_run, &a.output, committer).await
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
+                RefCommands::delete(
+                    &metadata_service,
+                    RefType::Branch,
+                    &a.name,
+                    a.dry_run,
+                    &a.output,
+                )
+                .await
             }
             BranchCommands::FastForward(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
-                RefCommands::fast_forward_branch(&iceberg.ctx, &a.name, &a.to, &a.output, committer).await
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
+                RefCommands::fast_forward_branch(&metadata_service, &a.name, &a.to, &a.output).await
             }
             BranchCommands::Rename(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
-                RefCommands::rename_branch(&iceberg.ctx, &a.old_name, &a.new_name, &a.output, committer).await
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
+                RefCommands::rename_branch(&metadata_service, &a.old_name, &a.new_name, &a.output)
+                    .await
             }
         }
     }
@@ -398,31 +459,51 @@ pub struct TagCommand;
 
 impl TagCommand {
     /// Execute the tag command with the given arguments
-    pub async fn execute(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: TagArgs, ctx: &TableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: TagArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    async fn execute_inner(args: TagArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
+
         match args.command {
             TagCommands::Ls(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                RefCommands::list(&iceberg.ctx, RefType::Tag, &a.output, false).await
+                let metadata_service = resolution.to_readonly_service().await?;
+                RefCommands::list(&metadata_service, RefType::Tag, &a.output, false).await
             }
             TagCommands::Create(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
-                RefCommands::create_tag(&iceberg.ctx, &a.name, a.snapshot_id, a.max_ref_age_ms, &a.output, committer).await
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
+                RefCommands::create_tag(
+                    &metadata_service,
+                    &a.name,
+                    a.snapshot_id,
+                    a.max_ref_age_ms,
+                    &a.output,
+                )
+                .await
             }
             TagCommands::Delete(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
-                RefCommands::delete(&iceberg.ctx, RefType::Tag, &a.name, a.dry_run, &a.output, committer).await
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
+                RefCommands::delete(
+                    &metadata_service,
+                    RefType::Tag,
+                    &a.name,
+                    a.dry_run,
+                    &a.output,
+                )
+                .await
             }
             TagCommands::Rename(a) => {
-                let iceberg = resolve_iceberg_context(&a.path, catalog_config.as_ref()).await?;
-                let committer = create_committer(catalog_config.as_ref(), &iceberg.resolution);
-                RefCommands::rename_tag(&iceberg.ctx, &a.old_name, &a.new_name, &a.output, committer).await
+                let metadata_service = resolution
+                    .to_writable_service(ctx.catalog_config.as_ref(), None)
+                    .await?;
+                RefCommands::rename_tag(&metadata_service, &a.old_name, &a.new_name, &a.output)
+                    .await
             }
         }
     }

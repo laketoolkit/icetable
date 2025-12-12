@@ -77,30 +77,45 @@ fn create_s3_file_io() -> Result<FileIO> {
     // Path-style access (required for MinIO and some S3-compatible services)
     builder = builder.with_prop("s3.path-style-access", "true");
 
-    builder
-        .build()
-        .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
+    builder.build().map_err(|e| Error::CloudStorage {
+        provider: "S3".to_string(),
+        message: format!("Failed to create FileIO: {}", e),
+        error_code: None,
+        http_status: None,
+    })
 }
 
 /// Create GCS FileIO (uses Application Default Credentials)
 fn create_gcs_file_io() -> Result<FileIO> {
     FileIOBuilder::new("gcs")
         .build()
-        .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
+        .map_err(|e| Error::CloudStorage {
+            provider: "GCS".to_string(),
+            message: format!("Failed to create FileIO: {}", e),
+            error_code: None,
+            http_status: None,
+        })
 }
 
 /// Create Azure Blob Storage FileIO
 fn create_azure_file_io() -> Result<FileIO> {
     FileIOBuilder::new("azblob")
         .build()
-        .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
+        .map_err(|e| Error::CloudStorage {
+            provider: "Azure".to_string(),
+            message: format!("Failed to create FileIO: {}", e),
+            error_code: None,
+            http_status: None,
+        })
 }
 
 /// Create local filesystem FileIO
 fn create_local_file_io() -> Result<FileIO> {
     FileIOBuilder::new_fs_io()
         .build()
-        .map_err(|e| Error::General(format!("Failed to create local FileIO: {}", e)))
+        .map_err(|e| Error::Configuration {
+            message: format!("Failed to create local FileIO: {}", e),
+        })
 }
 
 #[cfg(test)]

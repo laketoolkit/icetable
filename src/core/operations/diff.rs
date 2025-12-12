@@ -60,7 +60,9 @@ impl DiffService {
 
         let current_id = metadata
             .current_snapshot_id()
-            .ok_or_else(|| Error::General("Table has no current snapshot".to_string()))?;
+            .ok_or_else(|| Error::DataValidation {
+                message: "Table has no current snapshot".to_string(),
+            })?;
 
         // Resolve reference (default to current)
         let ref_id = if let Some(ref reference) = config.reference {
@@ -75,12 +77,15 @@ impl DiffService {
         } else {
             let ref_snapshot = metadata
                 .snapshot_by_id(ref_id)
-                .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
-            ref_snapshot.parent_snapshot_id().ok_or_else(|| {
-                Error::General(
-                    "No parent snapshot. Use --base to specify a base reference.".to_string(),
-                )
-            })?
+                .ok_or(Error::SnapshotNotFound {
+                    snapshot_id: ref_id,
+                })?;
+            ref_snapshot
+                .parent_snapshot_id()
+                .ok_or_else(|| Error::DataValidation {
+                    message: "No parent snapshot. Use --base to specify a base reference."
+                        .to_string(),
+                })?
         };
 
         // Check if they're the same
@@ -93,7 +98,10 @@ impl DiffService {
                     manifest_count: 0,
                 },
                 reference: SnapshotRef {
-                    label: config.reference.clone().unwrap_or_else(|| "current".to_string()),
+                    label: config
+                        .reference
+                        .clone()
+                        .unwrap_or_else(|| "current".to_string()),
                     snapshot_id: ref_id,
                     timestamp_ms: 0,
                     manifest_count: 0,
@@ -107,10 +115,14 @@ impl DiffService {
         // Get snapshots
         let base_snapshot = metadata
             .snapshot_by_id(base_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", base_id)))?;
+            .ok_or(Error::SnapshotNotFound {
+                snapshot_id: base_id,
+            })?;
         let ref_snapshot = metadata
             .snapshot_by_id(ref_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", ref_id)))?;
+            .ok_or(Error::SnapshotNotFound {
+                snapshot_id: ref_id,
+            })?;
 
         // Get manifest files for both
         let base_manifests = Self::get_manifest_files(service, base_snapshot).await?;
@@ -136,7 +148,10 @@ impl DiffService {
                 manifest_count: base_manifests.len(),
             },
             reference: SnapshotRef {
-                label: config.reference.clone().unwrap_or_else(|| "current".to_string()),
+                label: config
+                    .reference
+                    .clone()
+                    .unwrap_or_else(|| "current".to_string()),
                 snapshot_id: ref_id,
                 timestamp_ms: ref_snapshot.timestamp_ms(),
                 manifest_count: ref_manifests.len(),
@@ -154,7 +169,7 @@ impl DiffService {
             if metadata.snapshot_by_id(id).is_some() {
                 return Ok(id);
             }
-            return Err(Error::General(format!("Snapshot {} not found", id)));
+            return Err(Error::SnapshotNotFound { snapshot_id: id });
         }
 
         // Try as branch/tag name
@@ -162,10 +177,12 @@ impl DiffService {
             return Ok(snapshot.snapshot_id());
         }
 
-        Err(Error::General(format!(
-            "Reference '{}' not found (not a valid snapshot ID, branch, or tag)",
-            reference
-        )))
+        Err(Error::DataValidation {
+            message: format!(
+                "Reference '{}' not found (not a valid snapshot ID, branch, or tag)",
+                reference
+            ),
+        })
     }
 
     /// Get manifest file paths from a snapshot
@@ -179,7 +196,9 @@ impl DiffService {
         let manifest_list = snapshot
             .load_manifest_list(file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to load manifest list: {}", e),
+            })?;
 
         Ok(manifest_list
             .entries()

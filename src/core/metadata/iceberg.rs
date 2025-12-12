@@ -20,9 +20,9 @@ use object_store::ObjectStore;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
-use crate::core::storage::{ObjectStoreExt, Storage, create_object_store, create_file_io};
-use crate::utils::core::{extract_version_from_path, find_latest_metadata};
+use crate::core::storage::{ObjectStoreExt, Storage, create_file_io, create_object_store};
 use crate::error::{Error, Result};
+use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 
 use super::iceberg_operations;
 use super::iceberg_partition;
@@ -45,7 +45,11 @@ pub struct IcebergMetadataService {
 
 impl IcebergMetadataService {
     /// Load StaticTable from path
-    async fn load_static_table(table_path: &str, file_io: &FileIO, storage: &Storage) -> Result<StaticTable> {
+    async fn load_static_table(
+        table_path: &str,
+        file_io: &FileIO,
+        storage: &Storage,
+    ) -> Result<StaticTable> {
         use iceberg::NamespaceIdent;
 
         // find_latest_metadata returns full path (e.g., /path/to/table/metadata/00001-xxx.json)
@@ -58,7 +62,9 @@ impl IcebergMetadataService {
 
         StaticTable::from_metadata_file(&metadata_file, table_ident, file_io.clone())
             .await
-            .map_err(|e| Error::General(format!("Failed to load table: {}", e)))
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to load table: {}", e),
+            })
     }
 
     /// Create a new Iceberg metadata service
@@ -109,9 +115,15 @@ impl IcebergMetadataService {
         // Create StaticTable from the catalog table's metadata
         // This ensures UUID and snapshot IDs match the catalog
         let table_ident = catalog_table.identifier().clone();
-        let static_table = StaticTable::from_metadata(catalog_table.metadata().clone(), table_ident, file_io.clone())
-            .await
-            .map_err(|e| Error::General(format!("Failed to create static table from catalog metadata: {}", e)))?;
+        let static_table = StaticTable::from_metadata(
+            catalog_table.metadata().clone(),
+            table_ident,
+            file_io.clone(),
+        )
+        .await
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to create static table from catalog metadata: {}", e),
+        })?;
 
         Ok(Self {
             table_path,
@@ -136,9 +148,15 @@ impl IcebergMetadataService {
 
         // Create StaticTable from the catalog table's metadata
         let table_ident = catalog_table.identifier().clone();
-        let static_table = StaticTable::from_metadata(catalog_table.metadata().clone(), table_ident, file_io.clone())
-            .await
-            .map_err(|e| Error::General(format!("Failed to create static table from catalog metadata: {}", e)))?;
+        let static_table = StaticTable::from_metadata(
+            catalog_table.metadata().clone(),
+            table_ident,
+            file_io.clone(),
+        )
+        .await
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to create static table from catalog metadata: {}", e),
+        })?;
 
         Ok(Self {
             table_path,
@@ -152,7 +170,8 @@ impl IcebergMetadataService {
 
     /// Refresh the table after modifications
     pub async fn refresh(&mut self) -> Result<()> {
-        self.table = Self::load_static_table(&self.table_path, &self.file_io, &self.storage).await?;
+        self.table =
+            Self::load_static_table(&self.table_path, &self.file_io, &self.storage).await?;
         Ok(())
     }
 
@@ -191,9 +210,19 @@ impl IcebergMetadataService {
         &self.table_path
     }
 
+    /// Alias for table_path() - for convenience
+    pub fn path(&self) -> &str {
+        &self.table_path
+    }
+
     /// Get the storage backend
     pub fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    /// Get the committer if configured (for catalog-aware operations)
+    pub fn committer(&self) -> Option<TableCommitter> {
+        self.committer.clone()
     }
 
     /// Get current metadata file path
@@ -227,20 +256,27 @@ impl IcebergMetadataService {
         use futures::TryStreamExt;
 
         // Build scan targeting the specific snapshot
-        let scan = self.table
+        let scan = self
+            .table
             .scan()
             .snapshot_id(snapshot_id)
             .build()
-            .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build scan: {}", e),
+            })?;
 
         // Use plan_files() to get all data files
         let tasks: Vec<_> = scan
             .plan_files()
             .await
-            .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to plan files: {}", e),
+            })?
             .try_collect()
             .await
-            .map_err(|e| Error::General(format!("Failed to collect file tasks: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to collect file tasks: {}", e),
+            })?;
 
         // Convert FileScanTasks to DataFileInfo
         let data_files = tasks
@@ -249,7 +285,9 @@ impl IcebergMetadataService {
                 path: task.data_file_path().to_string(),
                 size: task.length,
                 record_count: task.record_count.unwrap_or(0),
-                partition: iceberg_partition::extract_partition_from_path_static(task.data_file_path()),
+                partition: iceberg_partition::extract_partition_from_path_static(
+                    task.data_file_path(),
+                ),
             })
             .collect();
 
@@ -270,7 +308,6 @@ impl IcebergMetadataService {
         refs::branch_name_or_default(branch)
     }
 }
-
 
 #[async_trait]
 impl MetadataService for IcebergMetadataService {
@@ -300,18 +337,22 @@ impl MetadataService for IcebergMetadataService {
             }
         }
 
-        let scan = scan_builder
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build scan: {}", e)))?;
+        let scan = scan_builder.build().map_err(|e| Error::Metadata {
+            message: format!("Failed to build scan: {}", e),
+        })?;
 
         // Use plan_files() to get all data files
         let tasks: Vec<_> = scan
             .plan_files()
             .await
-            .map_err(|e| Error::General(format!("Failed to plan files: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to plan files: {}", e),
+            })?
             .try_collect()
             .await
-            .map_err(|e| Error::General(format!("Failed to collect file tasks: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to collect file tasks: {}", e),
+            })?;
 
         // Convert FileScanTasks to DataFileInfo
         let data_files = tasks
@@ -320,7 +361,9 @@ impl MetadataService for IcebergMetadataService {
                 path: task.data_file_path().to_string(),
                 size: task.length,
                 record_count: task.record_count.unwrap_or(0),
-                partition: iceberg_partition::extract_partition_from_path_static(task.data_file_path()),
+                partition: iceberg_partition::extract_partition_from_path_static(
+                    task.data_file_path(),
+                ),
             })
             .collect();
 
@@ -370,7 +413,11 @@ impl MetadataService for IcebergMetadataService {
         let partition_spec = metadata.default_partition_spec();
         let schema_id = metadata.current_schema().schema_id();
         // Create snapshot writer with storage for metadata operations
-        let writer = SnapshotWriter::with_storage(self.table_path.clone(), self.file_io.clone(), self.storage.clone());
+        let writer = SnapshotWriter::with_storage(
+            self.table_path.clone(),
+            self.file_io.clone(),
+            self.storage.clone(),
+        );
 
         // Get current state for the target branch
         let target_branch = self.target_branch();
@@ -537,8 +584,11 @@ impl MetadataService for IcebergMetadataService {
         let iceberg_schema = metadata.current_schema();
 
         // Use iceberg's native schema conversion
-        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema)
-            .map_err(|e| Error::General(format!("Failed to convert schema: {}", e)))?;
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema).map_err(|e| {
+            Error::Metadata {
+                message: format!("Failed to convert schema: {}", e),
+            }
+        })?;
 
         Ok(Arc::new(arrow_schema))
     }

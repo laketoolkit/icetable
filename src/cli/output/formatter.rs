@@ -60,12 +60,16 @@ impl OutputFormatter {
 
     /// Format output as JSON
     pub fn format_json<T: serde::Serialize>(data: &T) -> crate::error::Result<String> {
-        serde_json::to_string_pretty(data).map_err(|e| crate::error::Error::General(e.to_string()))
+        serde_json::to_string_pretty(data).map_err(|e| crate::error::Error::Serialization {
+            message: format!("JSON serialization failed: {}", e),
+        })
     }
 
     /// Format output as YAML
     pub fn format_yaml<T: serde::Serialize>(data: &T) -> crate::error::Result<String> {
-        serde_yaml::to_string(data).map_err(|e| crate::error::Error::General(e.to_string()))
+        serde_yaml::to_string(data).map_err(|e| crate::error::Error::Serialization {
+            message: format!("YAML serialization failed: {}", e),
+        })
     }
 
     /// Format a success message

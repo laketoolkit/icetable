@@ -1,7 +1,7 @@
 //! Format handlers for Apache Iceberg tables
 //!
 //! This module contains the FormatHandler trait implementation for Apache Iceberg.
-//! 
+//!
 
 // Utilities for table formats
 pub mod table_utils;

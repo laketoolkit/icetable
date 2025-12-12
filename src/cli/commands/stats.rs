@@ -6,12 +6,11 @@
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment};
 
-use super::common::{print_json, resolve_table_path};
+use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::{create_styled_table, format_datetime_utc};
-use crate::cli::parser::StatsArgs;
-use crate::core::{format_bytes, format_number};
+use crate::cli::parser::{StatsArgs, TableContext};
 use crate::core::operations::{PartitionStats, StatsConfig, StatsResult, StatsService, TableStats};
-use crate::core::CatalogConfig;
+use crate::core::{format_bytes, format_number};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -20,14 +19,15 @@ pub struct StatsCommand;
 
 impl StatsCommand {
     /// Execute stats command
-    pub async fn execute(args: StatsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: StatsArgs, ctx: &TableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for stats
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: StatsArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // 1. Resolve table path
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+    async fn execute_inner(args: StatsArgs, ctx: &TableContext) -> Result<()> {
+        // 1. Resolve table (supports catalog resolution)
+        let resolution = resolve_table_from_context(ctx).await?;
+        let table_path = resolution.location();
 
         // 2. Build config and delegate to service
         let config = StatsConfig {

@@ -4,9 +4,8 @@
 
 use std::path::Path;
 
-use super::common::{create_spinner, print_json, resolve_table_path};
-use crate::cli::parser::ValidateArgs;
-use crate::core::CatalogConfig;
+use super::common::{create_spinner, print_json, resolve_table_from_context};
+use crate::cli::parser::{TableContext, ValidateArgs};
 use crate::core::formats::FormatHandlerRegistry;
 use crate::core::operations::validate::ValidateOperation;
 use crate::core::storage::create_object_store;
@@ -19,13 +18,14 @@ pub struct ValidateCommand;
 
 impl ValidateCommand {
     /// Execute validate command
-    pub async fn execute(args: ValidateArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: ValidateArgs, ctx: &TableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for validation
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: ValidateArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+    async fn execute_inner(args: ValidateArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
+        let table_path = resolution.location();
 
         // 1. Create storage backend based on path
         let storage = create_object_store(&table_path).await?;
@@ -47,10 +47,9 @@ impl ValidateCommand {
 
         // Verify it's Iceberg
         if handler.format_name() != "Apache Iceberg" {
-            return Err(Error::General(format!(
-                "Path '{}' is not an Iceberg table.",
-                table_path
-            )));
+            return Err(Error::InvalidFormat {
+                message: format!("Path '{}' is not an Iceberg table.", table_path),
+            });
         }
 
         // 4. Execute basic validation
@@ -81,9 +80,12 @@ impl ValidateCommand {
                 .create_handler(Path::new(&table_path), storage2)
                 .await?;
 
-            let rules_path_str = rules_path.to_str().ok_or_else(|| {
-                crate::error::Error::General("Rules path contains invalid UTF-8".to_string())
-            })?;
+            let rules_path_str = rules_path
+                .to_str()
+                .ok_or_else(|| crate::error::Error::Parse {
+                    message: "Rules path contains invalid UTF-8".to_string(),
+                    source: None,
+                })?;
             let rules = ValidationEngine::load_rules(rules_path_str).await?;
             let engine = ValidationEngine::new(handler2.into(), rules);
             let rules_result = engine.execute().await?;

@@ -5,11 +5,10 @@
 
 use colored::Colorize;
 
-use super::common::{print_json, resolve_table_path};
+use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::format_datetime_utc;
-use crate::cli::parser::HistoryArgs;
+use crate::cli::parser::{HistoryArgs, TableContext};
 use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
-use crate::core::{CatalogConfig, TableLoader};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -18,17 +17,17 @@ pub struct HistoryCommand;
 
 impl HistoryCommand {
     /// Execute history command
-    pub async fn execute(args: HistoryArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: HistoryArgs, ctx: &TableContext) -> Result<()> {
         const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for history
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: HistoryArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // 1. Resolve path from args or config (supports catalog resolution)
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+    async fn execute_inner(args: HistoryArgs, ctx: &TableContext) -> Result<()> {
+        // 1. Resolve table (supports catalog resolution)
+        let resolution = resolve_table_from_context(ctx).await?;
 
-        // 2. Load table using unified TableLoader
-        let table = TableLoader::load_table(&table_path, catalog_config.as_ref()).await?;
+        // 2. Get table using factory method - handles catalog vs path context automatically
+        let table = resolution.to_table().await?;
 
         // 3. Build config and delegate to service
         let config = HistoryConfig {

@@ -53,13 +53,10 @@ const RETRY_BASE_DELAY_MS: u64 = 100;
 #[derive(Debug, serde::Deserialize)]
 struct OAuthTokenResponse {
     access_token: String,
-    #[serde(default)]
-    token_type: String,
-    #[serde(default)]
-    expires_in: Option<i64>,
 }
 
 /// A committer that can use either catalog transactions or direct storage writes
+#[derive(Clone)]
 pub struct TableCommitter {
     /// REST catalog configuration (if available)
     catalog_config: Option<CatalogConfig>,
@@ -88,7 +85,8 @@ impl TableCommitter {
     /// Panics if namespace is empty - callers must validate namespace before calling.
     pub fn with_catalog(config: CatalogConfig, namespace: Vec<String>, table_name: String) -> Self {
         assert!(!namespace.is_empty(), "Namespace cannot be empty");
-        let ns_ident = NamespaceIdent::from_vec(namespace).expect("Invalid namespace - validated non-empty above");
+        let ns_ident = NamespaceIdent::from_vec(namespace)
+            .expect("Invalid namespace - validated non-empty above");
         let table_ident = TableIdent::new(ns_ident, table_name);
 
         Self {
@@ -156,30 +154,34 @@ impl TableCommitter {
                     .form(&form)
                     .send()
                     .await
-                    .map_err(|e| Error::General(format!("Failed to fetch OAuth token: {}", e)))?;
+                    .map_err(|e| Error::Network {
+                        message: format!("Failed to fetch OAuth token: {}", e),
+                        source: None,
+                    })?;
 
                 if !response.status().is_success() {
                     let status = response.status();
                     let body = response.text().await.unwrap_or_default();
-                    return Err(Error::General(format!(
-                        "OAuth token request failed ({}): {}",
-                        status, body
-                    )));
+                    return Err(Error::AuthenticationFailed {
+                        provider: "OAuth2".to_string(),
+                        message: format!("Token request failed ({}): {}", status, body),
+                    });
                 }
 
-                let token_response: OAuthTokenResponse = response
-                    .json()
-                    .await
-                    .map_err(|e| Error::General(format!("Failed to parse OAuth response: {}", e)))?;
+                let token_response: OAuthTokenResponse =
+                    response.json().await.map_err(|e| Error::Parse {
+                        message: format!("Failed to parse OAuth response: {}", e),
+                        source: None,
+                    })?;
 
                 Ok(Some(token_response.access_token))
             }
             CatalogAuth::SigV4 { .. } => {
                 // SigV4 auth is handled differently (AWS SDK signing)
                 // For now, we don't support it in the committer
-                Err(Error::General(
-                    "SigV4 authentication not yet supported for catalog commits".to_string(),
-                ))
+                Err(Error::UnsupportedFeature {
+                    feature: "SigV4 authentication for catalog commits".to_string(),
+                })
             }
         }
     }
@@ -329,18 +331,18 @@ impl TableCommitter {
                 request = request.bearer_auth(token);
             }
 
-            let response = request
-                .send()
-                .await
-                .map_err(|e| Error::General(format!("Failed to send commit request: {}", e)))?;
+            let response = request.send().await.map_err(|e| Error::Network {
+                message: format!("Failed to send commit request: {}", e),
+                source: None,
+            })?;
 
             match response.status() {
                 reqwest::StatusCode::OK => return Ok(()),
                 reqwest::StatusCode::CONFLICT => {
                     let body = response.text().await.unwrap_or_default();
                     if attempt >= self.max_retries {
-                        return Err(Error::General(format!(
-                            "Commit conflict: table was modified by another writer. \
+                        return Err(Error::Conflict(format!(
+                            "Table was modified by another writer. \
                              Exhausted {} retry attempts. Last response: {}",
                             self.max_retries, body
                         )));
@@ -352,22 +354,23 @@ impl TableCommitter {
                     continue;
                 }
                 reqwest::StatusCode::NOT_FOUND => {
-                    return Err(Error::General(format!(
-                        "Table not found: {}.{} (endpoint: {})",
-                        namespace_display,
-                        ident.name(),
-                        endpoint
-                    )));
+                    return Err(Error::TableNotFound {
+                        path: format!(
+                            "{}.{} (endpoint: {})",
+                            namespace_display,
+                            ident.name(),
+                            endpoint
+                        ),
+                    });
                 }
                 status => {
                     let body = response
                         .text()
                         .await
                         .unwrap_or_else(|_| "unknown".to_string());
-                    return Err(Error::General(format!(
-                        "Catalog commit failed ({}): {}",
-                        status, body
-                    )));
+                    return Err(Error::CatalogOperation {
+                        message: format!("Commit failed ({}): {}", status, body),
+                    });
                 }
             }
         }
@@ -392,7 +395,9 @@ impl TableCommitter {
             .into_builder(None)
             .remove_snapshots(snapshot_ids)
             .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build metadata: {}", e),
+            })?;
 
         let new_metadata = build_result.metadata;
 
@@ -413,8 +418,10 @@ impl TableCommitter {
             metadata_location_filename(&next_location)
         );
 
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let new_metadata_bytes =
+            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         storage
             .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
@@ -450,9 +457,13 @@ impl TableCommitter {
             .clone()
             .into_builder(None)
             .set_ref(ref_name, branch_ref)
-            .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to set ref: {}", e),
+            })?
             .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build metadata: {}", e),
+            })?;
 
         let new_metadata = build_result.metadata;
 
@@ -471,8 +482,10 @@ impl TableCommitter {
             metadata_location_filename(&next_location)
         );
 
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let new_metadata_bytes =
+            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         storage
             .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
@@ -571,9 +584,13 @@ impl TableCommitter {
             .clone()
             .into_builder(None)
             .set_ref(ref_name, reference)
-            .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to set ref: {}", e),
+            })?
             .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build metadata: {}", e),
+            })?;
 
         let new_metadata = build_result.metadata;
 
@@ -592,8 +609,10 @@ impl TableCommitter {
             metadata_location_filename(&next_location)
         );
 
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let new_metadata_bytes =
+            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         storage
             .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
@@ -620,7 +639,9 @@ impl TableCommitter {
             .into_builder(None)
             .remove_ref(ref_name)
             .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build metadata: {}", e),
+            })?;
 
         let new_metadata = build_result.metadata;
 
@@ -639,8 +660,10 @@ impl TableCommitter {
             metadata_location_filename(&next_location)
         );
 
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let new_metadata_bytes =
+            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         storage
             .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
@@ -716,9 +739,13 @@ impl TableCommitter {
             .into_builder(None)
             .remove_ref(old_name)
             .set_ref(new_name, reference)
-            .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to set ref: {}", e),
+            })?
             .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build metadata: {}", e),
+            })?;
 
         let new_metadata = build_result.metadata;
 
@@ -737,8 +764,10 @@ impl TableCommitter {
             metadata_location_filename(&next_location)
         );
 
-        let new_metadata_bytes = serde_json::to_vec_pretty(&new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let new_metadata_bytes =
+            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         storage
             .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))

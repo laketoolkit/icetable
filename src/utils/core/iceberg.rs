@@ -35,11 +35,8 @@ pub async fn find_latest_metadata(table_path: &str, storage: &Storage) -> Result
         })
         .max_by_key(|(_, version)| *version)
         .map(|(filename, _)| filename)
-        .ok_or_else(|| {
-            Error::General(format!(
-                "No valid metadata.json file found in {}",
-                metadata_dir
-            ))
+        .ok_or_else(|| Error::Metadata {
+            message: format!("No valid metadata.json file found in {}", metadata_dir),
         })?;
 
     // Return full path: table_path/metadata/filename
@@ -83,11 +80,12 @@ pub fn metadata_location_filename(location: &MetadataLocation) -> String {
 /// Given the current metadata path, creates a new MetadataLocation
 /// with incremented version and new UUID.
 pub fn next_metadata_location(current_path: &str) -> Result<MetadataLocation> {
-    let current = MetadataLocation::from_str(current_path).map_err(|e| {
-        Error::General(format!(
+    let current = MetadataLocation::from_str(current_path).map_err(|e| Error::Parse {
+        message: format!(
             "Failed to parse metadata location '{}': {}",
             current_path, e
-        ))
+        ),
+        source: None,
     })?;
     Ok(current.with_next_version())
 }
@@ -129,10 +127,15 @@ pub async fn write_metadata_file(
         .unwrap_or_else(|_| new_metadata_location(table_path));
 
     let version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-    let path = format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
+    let path = format!(
+        "{}/{}",
+        metadata_dir,
+        metadata_location_filename(&next_location)
+    );
 
-    let metadata_bytes = serde_json::to_vec_pretty(metadata)
-        .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+    let metadata_bytes = serde_json::to_vec_pretty(metadata).map_err(|e| Error::Serialization {
+        message: format!("Failed to serialize metadata: {}", e),
+    })?;
 
     storage
         .put_bytes_str(&path, bytes::Bytes::from(metadata_bytes))

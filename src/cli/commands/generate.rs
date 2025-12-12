@@ -7,15 +7,12 @@ use std::sync::Arc;
 
 use colored::Colorize;
 
-use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate};
-use crate::config::Config;
-use crate::core::catalog::RestCatalogClient;
-use crate::core::operations::generate::{
-    ExistingTableInfo, GenerateOperation, GenerateResult, SchemaTemplate,
-    parse_schema_string,
-};
+use super::common::{no_namespace_error, no_table_error, print_json, resolve_catalog_from_context};
+use crate::cli::parser::{GenerateArgs, SchemaTemplate as CliSchemaTemplate, TableContext};
 use crate::core::format_bytes;
-use super::common::print_json;
+use crate::core::operations::generate::{
+    ExistingTableInfo, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
+};
 use crate::error::Result;
 
 /// Handler for generate command
@@ -23,85 +20,30 @@ pub struct GenerateCommand;
 
 impl GenerateCommand {
     /// Execute generate command
-    pub async fn execute(args: GenerateArgs) -> Result<()> {
-        let config = Config::load()?;
+    pub async fn execute(args: GenerateArgs, ctx: &TableContext) -> Result<()> {
+        // Resolve catalog context (error propagates with full context)
+        let catalog = resolve_catalog_from_context(ctx, args.catalog.as_deref()).await?;
 
-        // Get catalog name from args or context
-        let catalog_name = args
-            .catalog
-            .clone()
-            .or_else(|| config.get_current_catalog().map(String::from));
+        // Must have namespace
+        let namespace = catalog.namespace().ok_or_else(no_namespace_error)?;
 
-        let Some(catalog_name) = catalog_name else {
-            println!("{} No catalog specified", "!".yellow());
-            println!(
-                "  Use {} or specify {}",
-                "icetable config use <catalog>".dimmed(),
-                "-c <catalog>".dimmed()
-            );
-            return Ok(());
-        };
-
-        // Get catalog config
-        let Some(catalog_config) = config.catalogs.get(&catalog_name) else {
-            println!(
-                "{} Catalog not found: {}",
-                "!".yellow(),
-                catalog_name.cyan()
-            );
-            return Ok(());
-        };
-
-        // Get namespace from args, context, or catalog default
-        let namespace = args
-            .namespace
-            .clone()
-            .or_else(|| config.get_current_namespace())
-            .or_else(|| catalog_config.default_namespace.clone());
-
-        let Some(namespace) = namespace else {
-            println!("{} No namespace specified", "!".yellow());
-            println!(
-                "  Use {} or specify {}",
-                "icetable config use <catalog> -n <namespace>".dimmed(),
-                "-n <namespace>".dimmed()
-            );
-            return Ok(());
-        };
-
-        // Get table name from args or context
-        let table_name = args.table.clone().or_else(|| {
-            config.get_current_table().map(String::from)
-        });
-
-        let Some(table_name) = table_name else {
-            println!("{} No table specified", "!".yellow());
-            println!(
-                "  Use {} or specify {}",
-                "icetable config use <catalog> -n <namespace> -t <table>".dimmed(),
-                "-t <table>".dimmed()
-            );
-            return Ok(());
-        };
-        let ns_parts: Vec<String> = namespace.split('.').map(String::from).collect();
-
-        // Create REST client
-        let client = RestCatalogClient::new(catalog_config).await?;
+        // Must have table
+        let table_name = catalog.table().ok_or_else(no_table_error)?;
 
         // Resolve schema from args
         let arrow_schema = Self::resolve_schema(&args)?;
 
         if args.dry_run {
-            return Self::print_dry_run(&args, &namespace, &table_name, &arrow_schema);
+            return Self::print_dry_run(&args, namespace, table_name, &arrow_schema);
         }
 
         // Check if table exists
-        let table_exists = client.table_exists(&ns_parts, &table_name).await?;
+        let table_exists = catalog.table_exists(table_name).await?;
 
         // Get or create table via catalog
         let table = if table_exists {
             // Load existing table
-            let table = client.load_table(&ns_parts, &table_name).await?;
+            let table = catalog.load_table(table_name).await?;
             let location = table.metadata().location().to_string();
 
             // Check existing table info for append confirmation
@@ -118,8 +60,8 @@ impl GenerateCommand {
         } else {
             // Create new table via catalog
             let iceberg_schema = Self::arrow_to_iceberg_schema(&arrow_schema)?;
-            client
-                .create_table(&ns_parts, &table_name, iceberg_schema, None, Default::default())
+            catalog
+                .create_table(table_name, iceberg_schema, None, Default::default())
                 .await?
         };
 
@@ -146,7 +88,7 @@ impl GenerateCommand {
         // Execute with catalog for proper commits
         let result = GenerateOperation::execute_with_catalog(
             table,
-            client.catalog(),
+            catalog.catalog(),
             Arc::new(arrow_schema),
             args.rows,
             args.files,
@@ -166,8 +108,14 @@ impl GenerateCommand {
             "{} An Iceberg table already exists at this location:",
             "!".yellow().bold()
         );
-        println!("  Snapshots: {}", table_info.snapshot_count.to_string().cyan());
-        println!("  Data files: {}", table_info.data_file_count.to_string().cyan());
+        println!(
+            "  Snapshots: {}",
+            table_info.snapshot_count.to_string().cyan()
+        );
+        println!(
+            "  Data files: {}",
+            table_info.data_file_count.to_string().cyan()
+        );
         println!(
             "  Total records: {}",
             table_info.total_records.to_string().cyan()
@@ -210,7 +158,12 @@ impl GenerateCommand {
         }
     }
 
-    fn print_dry_run(args: &GenerateArgs, namespace: &str, table_name: &str, schema: &arrow::datatypes::Schema) -> Result<()> {
+    fn print_dry_run(
+        args: &GenerateArgs,
+        namespace: &str,
+        table_name: &str,
+        schema: &arrow::datatypes::Schema,
+    ) -> Result<()> {
         let rows_per_file = (args.rows / args.files as u64).max(1);
         let partition_cols = args.partition_by.clone().unwrap_or_default();
 
@@ -309,7 +262,9 @@ impl GenerateCommand {
     }
 
     /// Convert Arrow schema to Iceberg schema
-    fn arrow_to_iceberg_schema(arrow_schema: &arrow::datatypes::Schema) -> Result<iceberg::spec::Schema> {
+    fn arrow_to_iceberg_schema(
+        arrow_schema: &arrow::datatypes::Schema,
+    ) -> Result<iceberg::spec::Schema> {
         use arrow::datatypes::DataType;
         use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 
@@ -317,7 +272,9 @@ impl GenerateCommand {
         for (idx, field) in arrow_schema.fields().iter().enumerate() {
             let iceberg_type = match field.data_type() {
                 DataType::Boolean => Type::Primitive(PrimitiveType::Boolean),
-                DataType::Int8 | DataType::Int16 | DataType::Int32 => Type::Primitive(PrimitiveType::Int),
+                DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+                    Type::Primitive(PrimitiveType::Int)
+                }
                 DataType::Int64 => Type::Primitive(PrimitiveType::Long),
                 DataType::Float32 => Type::Primitive(PrimitiveType::Float),
                 DataType::Float64 => Type::Primitive(PrimitiveType::Double),
@@ -337,9 +294,10 @@ impl GenerateCommand {
             fields.push(nested_field.into());
         }
 
-        Schema::builder()
-            .with_fields(fields)
-            .build()
-            .map_err(|e| crate::error::Error::General(format!("Failed to build Iceberg schema: {}", e)))
+        Schema::builder().with_fields(fields).build().map_err(|e| {
+            crate::error::Error::SchemaValidation {
+                message: format!("Failed to build Iceberg schema: {}", e),
+            }
+        })
     }
 }

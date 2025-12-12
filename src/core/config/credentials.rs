@@ -154,20 +154,18 @@ impl CredentialSource {
     pub fn resolve(&self) -> Result<Option<String>> {
         match self {
             CredentialSource::Inline(s) => Ok(Some(s.clone())),
-            CredentialSource::EnvVar(var) => std::env::var(var)
-                .map(Some)
-                .map_err(|_| Error::General(format!("Environment variable '{}' not found", var))),
-            CredentialSource::File(path) => {
-                std::fs::read_to_string(path)
-                    .map(|s| Some(s.trim().to_string()))
-                    .map_err(|e| {
-                        Error::General(format!(
-                            "Failed to read credential file '{}': {}",
-                            path.display(),
-                            e
-                        ))
+            CredentialSource::EnvVar(var) => {
+                std::env::var(var)
+                    .map(Some)
+                    .map_err(|_| Error::Configuration {
+                        message: format!("Environment variable '{}' not found", var),
                     })
             }
+            CredentialSource::File(path) => std::fs::read_to_string(path)
+                .map(|s| Some(s.trim().to_string()))
+                .map_err(|e| Error::Configuration {
+                    message: format!("Failed to read credential file '{}': {}", path.display(), e),
+                }),
             CredentialSource::IamRole => {
                 // Auto-detected IAM role - no explicit credential needed
                 // Cloud SDKs will use instance metadata service

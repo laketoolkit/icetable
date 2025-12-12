@@ -11,8 +11,8 @@ use futures::TryStreamExt;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
 use crate::core::storage::{ObjectStoreExt, create_object_store};
-use crate::utils::core::{format_bytes, sizes};
 use crate::error::{Error, Result};
+use crate::utils::core::{format_bytes, sizes};
 
 /// Service for vacuuming tables (removing unreferenced files)
 pub struct VacuumService {
@@ -81,10 +81,7 @@ impl VacuumService {
         let mut referenced_files: HashSet<String> = HashSet::new();
 
         for snapshot in metadata.snapshots() {
-            let scan = match table.scan()
-                .snapshot_id(snapshot.snapshot_id())
-                .build()
-            {
+            let scan = match table.scan().snapshot_id(snapshot.snapshot_id()).build() {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -161,7 +158,9 @@ impl VacuumService {
         table_path: &str,
         metadata_service: Option<&IcebergMetadataService>,
     ) -> Result<VacuumResult> {
-        let analysis = self.analyze_with_service(table_path, metadata_service).await?;
+        let analysis = self
+            .analyze_with_service(table_path, metadata_service)
+            .await?;
 
         if analysis.orphan_files.is_empty() {
             return Ok(VacuumResult {

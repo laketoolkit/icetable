@@ -130,7 +130,10 @@ impl CatalogAuth {
             } => {
                 let secret = client_secret.resolve()?.unwrap_or_default();
                 // Format: client_id:client_secret
-                props.insert("credential".to_string(), format!("{}:{}", client_id, secret));
+                props.insert(
+                    "credential".to_string(),
+                    format!("{}:{}", client_id, secret),
+                );
                 if let Some(endpoint) = token_endpoint {
                     props.insert("oauth2-server-uri".to_string(), endpoint.clone());
                 }

@@ -5,13 +5,11 @@
 use colored::Colorize;
 use std::io;
 
-use super::common::{create_spinner, print_json, resolve_table, TableResolution};
+use super::common::{TableResolution, create_spinner, print_json, resolve_table_from_context};
+use crate::cli::parser::{TableContext, VacuumArgs};
 use crate::core::extract_filename;
-use crate::cli::parser::VacuumArgs;
-use crate::core::CatalogConfig;
 use crate::core::format_bytes;
 use crate::core::maintenance::{VacuumConfig, VacuumResult, VacuumService};
-use crate::core::metadata::IcebergMetadataService;
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -20,17 +18,25 @@ pub struct VacuumCommand;
 
 impl VacuumCommand {
     /// Execute vacuum command
-    pub async fn execute(args: VacuumArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+    pub async fn execute(args: VacuumArgs, ctx: &TableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for manifest scanning
-        with_resource_limits(ESTIMATED_MEMORY, Self::vacuum_iceberg(&table_path, &args, &resolution)).await
+        with_resource_limits(
+            ESTIMATED_MEMORY,
+            Self::vacuum_iceberg(&table_path, &args, &resolution),
+        )
+        .await
     }
 
     /// Vacuum Iceberg table using VacuumService
-    async fn vacuum_iceberg(table_path: &str, args: &VacuumArgs, resolution: &TableResolution) -> Result<()> {
+    async fn vacuum_iceberg(
+        table_path: &str,
+        args: &VacuumArgs,
+        resolution: &TableResolution,
+    ) -> Result<()> {
         // Print header
         Self::print_header(table_path, args);
 
@@ -50,17 +56,13 @@ impl VacuumCommand {
         // Show progress while analyzing
         let pb = create_spinner("Scanning manifests");
 
-        // Create metadata service: use catalog table when available for proper metadata consistency
-        let metadata_service = match resolution {
-            TableResolution::CatalogTable { table, .. } => {
-                // Use catalog table's metadata - read-only for vacuum
-                Some(IcebergMetadataService::from_catalog_table_readonly(table).await?)
-            }
-            TableResolution::Path(_) => None,
-        };
+        // Create metadata service using factory method - handles catalog vs path context automatically
+        let metadata_service = resolution.to_readonly_service().await?;
 
         // Execute vacuum (analyze + optionally delete)
-        let result = service.execute_with_service(table_path, metadata_service.as_ref()).await?;
+        let result = service
+            .execute_with_service(table_path, Some(&metadata_service))
+            .await?;
 
         pb.finish_and_clear();
 
@@ -70,7 +72,11 @@ impl VacuumCommand {
 
     /// Print header message
     fn print_header(table_path: &str, args: &VacuumArgs) {
-        let action = if args.dry_run { "Analyzing" } else { "Vacuuming" };
+        let action = if args.dry_run {
+            "Analyzing"
+        } else {
+            "Vacuuming"
+        };
 
         if let Some(ref branch) = args.branch {
             println!(
@@ -120,7 +126,11 @@ impl VacuumCommand {
                 "{} {} {}",
                 "⚠".yellow(),
                 "Retention period is less than 24 hours.".yellow(),
-                format!("Files newer than {} hours will be kept.", args.retention_hours).dimmed()
+                format!(
+                    "Files newer than {} hours will be kept.",
+                    args.retention_hours
+                )
+                .dimmed()
             );
             println!();
         }

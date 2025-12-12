@@ -11,8 +11,8 @@ use std::sync::Arc;
 use crate::config::ResolvePath;
 use crate::core::TableFormat;
 use crate::core::storage::{Storage, create_object_store};
-use crate::utils::core::detect_format;
 use crate::error::{Error, Result};
+use crate::utils::core::detect_format;
 
 use crate::core::metadata::IcebergMetadataService;
 
@@ -59,10 +59,9 @@ impl TableContext {
     /// Require Iceberg format, return error if not
     pub fn require_iceberg(&self) -> Result<()> {
         if !self.is_iceberg() {
-            return Err(Error::General(format!(
-                "Path '{}' is not an Iceberg table",
-                self.path
-            )));
+            return Err(Error::DataValidation {
+                message: format!("Path '{}' is not an Iceberg table", self.path),
+            });
         }
         Ok(())
     }

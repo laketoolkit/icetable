@@ -39,10 +39,10 @@ pub use types::parse_data_type;
 
 // Core re-exports
 pub use core::{
-    ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, WriteMetadataResult,
-    detect_format, detect_table_format, detect_table_format_async,
-    determine_cutoff_timestamp, determine_snapshots_to_expire, extract_version_from_path,
-    find_latest_metadata, format_bytes, generate_unique_id, metadata_location_filename,
-    new_metadata_location, next_metadata_location, normalize_path, normalize_relative_path,
-    parse_bytes, read_parquet_record_count, scan_parquet_files, sizes, write_metadata_file,
+    ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, WriteMetadataResult, detect_format,
+    detect_table_format, detect_table_format_async, determine_cutoff_timestamp,
+    determine_snapshots_to_expire, extract_version_from_path, find_latest_metadata, format_bytes,
+    generate_unique_id, metadata_location_filename, new_metadata_location, next_metadata_location,
+    normalize_path, normalize_relative_path, parse_bytes, read_parquet_record_count,
+    scan_parquet_files, sizes, write_metadata_file,
 };

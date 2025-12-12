@@ -12,10 +12,6 @@ pub struct LsArgs {
     #[arg(short, long)]
     pub catalog: Option<String>,
 
-    /// Namespace to list tables in (lists namespaces if not specified)
-    #[arg(short, long)]
-    pub namespace: Option<String>,
-
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
@@ -27,14 +23,6 @@ pub struct CreateArgs {
     /// Catalog name (uses current if not specified)
     #[arg(short, long)]
     pub catalog: Option<String>,
-
-    /// Namespace to create (or namespace for table)
-    #[arg(short, long)]
-    pub namespace: Option<String>,
-
-    /// Table name to create (requires namespace and schema)
-    #[arg(short, long)]
-    pub table: Option<String>,
 
     /// Schema file for table creation (JSON format)
     #[arg(long)]
@@ -63,10 +51,6 @@ pub struct DeleteArgs {
     /// Catalog name (uses current if not specified)
     #[arg(short, long)]
     pub catalog: Option<String>,
-
-    /// Namespace to delete (or namespace of tables)
-    #[arg(short, long)]
-    pub namespace: Option<String>,
 
     /// Force delete namespace even if not empty
     #[arg(long)]

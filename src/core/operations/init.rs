@@ -66,21 +66,23 @@ impl InitService {
         let table_path = Path::new(&config.path);
 
         // Create table directory structure
-        fs::create_dir_all(table_path).map_err(|e| {
-            Error::General(format!(
+        fs::create_dir_all(table_path).map_err(|e| Error::Metadata {
+            message: format!(
                 "Failed to create table directory '{}': {}",
                 table_path.display(),
                 e
-            ))
+            ),
         })?;
 
         let metadata_dir = table_path.join("metadata");
-        fs::create_dir_all(&metadata_dir)
-            .map_err(|e| Error::General(format!("Failed to create metadata directory: {}", e)))?;
+        fs::create_dir_all(&metadata_dir).map_err(|e| Error::Metadata {
+            message: format!("Failed to create metadata directory: {}", e),
+        })?;
 
         let data_dir = table_path.join("data");
-        fs::create_dir_all(&data_dir)
-            .map_err(|e| Error::General(format!("Failed to create data directory: {}", e)))?;
+        fs::create_dir_all(&data_dir).map_err(|e| Error::Metadata {
+            message: format!("Failed to create data directory: {}", e),
+        })?;
 
         // Build Iceberg schema
         let iceberg_schema = if let Some(schema_def) = &config.schema {
@@ -110,24 +112,31 @@ impl InitService {
             iceberg::spec::FormatVersion::V2,
             config.properties,
         )
-        .map_err(|e| Error::General(format!("Failed to create metadata builder: {}", e)))?
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to create metadata builder: {}", e),
+        })?
         .build()
-        .map_err(|e| Error::General(format!("Failed to build table metadata: {}", e)))?;
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to build table metadata: {}", e),
+        })?;
 
         let metadata = build_result.metadata;
         let table_uuid = metadata.uuid().to_string();
 
         // Serialize metadata to JSON
-        let metadata_json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let metadata_json =
+            serde_json::to_string_pretty(&metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         // Write metadata file with standard Iceberg naming
         use crate::utils::core::{metadata_location_filename, new_metadata_location};
         let initial_location = new_metadata_location(&location);
         let metadata_filename = metadata_location_filename(&initial_location);
         let metadata_file = metadata_dir.join(&metadata_filename);
-        fs::write(&metadata_file, metadata_json)
-            .map_err(|e| Error::General(format!("Failed to write metadata file: {}", e)))?;
+        fs::write(&metadata_file, metadata_json).map_err(|e| Error::Metadata {
+            message: format!("Failed to write metadata file: {}", e),
+        })?;
 
         Ok(InitResult {
             table_uuid,
@@ -138,20 +147,12 @@ impl InitService {
 
     /// Load schema definition from a JSON file
     pub fn load_schema_from_file(path: &Path) -> Result<SchemaDefinition> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            Error::General(format!(
-                "Failed to read schema file '{}': {}",
-                path.display(),
-                e
-            ))
+        let content = std::fs::read_to_string(path).map_err(|e| Error::Metadata {
+            message: format!("Failed to read schema file '{}': {}", path.display(), e),
         })?;
 
-        serde_json::from_str(&content).map_err(|e| {
-            Error::General(format!(
-                "Failed to parse schema file '{}': {}",
-                path.display(),
-                e
-            ))
+        serde_json::from_str(&content).map_err(|e| Error::InvalidFormat {
+            message: format!("Invalid schema file '{}': {}", path.display(), e),
         })
     }
 
@@ -179,7 +180,9 @@ impl InitService {
                 .into(),
             ])
             .build()
-            .map_err(|e| Error::General(format!("Failed to build default schema: {}", e)))
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build default schema: {}", e),
+            })
     }
 
     fn build_iceberg_schema(schema_def: &SchemaDefinition) -> Result<iceberg::spec::Schema> {
@@ -202,7 +205,9 @@ impl InitService {
         iceberg::spec::Schema::builder()
             .with_fields(fields)
             .build()
-            .map_err(|e| Error::General(format!("Failed to build Iceberg schema: {}", e)))
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build Iceberg schema: {}", e),
+            })
     }
 
     fn build_partition_spec(
@@ -221,8 +226,8 @@ impl InitService {
                 .iter()
                 .find(|f| f.name == *col)
                 .map(|f| f.id)
-                .ok_or_else(|| {
-                    Error::General(format!("Partition column '{}' not found in schema", col))
+                .ok_or_else(|| Error::ColumnNotFound {
+                    column: col.clone(),
                 })?;
 
             unbound_fields.push(
@@ -238,10 +243,14 @@ impl InitService {
         iceberg::spec::UnboundPartitionSpec::builder()
             .with_spec_id(0)
             .add_partition_fields(unbound_fields)
-            .map_err(|e| Error::General(format!("Failed to add partition fields: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to add partition fields: {}", e),
+            })?
             .build()
             .bind(schema.clone())
-            .map_err(|e| Error::General(format!("Failed to build partition spec: {}", e)))
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build partition spec: {}", e),
+            })
     }
 
     fn parse_iceberg_type(type_str: &str) -> Result<iceberg::spec::Type> {
@@ -261,10 +270,12 @@ impl InitService {
             "time" => PrimitiveType::Time,
             "uuid" => PrimitiveType::Uuid,
             _ => {
-                return Err(Error::General(format!(
-                    "Unsupported Iceberg type: {}. Supported: string, long, integer, float, double, boolean, binary, date, timestamp, timestamptz, time, uuid",
-                    type_str
-                )));
+                return Err(Error::InvalidFormat {
+                    message: format!(
+                        "Invalid Iceberg type: '{}'. Supported: string, long, integer, float, double, boolean, binary, date, timestamp, timestamptz, time, uuid",
+                        type_str
+                    ),
+                });
             }
         };
 

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use futures::StreamExt;
 
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{to_path, ObjectStoreExt, Storage};
+use crate::core::storage::{ObjectStoreExt, Storage, to_path};
 
 use super::CheckResult;
 
@@ -190,9 +190,7 @@ pub fn check_current_snapshot(metadata: &serde_json::Value) -> CheckResult {
         .and_then(|id| id.as_i64());
 
     match current_id {
-        Some(-1) | None => {
-            CheckResult::ok("Current Snapshot", "No current snapshot (empty table)")
-        }
+        Some(-1) | None => CheckResult::ok("Current Snapshot", "No current snapshot (empty table)"),
         Some(id) => {
             let snapshots = metadata
                 .get("snapshots")
@@ -231,7 +229,10 @@ pub async fn check_manifests_exist(
     };
 
     let file_io = service.file_io();
-    let manifest_list = match current_snapshot.load_manifest_list(file_io, &metadata).await {
+    let manifest_list = match current_snapshot
+        .load_manifest_list(file_io, &metadata)
+        .await
+    {
         Ok(ml) => ml,
         Err(e) => {
             return CheckResult::error(

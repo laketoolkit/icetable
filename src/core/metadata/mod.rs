@@ -32,13 +32,13 @@ mod refs_scanner;
 pub use traits::*;
 
 // Primary exports
-pub use reader::{MetadataReader, MetadataLoadResult, StaticMetadataReader};
 #[cfg(feature = "rest-catalog")]
 pub use reader::CatalogMetadataReader;
-pub use writer::{SnapshotWriter, PreparedSnapshot};
+pub use reader::{MetadataLoadResult, MetadataReader, StaticMetadataReader};
+pub use writer::{PreparedSnapshot, SnapshotWriter};
 // DataFileInfo is exported via `pub use traits::*` above
 
 pub use iceberg::IcebergMetadataService;
-pub use refs::RefInfo;
 pub use iceberg_conflict::{ConflictCheckResult, ConflictDetector, check_and_fail_on_conflict};
 pub use iceberg_validator::{ValidationResult, validate_metadata, validate_or_error};
+pub use refs::RefInfo;

@@ -19,20 +19,20 @@ pub mod table_loader;
 pub mod validation;
 
 // Re-export commonly used types
+pub use crate::utils::core::{
+    TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
+};
 pub use catalog::{CatalogClient, RestCatalogClient, TableCommitter, TableRef};
+pub use commit::{CommitResult, DirectCommitter, SnapshotCommitter};
 pub use config::{
-    CatalogAuth, CatalogConfig, CatalogType, Config, CredentialSource, ResolvedTable, ResolvePath,
-    ResolveTableRef,
+    CatalogAuth, CatalogConfig, CatalogType, Config, CredentialSource, ResolvePath,
+    ResolveTableRef, ResolvedTable,
 };
 pub use context::{TableContext, TableContextBuilder};
 pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
 pub use storage::{ObjectStoreExt, Storage, create_object_store};
 pub use table_loader::{TableExt, TableLoader};
-pub use crate::utils::core::{
-    TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
-};
-pub use commit::{CommitResult, SnapshotCommitter, DirectCommitter};
 
 // Re-export formatting utilities for consistent access across CLI
 pub use inspection::formatters::{
@@ -41,5 +41,5 @@ pub use inspection::formatters::{
 
 // Re-export iceberg types used by CLI to avoid direct iceberg:: dependency
 // This provides a stable interface if iceberg crate changes
+pub use iceberg::spec::{Schema as IcebergSchema, Snapshot, TableMetadata};
 pub use iceberg::table::Table as IcebergTable;
-pub use iceberg::spec::{TableMetadata, Snapshot, Schema as IcebergSchema};

@@ -3,18 +3,16 @@
 //! Shows detailed information about table structure, metadata, and statistics.
 //! Uses IcebergTableInspector from core::operations for the actual inspection logic.
 
-use std::sync::Arc;
-
 use colored::Colorize;
 
-use super::common::resolve_table;
+use super::common::resolve_table_from_context;
 use crate::cli::output::format_timestamp_ms;
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
-use crate::cli::parser::InspectArgs;
+use crate::cli::parser::{InspectArgs, TableContext};
 use crate::core::operations::inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
 };
-use crate::core::{format_bytes, format_number, CatalogConfig, TableLoader, IcebergTable};
+use crate::core::{format_bytes, format_number};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
@@ -23,29 +21,18 @@ pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
-    pub async fn execute(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
+    pub async fn execute(args: InspectArgs, ctx: &TableContext) -> Result<()> {
         // Apply resource limits (timeout, cancellation, memory tracking)
         const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for inspection
-        with_resource_limits(ESTIMATED_MEMORY, Self::inspect_inner(args, catalog_config)).await
+        with_resource_limits(ESTIMATED_MEMORY, Self::inspect_inner(args, ctx)).await
     }
 
-    async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        use super::common::TableResolution;
-
+    async fn inspect_inner(args: InspectArgs, ctx: &TableContext) -> Result<()> {
         // Resolve table - get catalog table directly when using catalog
-        let resolution = resolve_table(&args.path, catalog_config.as_ref()).await?;
+        let resolution = resolve_table_from_context(ctx).await?;
 
-        // Get table: use catalog table directly, or load from storage path
-        let table: Arc<IcebergTable> = match resolution {
-            TableResolution::CatalogTable { table, .. } => {
-                // Use the catalog table's metadata directly
-                Arc::new(*table)
-            }
-            TableResolution::Path(path) => {
-                // Load from storage using unified TableLoader
-                TableLoader::load_table(&path, None).await?
-            }
-        };
+        // Get table using factory method - handles catalog vs path context automatically
+        let table = resolution.to_table().await?;
 
         // Build inspection options from CLI args
         let options = IcebergInspectOptions::from_cli(args.verbose);
@@ -71,7 +58,11 @@ impl InspectCommand {
         // ═══════════════════════════════════════════════════════════════════════
         let key_width = 18;
         let mut table_info = vec![
-            BoxItem::kv_aligned("Format", format!("Iceberg v{}", result.format_version), key_width),
+            BoxItem::kv_aligned(
+                "Format",
+                format!("Iceberg v{}", result.format_version),
+                key_width,
+            ),
             BoxItem::kv_aligned("Location", &result.location, key_width),
             BoxItem::kv_aligned("Table UUID", &result.table_uuid, key_width),
             BoxItem::kv_aligned(
@@ -82,8 +73,16 @@ impl InspectCommand {
                     .unwrap_or_else(|| "None".to_string()),
                 key_width,
             ),
-            BoxItem::kv_aligned("Snapshot Count", result.snapshot_count.to_string(), key_width),
-            BoxItem::kv_aligned("Last Updated", format_timestamp_ms(result.last_updated_ms), key_width),
+            BoxItem::kv_aligned(
+                "Snapshot Count",
+                result.snapshot_count.to_string(),
+                key_width,
+            ),
+            BoxItem::kv_aligned(
+                "Last Updated",
+                format_timestamp_ms(result.last_updated_ms),
+                key_width,
+            ),
         ];
 
         // Add sequence number in verbose mode
@@ -107,14 +106,20 @@ impl InspectCommand {
         // Total Records
         state_items.push(BoxItem::kv_aligned(
             "Total Records",
-            state.total_records.map(format_number).unwrap_or_else(|| "-".to_string()),
+            state
+                .total_records
+                .map(format_number)
+                .unwrap_or_else(|| "-".to_string()),
             16,
         ));
 
         // Data Files
         state_items.push(BoxItem::kv_aligned(
             "Data Files",
-            state.total_data_files.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+            state
+                .total_data_files
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             16,
         ));
 
@@ -129,7 +134,10 @@ impl InspectCommand {
         // Total Size
         state_items.push(BoxItem::kv_aligned(
             "Total Size",
-            state.total_files_size.map(|v| format_bytes(v as u64)).unwrap_or_else(|| "-".to_string()),
+            state
+                .total_files_size
+                .map(|v| format_bytes(v as u64))
+                .unwrap_or_else(|| "-".to_string()),
             16,
         ));
 
@@ -151,11 +159,7 @@ impl InspectCommand {
                 .filter(|f| f.is_identifier)
                 .map(|f| f.name.as_str())
                 .collect();
-            schema_items.push(BoxItem::kv_aligned(
-                "Identifier",
-                id_names.join(", "),
-                12,
-            ));
+            schema_items.push(BoxItem::kv_aligned("Identifier", id_names.join(", "), 12));
         }
 
         // Add subsection header for fields
@@ -167,7 +171,12 @@ impl InspectCommand {
         )));
 
         // Calculate max field name width for alignment
-        let max_name_width = result.fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
+        let max_name_width = result
+            .fields
+            .iter()
+            .map(|f| f.name.len())
+            .max()
+            .unwrap_or(0);
 
         for field in &result.fields {
             let nullable_str = if field.required { "" } else { " (nullable)" };
@@ -255,7 +264,8 @@ impl InspectCommand {
             }
         }
 
-        container = container.section(BoxSection::titled("Partition & Sort").items(partition_items));
+        container =
+            container.section(BoxSection::titled("Partition & Sort").items(partition_items));
 
         // ═══════════════════════════════════════════════════════════════════════
         // PROPERTIES
@@ -322,7 +332,11 @@ impl InspectCommand {
         if options.verbose {
             let mut meta_items = vec![
                 BoxItem::kv_aligned("Schema Versions", result.schemas_count.to_string(), 20),
-                BoxItem::kv_aligned("Partition Specs", result.partition_specs_count.to_string(), 20),
+                BoxItem::kv_aligned(
+                    "Partition Specs",
+                    result.partition_specs_count.to_string(),
+                    20,
+                ),
                 BoxItem::kv_aligned("Sort Orders", result.sort_orders_count.to_string(), 20),
             ];
 
@@ -348,6 +362,3 @@ impl InspectCommand {
         renderer.render(container)
     }
 }
-
-// Re-export common module
-pub mod common;

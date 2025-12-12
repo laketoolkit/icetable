@@ -12,9 +12,9 @@
 mod environment;
 mod table;
 
-use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{create_object_store, detect_storage_type, Storage};
 use crate::core::CatalogConfig;
+use crate::core::metadata::IcebergMetadataService;
+use crate::core::storage::{Storage, create_object_store, detect_storage_type};
 use crate::error::Result;
 
 // Internal modules - checks are exposed through DoctorService methods
@@ -225,8 +225,7 @@ impl DoctorService {
         checks.push(metadata_format_check);
 
         // Check metadata JSON
-        let (metadata_check, metadata) =
-            table::check_metadata_json(&storage, table_path).await;
+        let (metadata_check, metadata) = table::check_metadata_json(&storage, table_path).await;
         checks.push(metadata_check);
 
         // If metadata is valid, run additional checks

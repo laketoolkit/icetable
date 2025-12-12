@@ -16,7 +16,10 @@ pub use box_item::BoxItem;
 pub use box_layout::{BoxLayout, BoxStyle};
 pub use box_renderer::BoxRenderer;
 pub use box_section::{BoxSection, SectionStyle};
-pub use formatter::{OutputFormatter, create_styled_table, create_header_cell, create_header_cells, format_datetime_utc, format_timestamp_ms};
+pub use formatter::{
+    OutputFormatter, create_header_cell, create_header_cells, create_styled_table,
+    format_datetime_utc, format_timestamp_ms,
+};
 pub use icons::{SeverityIcon, StatusIcon};
 pub use inspect_formatter::InspectionFormatter;
 pub use snapshot_formatter::{SnapshotFormatter, SnapshotInfo};

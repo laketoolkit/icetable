@@ -11,8 +11,11 @@ use iceberg::spec::{Snapshot, TableMetadata, TableMetadataBuilder};
 
 use super::traits::{CommitResult, SnapshotCommitter};
 use crate::core::storage::{ObjectStoreExt, Storage, to_path};
-use crate::utils::core::{extract_version_from_path, find_latest_metadata, metadata_location_filename, next_metadata_location};
 use crate::error::{Error, Result};
+use crate::utils::core::{
+    extract_version_from_path, find_latest_metadata, metadata_location_filename,
+    next_metadata_location,
+};
 
 /// Committer for static tables (without catalog)
 ///
@@ -63,7 +66,7 @@ impl DirectCommitter {
         let current_version = extract_version_from_path(&current_path).unwrap_or(0);
 
         if current_version != expected_version {
-            return Err(Error::General(format!(
+            return Err(Error::Conflict(format!(
                 "Conflict detected: expected version {}, but found {}. \
                  Another process may have modified the table.",
                 expected_version, current_version
@@ -81,8 +84,10 @@ impl DirectCommitter {
 
     /// Write metadata to storage using relative path
     async fn write_metadata(&self, metadata: &TableMetadata, filename: &str) -> Result<String> {
-        let metadata_json = serde_json::to_string_pretty(metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
+        let metadata_json =
+            serde_json::to_string_pretty(metadata).map_err(|e| Error::Serialization {
+                message: format!("Failed to serialize metadata: {}", e),
+            })?;
 
         // Use relative path for storage (PrefixStore handles the rest)
         let storage_path = format!("{}/{}", self.metadata_dir_relative(), filename);
@@ -114,9 +119,13 @@ impl DirectCommitter {
             Some(metadata_filename.to_string()),
         )
         .set_branch_snapshot(snapshot, branch)
-        .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to set snapshot: {}", e),
+        })?
         .build()
-        .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to build metadata: {}", e),
+        })?;
 
         Ok(build_result.metadata)
     }
@@ -152,7 +161,9 @@ impl SnapshotCommitter for DirectCommitter {
         let new_metadata_filename = self.next_metadata_filename(&current_metadata_path)?;
 
         // 6. Write to storage and get absolute path
-        let new_metadata_path = self.write_metadata(&new_metadata, &new_metadata_filename).await?;
+        let new_metadata_path = self
+            .write_metadata(&new_metadata, &new_metadata_filename)
+            .await?;
 
         Ok(CommitResult {
             metadata: Arc::new(new_metadata),
@@ -179,7 +190,9 @@ impl SnapshotCommitter for DirectCommitter {
         let new_metadata_filename = self.next_metadata_filename(&current_metadata_path)?;
 
         // 5. Write to storage
-        let new_metadata_path = self.write_metadata(&new_metadata, &new_metadata_filename).await?;
+        let new_metadata_path = self
+            .write_metadata(&new_metadata, &new_metadata_filename)
+            .await?;
 
         Ok(CommitResult {
             metadata: Arc::new(new_metadata),

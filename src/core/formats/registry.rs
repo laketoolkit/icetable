@@ -160,13 +160,19 @@ mod tests {
 
         // Register in random order
         registry.register("low", 10, |_, _| {
-            Err(crate::error::Error::General("test".to_string()))
+            Err(crate::error::Error::Configuration {
+                message: "test".to_string(),
+            })
         });
         registry.register("high", 100, |_, _| {
-            Err(crate::error::Error::General("test".to_string()))
+            Err(crate::error::Error::Configuration {
+                message: "test".to_string(),
+            })
         });
         registry.register("medium", 50, |_, _| {
-            Err(crate::error::Error::General("test".to_string()))
+            Err(crate::error::Error::Configuration {
+                message: "test".to_string(),
+            })
         });
 
         let formats = registry.registered_formats();

@@ -384,7 +384,10 @@ impl FormatHandlerFactory {
                 Ok(Box::new(handler))
             }
             _ => Err(crate::error::Error::InvalidFormat {
-                message: format!("Unsupported format: {}. Only 'iceberg' is supported.", format),
+                message: format!(
+                    "Unsupported format: {}. Only 'iceberg' is supported.",
+                    format
+                ),
             }),
         }
     }

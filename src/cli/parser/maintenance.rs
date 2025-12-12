@@ -6,10 +6,6 @@ use std::path::PathBuf;
 /// Arguments for vacuum command
 #[derive(Parser, Debug)]
 pub struct VacuumArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Branch to vacuum (defaults to scanning all branches)
     #[arg(short, long)]
     pub branch: Option<String>,
@@ -34,10 +30,6 @@ pub struct VacuumArgs {
 /// Arguments for repair command
 #[derive(Parser, Debug)]
 pub struct RepairArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Dry run - show what would be repaired without making changes
     #[arg(long)]
     pub dry_run: bool,
@@ -62,10 +54,6 @@ pub struct RepairArgs {
 /// Arguments for doctor command
 #[derive(Parser, Debug)]
 pub struct DoctorArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Also verify that all data files referenced in manifests exist (slow)
     #[arg(long)]
     pub check_files: bool,

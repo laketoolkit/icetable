@@ -12,13 +12,13 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::core::TableLoader;
 use crate::core::inspection::traits::{
-    ColumnInfo, ColumnStatistics, FileBasedLayout, FileInfo, LayoutInfo,
-    OrphanFilesInfo, PhysicalInspectOptions, PhysicalInspector, PhysicalMetadata, SchemaInfo,
-    StatisticsInfo, VerbosityLevel,
+    ColumnInfo, ColumnStatistics, FileBasedLayout, FileInfo, LayoutInfo, OrphanFilesInfo,
+    PhysicalInspectOptions, PhysicalInspector, PhysicalMetadata, SchemaInfo, StatisticsInfo,
+    VerbosityLevel,
 };
 use crate::core::storage::Storage;
-use crate::core::TableLoader;
 use crate::error::Result;
 
 /// Parse a JSON value that may be stored as string, integer, or float
@@ -90,9 +90,18 @@ impl IcebergInspector {
         let metadata_size = self.get_metadata_size().await.unwrap_or(0);
 
         let mut file_metadata = HashMap::new();
-        file_metadata.insert("format_version".to_string(), (metadata.format_version() as i32).to_string());
-        file_metadata.insert("current_schema_id".to_string(), metadata.current_schema_id().to_string());
-        file_metadata.insert("default_sort_order_id".to_string(), (metadata.default_sort_order_id() as i32).to_string());
+        file_metadata.insert(
+            "format_version".to_string(),
+            (metadata.format_version() as i32).to_string(),
+        );
+        file_metadata.insert(
+            "current_schema_id".to_string(),
+            metadata.current_schema_id().to_string(),
+        );
+        file_metadata.insert(
+            "default_sort_order_id".to_string(),
+            (metadata.default_sort_order_id() as i32).to_string(),
+        );
 
         // Get table UUID (public in iceberg 0.7)
         file_metadata.insert("table_uuid".to_string(), metadata.uuid().to_string());
@@ -106,7 +115,10 @@ impl IcebergInspector {
 
         // Get current snapshot ID if available
         if let Some(current_snapshot_id) = metadata.current_snapshot_id() {
-            file_metadata.insert("current_snapshot_id".to_string(), current_snapshot_id.to_string());
+            file_metadata.insert(
+                "current_snapshot_id".to_string(),
+                current_snapshot_id.to_string(),
+            );
         }
 
         // Get properties (public in iceberg 0.7)
@@ -136,25 +148,26 @@ impl IcebergInspector {
             // Find latest metadata file
             let mut max_version = 0;
             let mut latest_file = None;
-            
+
             for entry in std::fs::read_dir(metadata_dir)? {
                 let entry = entry?;
                 let path = entry.path();
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
                     && let Some(version_str) = file_name.split('-').next()
-                        && let Ok(version) = version_str.parse::<u64>()
-                            && version > max_version {
-                                max_version = version;
-                                latest_file = Some(path);
-                            }
+                    && let Ok(version) = version_str.parse::<u64>()
+                    && version > max_version
+                {
+                    max_version = version;
+                    latest_file = Some(path);
+                }
             }
-            
+
             if let Some(file_path) = latest_file {
                 let metadata = std::fs::metadata(file_path)?;
                 return Ok(metadata.len());
             }
         }
-        
+
         Ok(0)
     }
 
@@ -162,9 +175,9 @@ impl IcebergInspector {
     fn extract_schema_from_table(&self, table: &iceberg::table::Table) -> Result<SchemaInfo> {
         let metadata = table.metadata();
         let schema = metadata.current_schema();
-        
+
         let mut columns = Vec::new();
-        
+
         let struct_type = schema.as_struct();
         for (index, field) in struct_type.fields().iter().enumerate() {
             columns.push(ColumnInfo {
@@ -174,7 +187,7 @@ impl IcebergInspector {
                 index,
             });
         }
-        
+
         Ok(SchemaInfo {
             num_columns: columns.len(),
             columns,
@@ -190,16 +203,25 @@ impl IcebergInspector {
         let metadata = table.metadata();
 
         let mut details = HashMap::new();
-        details.insert("format_version".to_string(), (metadata.format_version() as i32).to_string());
+        details.insert(
+            "format_version".to_string(),
+            (metadata.format_version() as i32).to_string(),
+        );
 
         // Get table UUID (public in iceberg 0.7)
         details.insert("table_uuid".to_string(), metadata.uuid().to_string());
 
-        details.insert("current_schema_id".to_string(), metadata.current_schema_id().to_string());
+        details.insert(
+            "current_schema_id".to_string(),
+            metadata.current_schema_id().to_string(),
+        );
 
         // Get partition spec info (public in iceberg 0.7)
         let partition_spec = metadata.default_partition_spec();
-        details.insert("partition_spec_id".to_string(), partition_spec.spec_id().to_string());
+        details.insert(
+            "partition_spec_id".to_string(),
+            partition_spec.spec_id().to_string(),
+        );
 
         // Get partition fields (public in iceberg 0.7 - PartitionField has public fields)
         let partition_fields = partition_spec.fields();
@@ -212,18 +234,27 @@ impl IcebergInspector {
         }
 
         // Get sort order
-        details.insert("default_sort_order_id".to_string(), (metadata.default_sort_order_id() as i32).to_string());
+        details.insert(
+            "default_sort_order_id".to_string(),
+            (metadata.default_sort_order_id() as i32).to_string(),
+        );
 
         // Get last updated timestamp (public in iceberg 0.7)
-        details.insert("last_updated_ms".to_string(), metadata.last_updated_ms().to_string());
+        details.insert(
+            "last_updated_ms".to_string(),
+            metadata.last_updated_ms().to_string(),
+        );
 
         // Get last column ID (public in iceberg 0.7)
-        details.insert("last_column_id".to_string(), metadata.last_column_id().to_string());
+        details.insert(
+            "last_column_id".to_string(),
+            metadata.last_column_id().to_string(),
+        );
 
         // For now, return basic file-based layout
         // In a real implementation, we would scan manifests to get actual file counts
         Ok(LayoutInfo::FileBased(FileBasedLayout {
-            num_files: 0, // Would need to scan manifests
+            num_files: 0,  // Would need to scan manifests
             total_size: 0, // Would need to scan manifests
             partitioning: None,
             details,
@@ -237,10 +268,10 @@ impl IcebergInspector {
     ) -> Result<StatisticsInfo> {
         let metadata = table.metadata();
         let current_snapshot = metadata.current_snapshot();
-        
+
         let mut total_rows = 0;
         let mut column_stats = Vec::new();
-        
+
         if let Some(snapshot) = current_snapshot {
             let summary = snapshot.summary();
             // Extract total rows from summary
@@ -248,7 +279,7 @@ impl IcebergInspector {
                 let json_value = serde_json::Value::String(added_rows.clone());
                 total_rows = parse_summary_value::<i64>(Some(&json_value)).unwrap_or(0);
             }
-            
+
             // For now, create basic column stats
             // In a real implementation, we would parse manifest entries
             let schema = metadata.current_schema();
@@ -263,10 +294,10 @@ impl IcebergInspector {
                 });
             }
         }
-        
+
         Ok(StatisticsInfo {
             total_rows,
-            compressed_size: 0, // Would need to scan files
+            compressed_size: 0,   // Would need to scan files
             uncompressed_size: 0, // Would need to scan files
             column_stats,
         })
@@ -288,38 +319,38 @@ impl PhysicalInspector for IcebergInspector {
     async fn extract_metadata(&self, options: &PhysicalInspectOptions) -> Result<PhysicalMetadata> {
         // Load table using TableLoader
         let table = self.load_table().await?;
-        
+
         // Extract file info
         let file_info = self.extract_file_info_from_table(&table).await?;
-        
+
         // Extract schema if requested
         let schema = if options.show_schema {
             Some(self.extract_schema_from_table(&table)?)
         } else {
             None
         };
-        
+
         // Extract layout if requested
         let layout = if options.show_layout {
             Some(self.extract_layout_from_table(&table, options).await?)
         } else {
             None
         };
-        
+
         // Extract statistics if requested
         let statistics = if options.show_stats {
             Some(self.extract_statistics_from_table(&table).await?)
         } else {
             None
         };
-        
+
         // Detect orphan files only in verbose mode
         let orphan_files = if options.verbosity >= VerbosityLevel::Verbose {
             self.detect_orphan_files(options).await?
         } else {
             None
         };
-        
+
         Ok(PhysicalMetadata {
             format_name: "Apache Iceberg".to_string(),
             file_info,

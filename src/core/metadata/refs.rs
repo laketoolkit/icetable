@@ -32,8 +32,10 @@ pub struct RefInfo {
 /// Always includes "main" pointing to current snapshot if not already present.
 pub async fn list_refs(storage: &Storage, metadata_path: &str) -> Result<Vec<RefInfo>> {
     let content = storage.get_bytes_str(metadata_path).await?;
-    let json: serde_json::Value = serde_json::from_slice(&content)
-        .map_err(|e| Error::General(format!("Failed to parse metadata JSON: {}", e)))?;
+    let json: serde_json::Value = serde_json::from_slice(&content).map_err(|e| Error::Parse {
+        message: format!("Failed to parse metadata JSON: {}", e),
+        source: Some(Box::new(e)),
+    })?;
 
     parse_refs_from_json(&json)
 }
@@ -86,10 +88,14 @@ pub fn resolve_branch_snapshot_id(metadata: &TableMetadata, branch: Option<&str>
         Some(branch_name) => metadata
             .snapshot_for_ref(branch_name)
             .map(|snap_ref| snap_ref.snapshot_id())
-            .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name))),
+            .ok_or_else(|| Error::Metadata {
+                message: format!("Branch '{}' not found", branch_name),
+            }),
         None => metadata
             .current_snapshot_id()
-            .ok_or_else(|| Error::General("No current snapshot".to_string())),
+            .ok_or_else(|| Error::Metadata {
+                message: "No current snapshot".to_string(),
+            }),
     }
 }
 

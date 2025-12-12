@@ -69,16 +69,19 @@ fn serialize_batch_to_ipc(batch: &arrow::record_batch::RecordBatch) -> Result<By
 
     let mut buffer = Vec::new();
     {
-        let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema())
-            .map_err(|e| Error::General(format!("Failed to create IPC writer: {}", e)))?;
+        let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema()).map_err(|e| {
+            Error::Serialization {
+                message: format!("Failed to create IPC writer: {}", e),
+            }
+        })?;
 
-        writer
-            .write(batch)
-            .map_err(|e| Error::General(format!("Failed to write batch to IPC: {}", e)))?;
+        writer.write(batch).map_err(|e| Error::Serialization {
+            message: format!("Failed to write batch to IPC: {}", e),
+        })?;
 
-        writer
-            .finish()
-            .map_err(|e| Error::General(format!("Failed to finish IPC stream: {}", e)))?;
+        writer.finish().map_err(|e| Error::Serialization {
+            message: format!("Failed to finish IPC stream: {}", e),
+        })?;
     }
 
     Ok(Bytes::from(buffer))
@@ -89,27 +92,29 @@ fn serialize_batches_to_ipc(batches: &[arrow::record_batch::RecordBatch]) -> Res
     use arrow::ipc::writer::StreamWriter;
 
     if batches.is_empty() {
-        return Err(Error::General(
-            "Cannot serialize empty batch list".to_string(),
-        ));
+        return Err(Error::Serialization {
+            message: "Cannot serialize empty batch list".to_string(),
+        });
     }
 
     let schema = batches[0].schema();
 
     let mut buffer = Vec::new();
     {
-        let mut writer = StreamWriter::try_new(&mut buffer, &schema)
-            .map_err(|e| Error::General(format!("Failed to create IPC writer: {}", e)))?;
+        let mut writer =
+            StreamWriter::try_new(&mut buffer, &schema).map_err(|e| Error::Serialization {
+                message: format!("Failed to create IPC writer: {}", e),
+            })?;
 
         for batch in batches {
-            writer
-                .write(batch)
-                .map_err(|e| Error::General(format!("Failed to write batch to IPC: {}", e)))?;
+            writer.write(batch).map_err(|e| Error::Serialization {
+                message: format!("Failed to write batch to IPC: {}", e),
+            })?;
         }
 
-        writer
-            .finish()
-            .map_err(|e| Error::General(format!("Failed to finish IPC stream: {}", e)))?;
+        writer.finish().map_err(|e| Error::Serialization {
+            message: format!("Failed to finish IPC stream: {}", e),
+        })?;
     }
 
     Ok(Bytes::from(buffer))
@@ -122,14 +127,22 @@ fn deserialize_batch_from_ipc(bytes: &[u8]) -> Result<arrow::record_batch::Recor
     use std::io::Cursor;
 
     let cursor = Cursor::new(bytes);
-    let mut reader = StreamReader::try_new(cursor, None)
-        .map_err(|e| Error::General(format!("Failed to create IPC reader: {}", e)))?;
+    let mut reader = StreamReader::try_new(cursor, None).map_err(|e| Error::Parse {
+        message: format!("Failed to create IPC reader: {}", e),
+        source: None,
+    })?;
 
     // Read the first (and only) batch
     let batch = reader
         .next()
-        .ok_or_else(|| Error::General("No batch found in IPC stream".to_string()))?
-        .map_err(|e| Error::General(format!("Failed to read batch from IPC: {}", e)))?;
+        .ok_or_else(|| Error::Parse {
+            message: "No batch found in IPC stream".to_string(),
+            source: None,
+        })?
+        .map_err(|e| Error::Parse {
+            message: format!("Failed to read batch: {}", e),
+            source: None,
+        })?;
 
     Ok(batch)
 }
@@ -141,16 +154,19 @@ fn serialize_batch_to_ipc_df(batch: &arrow::record_batch::RecordBatch) -> Result
 
     let mut buffer = Vec::new();
     {
-        let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema())
-            .map_err(|e| Error::General(format!("Failed to create IPC writer: {}", e)))?;
+        let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema()).map_err(|e| {
+            Error::Serialization {
+                message: format!("Failed to create IPC writer: {}", e),
+            }
+        })?;
 
-        writer
-            .write(batch)
-            .map_err(|e| Error::General(format!("Failed to write batch to IPC: {}", e)))?;
+        writer.write(batch).map_err(|e| Error::Serialization {
+            message: format!("Failed to write batch to IPC: {}", e),
+        })?;
 
-        writer
-            .finish()
-            .map_err(|e| Error::General(format!("Failed to finish IPC stream: {}", e)))?;
+        writer.finish().map_err(|e| Error::Serialization {
+            message: format!("Failed to finish IPC stream: {}", e),
+        })?;
     }
 
     Ok(Bytes::from(buffer))
@@ -162,14 +178,22 @@ fn deserialize_batch_from_ipc_df(bytes: &[u8]) -> Result<arrow::record_batch::Re
     use std::io::Cursor;
 
     let cursor = Cursor::new(bytes);
-    let mut reader = StreamReader::try_new(cursor, None)
-        .map_err(|e| Error::General(format!("Failed to create IPC reader: {}", e)))?;
+    let mut reader = StreamReader::try_new(cursor, None).map_err(|e| Error::Parse {
+        message: format!("Failed to create IPC reader: {}", e),
+        source: None,
+    })?;
 
     // Read the first (and only) batch
     let batch = reader
         .next()
-        .ok_or_else(|| Error::General("No batch found in IPC stream".to_string()))?
-        .map_err(|e| Error::General(format!("Failed to read batch from IPC: {}", e)))?;
+        .ok_or_else(|| Error::Parse {
+            message: "No batch found in IPC stream".to_string(),
+            source: None,
+        })?
+        .map_err(|e| Error::Parse {
+            message: format!("Failed to read batch: {}", e),
+            source: None,
+        })?;
 
     Ok(batch)
 }
@@ -180,11 +204,16 @@ fn deserialize_batches_from_ipc_df(bytes: &[u8]) -> Result<Vec<arrow::record_bat
     use std::io::Cursor;
 
     let cursor = Cursor::new(bytes);
-    let reader = StreamReader::try_new(cursor, None)
-        .map_err(|e| Error::General(format!("Failed to create IPC reader: {}", e)))?;
+    let reader = StreamReader::try_new(cursor, None).map_err(|e| Error::Parse {
+        message: format!("Failed to create IPC reader: {}", e),
+        source: None,
+    })?;
 
     let batches: std::result::Result<Vec<_>, _> = reader.collect();
-    batches.map_err(|e| Error::General(format!("Failed to read batches from IPC: {}", e)))
+    batches.map_err(|e| Error::Parse {
+        message: format!("Failed to read batches: {}", e),
+        source: None,
+    })
 }
 
 #[cfg(test)]

@@ -17,11 +17,13 @@ pub fn apply_projection(batch: RecordBatch, columns: &[String]) -> Result<Record
         match schema.index_of(col_name) {
             Ok(idx) => indices.push(idx),
             Err(_) => {
-                return Err(Error::General(format!(
-                    "Column '{}' not found in schema. Available columns: {:?}",
-                    col_name,
-                    schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
-                )));
+                return Err(Error::SchemaValidation {
+                    message: format!(
+                        "Column '{}' not found in schema. Available columns: {:?}",
+                        col_name,
+                        schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+                    ),
+                });
             }
         }
     }
@@ -39,6 +41,7 @@ pub fn apply_projection(batch: RecordBatch, columns: &[String]) -> Result<Record
 
     let projected_schema = Arc::new(Schema::new(projected_fields));
 
-    RecordBatch::try_new(projected_schema, projected_columns)
-        .map_err(|e| Error::General(format!("Failed to create projected batch: {}", e)))
+    RecordBatch::try_new(projected_schema, projected_columns).map_err(|e| Error::SchemaValidation {
+        message: format!("Failed to create projected batch: {}", e),
+    })
 }

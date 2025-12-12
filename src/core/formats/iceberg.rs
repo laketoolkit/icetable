@@ -16,7 +16,7 @@ use iceberg::table::StaticTable;
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
 use crate::core::metadata::{DataFileInfo, SnapshotWriter};
-use crate::core::storage::{Storage, detect_storage_type, create_file_io};
+use crate::core::storage::{Storage, create_file_io, detect_storage_type};
 use crate::error::{Error, Result};
 
 /// Handler for Apache Iceberg tables
@@ -59,10 +59,7 @@ impl IcebergHandler {
             if metadata.snapshot_by_id(snapshot_id).is_some() {
                 return Ok(Some(snapshot_id));
             } else {
-                return Err(Error::General(format!(
-                    "Snapshot with ID {} not found in table",
-                    snapshot_id
-                )));
+                return Err(Error::SnapshotNotFound { snapshot_id });
             }
         }
 
@@ -85,10 +82,9 @@ impl IcebergHandler {
             if let Some(snapshot_id) = best_snapshot {
                 return Ok(Some(snapshot_id));
             } else {
-                return Err(Error::General(format!(
-                    "No snapshot found at or before timestamp '{}'",
-                    as_of
-                )));
+                return Err(Error::InvalidFormat {
+                    message: format!("No snapshot found at or before timestamp '{}'", as_of),
+                });
             }
         }
 
@@ -122,7 +118,9 @@ impl IcebergHandler {
         // For local paths, convert to absolute
         let table_path = if !is_cloud && !self.path.is_absolute() {
             std::env::current_dir()
-                .map_err(|e| Error::General(format!("Failed to get current dir: {}", e)))?
+                .map_err(|e| Error::Configuration {
+                    message: format!("Failed to get current dir: {}", e),
+                })?
                 .join(&self.path)
                 .to_string_lossy()
                 .to_string()
@@ -137,18 +135,18 @@ impl IcebergHandler {
         let file_io = create_file_io(&table_path)?;
 
         // Create a table identifier (just for identification purposes)
-        let table_ident = TableIdent::from_strs(["iceberg", "table"])
-            .map_err(|e| Error::General(format!("Failed to create table identifier: {}", e)))?;
+        let table_ident =
+            TableIdent::from_strs(["iceberg", "table"]).map_err(|e| Error::InvalidFormat {
+                message: format!("Failed to create table identifier: {}", e),
+            })?;
 
         // Load the static table from the metadata file
         let table =
             StaticTable::from_metadata_file(&metadata_location, table_ident, file_io.clone())
                 .await
-                .map_err(|e| {
-                    Error::General(format!(
-                        "Failed to load Iceberg table from '{}': {}",
-                        metadata_location, e
-                    ))
+                .map_err(|e| Error::IcebergLoad {
+                    path: metadata_location.clone(),
+                    source: Box::new(e),
                 })?;
 
         Ok(table)
@@ -206,8 +204,11 @@ impl FormatHandler for IcebergHandler {
         let metadata = table.metadata().clone();
         let iceberg_schema = metadata.current_schema();
 
-        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema)
-            .map_err(|e| Error::General(format!("Failed to convert schema: {}", e)))?;
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema).map_err(|e| {
+            Error::SchemaValidation {
+                message: format!("Failed to convert schema: {}", e),
+            }
+        })?;
         Ok(Arc::new(arrow_schema))
     }
 
@@ -298,22 +299,22 @@ impl FormatHandler for IcebergHandler {
         };
 
         // Execute the scan (build is now synchronous in 0.7)
-        let scan = scan_builder
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build Iceberg scan: {}", e)))?;
+        let scan = scan_builder.build().map_err(|e| Error::IcebergScan {
+            source: Box::new(e),
+        })?;
 
-        let stream = scan
-            .to_arrow()
-            .await
-            .map_err(|e| Error::General(format!("Failed to execute Iceberg scan: {}", e)))?;
+        let stream = scan.to_arrow().await.map_err(|e| Error::IcebergScan {
+            source: Box::new(e),
+        })?;
 
         // Read all batches from the stream
         let mut batches = Vec::new();
 
         let mut stream = std::pin::pin!(stream);
         while let Some(batch_result) = stream.next().await {
-            let batch =
-                batch_result.map_err(|e| Error::General(format!("Failed to read batch: {}", e)))?;
+            let batch = batch_result.map_err(|e| Error::IcebergScan {
+                source: Box::new(e),
+            })?;
             batches.push(batch);
         }
 
@@ -377,7 +378,9 @@ impl FormatHandler for IcebergHandler {
         let manifest_list = current_snapshot
             .load_manifest_list(&file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to load manifest list: {}", e),
+            })?;
 
         // Filter to data manifests only
         let data_entries: Vec<_> = manifest_list
@@ -503,7 +506,9 @@ impl FormatHandler for IcebergHandler {
             self.path.clone()
         } else {
             std::env::current_dir()
-                .map_err(|e| Error::General(format!("Failed to get current dir: {}", e)))?
+                .map_err(|e| Error::Configuration {
+                    message: format!("Failed to get current dir: {}", e),
+                })?
                 .join(&self.path)
         };
         let table_path = abs_path.to_string_lossy().to_string();
@@ -514,8 +519,9 @@ impl FormatHandler for IcebergHandler {
 
         // Ensure data directory exists
         let data_dir = format!("{}/data", table_path);
-        std::fs::create_dir_all(&data_dir)
-            .map_err(|e| Error::General(format!("Failed to create data dir: {}", e)))?;
+        std::fs::create_dir_all(&data_dir).map_err(|e| Error::Metadata {
+            message: format!("Failed to create data dir: {}", e),
+        })?;
 
         // Write parquet file with unique ID
         let timestamp_nanos = std::time::SystemTime::now()
@@ -548,28 +554,35 @@ impl FormatHandler for IcebergHandler {
         let schema = Arc::new(arrow::datatypes::Schema::new(fields_with_ids));
 
         // Write batches to parquet
-        let file = File::create(&parquet_path)
-            .map_err(|e| Error::General(format!("Failed to create parquet file: {}", e)))?;
+        let file = File::create(&parquet_path).map_err(|e| Error::Metadata {
+            message: format!("Failed to create parquet file: {}", e),
+        })?;
         let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
-            .map_err(|e| Error::General(format!("Failed to create parquet writer: {}", e)))?;
+        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).map_err(|e| {
+            Error::Metadata {
+                message: format!("Failed to create parquet writer: {}", e),
+            }
+        })?;
         for batch in &data {
-            writer
-                .write(batch)
-                .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+            writer.write(batch).map_err(|e| Error::Metadata {
+                message: format!("Failed to write batch: {}", e),
+            })?;
         }
-        writer
-            .close()
-            .map_err(|e| Error::General(format!("Failed to close parquet writer: {}", e)))?;
+        writer.close().map_err(|e| Error::Metadata {
+            message: format!("Failed to close parquet writer: {}", e),
+        })?;
 
         let total_rows: u64 = data.iter().map(|b| b.num_rows() as u64).sum();
         let file_size = std::fs::metadata(&parquet_path)
-            .map_err(|e| Error::General(format!("Failed to get file size: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to get file size: {}", e),
+            })?
             .len();
 
         // Use SnapshotWriter for manifest/snapshot/metadata operations
         let file_io = create_file_io(&table_path)?;
-        let snapshot_writer = SnapshotWriter::with_storage(table_path.clone(), file_io, self.storage.clone());
+        let snapshot_writer =
+            SnapshotWriter::with_storage(table_path.clone(), file_io, self.storage.clone());
 
         // Create DataFileInfo
         let data_file_info = DataFileInfo {
