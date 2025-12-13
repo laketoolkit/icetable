@@ -73,6 +73,39 @@ pub trait ObjectStoreExt: ObjectStore {
         self.delete(&to_path(path)).await.map_err(Error::from)
     }
 
+    /// Delete multiple objects in batch (more efficient for cloud storage)
+    ///
+    /// Uses the native bulk delete API when available (S3 supports up to 1000 per request).
+    /// Falls back to parallel individual deletes if bulk delete is not supported.
+    async fn delete_bulk(&self, paths: &[String]) -> Result<Vec<String>> {
+        use futures::stream::{self, StreamExt};
+
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Convert to Path objects
+        let object_paths: Vec<Path> = paths.iter().map(|p| to_path(p)).collect();
+
+        // Use bulk delete - object_store handles batching internally
+        let results = self
+            .delete_stream(stream::iter(object_paths).map(Ok).boxed())
+            .collect::<Vec<_>>()
+            .await;
+
+        // Collect errors
+        let errors: Vec<String> = results
+            .into_iter()
+            .zip(paths.iter())
+            .filter_map(|(result, path)| match result {
+                Ok(_) => None,
+                Err(e) => Some(format!("{}: {}", path, e)),
+            })
+            .collect();
+
+        Ok(errors)
+    }
+
     /// Copy an object (string path version)
     async fn copy_str(&self, from: &str, to: &str) -> Result<()> {
         self.copy(&to_path(from), &to_path(to))

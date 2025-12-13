@@ -17,12 +17,12 @@ pub struct GenerateArgs {
     #[arg(long, value_enum)]
     pub template: Option<SchemaTemplate>,
 
-    /// Number of rows to generate
+    /// Number of rows per file
     #[arg(long, default_value = "10000")]
     pub rows: u64,
 
     /// Number of data files to create
-    #[arg(long, default_value = "4")]
+    #[arg(long, default_value = "1")]
     pub files: u32,
 
     /// Partition columns (comma-separated, e.g., "year,month")

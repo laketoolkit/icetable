@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::TryStreamExt;
+use iceberg::spec::ManifestStatus;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
 use crate::core::storage::{ObjectStoreExt, create_object_store};
@@ -35,7 +35,7 @@ impl Default for VacuumConfig {
         Self {
             retention_hours: sizes::DEFAULT_RETENTION_HOURS,
             dry_run: false,
-            parallelism: 32,
+            parallelism: 256, // High parallelism for I/O-bound delete operations
         }
     }
 }
@@ -76,26 +76,49 @@ impl VacuumService {
 
         let table = service.table();
         let metadata = table.metadata();
+        let file_io = service.file_io();
 
-        // Step 1: Collect all referenced files from ALL snapshots using native scan API
+        // Step 1: Collect all referenced files from ALL snapshots
+        // Use manifest-level caching to avoid re-reading shared manifests
+        // (many snapshots share the same manifests)
+        let snapshots: Vec<_> = metadata.snapshots().collect();
+
+        // Cache: manifest_path -> Vec<data_file_path>
+        let mut manifest_cache: HashMap<String, Vec<String>> = HashMap::new();
         let mut referenced_files: HashSet<String> = HashSet::new();
 
-        for snapshot in metadata.snapshots() {
-            let scan = match table.scan().snapshot_id(snapshot.snapshot_id()).build() {
-                Ok(s) => s,
+        for snapshot in &snapshots {
+            let manifest_list = match snapshot.load_manifest_list(file_io, &metadata).await {
+                Ok(ml) => ml,
                 Err(_) => continue,
             };
 
-            let tasks: Vec<_> = match scan.plan_files().await {
-                Ok(stream) => match stream.try_collect().await {
-                    Ok(t) => t,
+            for manifest_entry in manifest_list.entries() {
+                let manifest_path = manifest_entry.manifest_path.to_string();
+
+                // Check cache first - if we've seen this manifest, reuse the files
+                if let Some(files) = manifest_cache.get(&manifest_path) {
+                    referenced_files.extend(files.iter().cloned());
+                    continue;
+                }
+
+                // Load manifest and cache results
+                let manifest = match manifest_entry.load_manifest(file_io).await {
+                    Ok(m) => m,
                     Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
+                };
 
-            for task in tasks {
-                referenced_files.insert(task.data_file_path().to_string());
+                let files: Vec<String> = manifest
+                    .entries()
+                    .iter()
+                    .filter(|e| e.status() != ManifestStatus::Deleted)
+                    .map(|e| e.data_file().file_path().to_string())
+                    .collect();
+
+                referenced_files.extend(files.iter().cloned());
+
+                // Cache for future snapshots that share this manifest
+                manifest_cache.insert(manifest_path, files);
             }
         }
 
@@ -182,23 +205,20 @@ impl VacuumService {
             });
         }
 
-        // Actually delete the files
+        // Delete files using bulk delete API (much faster for cloud storage)
         let storage = create_object_store(table_path).await?;
-        let mut deleted_count = 0;
-        let mut deleted_bytes = 0u64;
-        let mut errors = Vec::new();
 
-        for file in &analysis.orphan_files {
-            match storage.delete_str(&file.path).await {
-                Ok(_) => {
-                    deleted_count += 1;
-                    deleted_bytes += file.size;
-                }
-                Err(e) => {
-                    errors.push(format!("{}: {}", file.path, e));
-                }
-            }
-        }
+        let paths: Vec<String> = analysis.orphan_files.iter().map(|f| f.path.clone()).collect();
+        let errors = storage.delete_bulk(&paths).await?;
+
+        let deleted_count = analysis.orphan_files.len() - errors.len();
+        let deleted_bytes: u64 = analysis
+            .orphan_files
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !errors.iter().any(|e| e.starts_with(&paths[*i])))
+            .map(|(_, f)| f.size)
+            .sum();
 
         Ok(VacuumResult {
             deleted_count,

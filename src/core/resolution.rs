@@ -460,8 +460,8 @@ pub async fn resolve_catalog_from_context(
         .clone()
         .or_else(|| config.get_current_table().map(String::from));
 
-    // Create REST client
-    let client = RestCatalogClient::new(&catalog_config).await?;
+    // Create REST client with catalog name for better error messages
+    let client = RestCatalogClient::with_name(&catalog_config, Some(&catalog_name)).await?;
 
     Ok(CatalogResolution {
         catalog_name,

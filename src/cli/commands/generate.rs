@@ -67,6 +67,27 @@ impl GenerateCommand {
 
         let table_location = table.metadata().location().to_string();
 
+        // Calculate total rows: rows per file * number of files
+        let rows_per_file = args.rows;
+        let total_rows = rows_per_file * args.files as u64;
+
+        // Warn about inefficient configuration
+        if rows_per_file < 100 {
+            println!(
+                "{} Very small files: {} rows/file. Consider more rows per file for better performance.",
+                "!".yellow().bold(),
+                rows_per_file
+            );
+            println!();
+        } else if rows_per_file < 1000 {
+            println!(
+                "{} Small files: {} rows/file. This may be inefficient for queries.",
+                "!".yellow(),
+                rows_per_file
+            );
+            println!();
+        }
+
         let action = if table_exists {
             "Appending to"
         } else {
@@ -82,15 +103,16 @@ impl GenerateCommand {
         );
         println!("  Location: {}", table_location.dimmed());
         println!("  Schema: {} columns", arrow_schema.fields().len());
-        println!("  Rows: {}", args.rows);
+        println!("  Rows/file: {}", rows_per_file);
         println!("  Files: {}", args.files);
+        println!("  Total rows: {}", total_rows);
 
         // Execute with catalog for proper commits
         let result = GenerateOperation::execute_with_catalog(
             table,
             catalog.catalog(),
             Arc::new(arrow_schema),
-            args.rows,
+            total_rows,
             args.files,
             args.seed.unwrap_or(42),
         )
@@ -164,16 +186,17 @@ impl GenerateCommand {
         table_name: &str,
         schema: &arrow::datatypes::Schema,
     ) -> Result<()> {
-        let rows_per_file = (args.rows / args.files as u64).max(1);
+        let rows_per_file = args.rows;
+        let total_rows = rows_per_file * args.files as u64;
         let partition_cols = args.partition_by.clone().unwrap_or_default();
 
         println!("{} Dry run - no data will be generated", "->".cyan().bold());
         println!();
         println!("Configuration:");
         println!("  Table: {}.{}", namespace, table_name);
-        println!("  Total rows: {}", args.rows);
+        println!("  Rows/file: {}", rows_per_file);
         println!("  Files: {}", args.files);
-        println!("  Rows per file: ~{}", rows_per_file);
+        println!("  Total rows: {}", total_rows);
         println!(
             "  Seed: {}",
             args.seed
@@ -207,42 +230,6 @@ impl GenerateCommand {
     }
 
     fn print_result(result: &GenerateResult, output: &str) {
-        for file in &result.data_files {
-            println!(
-                "  {} Written {} ({} rows, {} bytes)",
-                "✓".green(),
-                file.path.split('/').next_back().unwrap_or(&file.path),
-                file.record_count,
-                file.size
-            );
-        }
-
-        let metadata_action = if result.appended {
-            "Created new snapshot"
-        } else {
-            "Created Iceberg metadata"
-        };
-        println!(
-            "  {} {} (snapshot {})",
-            "✓".green(),
-            metadata_action,
-            result.snapshot_id
-        );
-
-        let action = if result.appended {
-            "Appended"
-        } else {
-            "Generated table with"
-        };
-        println!(
-            "\n{} {} {} rows in {} files ({})",
-            "✓".green().bold(),
-            action,
-            result.total_rows,
-            result.files_created,
-            format_bytes(result.total_bytes)
-        );
-
         if output == "json" {
             let json_result = serde_json::json!({
                 "status": "success",
@@ -258,6 +245,17 @@ impl GenerateCommand {
             if let Err(e) = print_json(&json_result) {
                 eprintln!("Error serializing JSON: {}", e);
             }
+        } else {
+            let action = if result.appended { "Appended" } else { "Generated" };
+            println!(
+                "\n{} {} {} rows in {} files ({}, snapshot {})",
+                "✓".green().bold(),
+                action,
+                result.total_rows,
+                result.files_created,
+                format_bytes(result.total_bytes),
+                result.snapshot_id
+            );
         }
     }
 

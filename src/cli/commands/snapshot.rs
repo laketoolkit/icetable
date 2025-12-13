@@ -250,8 +250,12 @@ impl SnapshotCommand {
         let config = SnapshotConfig {
             dry_run: cfg.dry_run,
         };
-        // Committer is now embedded in metadata_service, no need to pass separately
-        let snapshot_service = SnapshotService::with_config(config);
+        // Use committer from metadata service for catalog-aware commits
+        let snapshot_service = if let Some(committer) = metadata_service.committer() {
+            SnapshotService::with_committer(config, committer)
+        } else {
+            SnapshotService::with_config(config)
+        };
 
         let result = snapshot_service
             .expire_snapshots(
@@ -335,7 +339,12 @@ impl SnapshotCommand {
         let config = SnapshotConfig {
             dry_run: cfg.dry_run,
         };
-        let snapshot_service = SnapshotService::with_config(config);
+        // Use committer from metadata service for catalog-aware commits
+        let snapshot_service = if let Some(committer) = metadata_service.committer() {
+            SnapshotService::with_committer(config, committer)
+        } else {
+            SnapshotService::with_config(config)
+        };
 
         let result = snapshot_service
             .set_current_snapshot(

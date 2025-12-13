@@ -58,7 +58,7 @@ impl Default for MaintenanceConfig {
             min_size: sizes::DEFAULT_MIN_SIZE,
             max_size: sizes::DEFAULT_MAX_SIZE,
             dry_run: false,
-            parallelism: 4,
+            parallelism: 16, // Higher default for I/O-bound operations
             partition_filter: None,
             max_files: None,
             max_bytes: None,

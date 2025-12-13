@@ -74,11 +74,18 @@ fn clean_catalog_message(msg: &str) -> String {
 /// REST Catalog client wrapper
 pub struct RestCatalogClient {
     catalog: Arc<dyn Catalog>,
+    /// Catalog name for error messages (defaults to URI if not set)
+    name: String,
 }
 
 impl RestCatalogClient {
     /// Create a new REST catalog client from configuration
     pub async fn new(config: &CatalogConfig) -> Result<Self> {
+        Self::with_name(config, None).await
+    }
+
+    /// Create a new REST catalog client with a specific name for error messages
+    pub async fn with_name(config: &CatalogConfig, name: Option<&str>) -> Result<Self> {
         let mut props = HashMap::new();
         props.insert("uri".to_string(), config.uri.clone());
 
@@ -98,6 +105,7 @@ impl RestCatalogClient {
 
         Ok(Self {
             catalog: Arc::new(catalog),
+            name: name.unwrap_or(&config.uri).to_string(),
         })
     }
 
@@ -111,7 +119,11 @@ impl RestCatalogClient {
             .list_namespaces(parent_ident.as_ref())
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: clean_iceberg_error(&e),
+                message: format!(
+                    "{} in catalog '{}'",
+                    clean_iceberg_error(&e),
+                    self.name
+                ),
             })?;
 
         Ok(namespaces
@@ -133,7 +145,12 @@ impl RestCatalogClient {
                 .list_tables(&ns_ident)
                 .await
                 .map_err(|e| Error::CatalogOperation {
-                    message: clean_iceberg_error(&e),
+                    message: format!(
+                        "{} in namespace '{}' (catalog '{}')",
+                        clean_iceberg_error(&e),
+                        namespace.join("."),
+                        self.name
+                    ),
                 })?;
 
         Ok(tables.into_iter().map(|t| t.name().to_string()).collect())
@@ -154,9 +171,10 @@ impl RestCatalogClient {
             .await
             .map_err(|e| Error::TableNotFound {
                 path: format!(
-                    "{}.{} ({})",
-                    namespace.join("."),
+                    "'{}' in namespace '{}' (catalog '{}') - {}",
                     name,
+                    namespace.join("."),
+                    self.name,
                     clean_iceberg_error(&e)
                 ),
             })
@@ -176,7 +194,13 @@ impl RestCatalogClient {
             .table_exists(&table_ident)
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: clean_iceberg_error(&e),
+                message: format!(
+                    "{} for '{}' in namespace '{}' (catalog '{}')",
+                    clean_iceberg_error(&e),
+                    name,
+                    namespace.join("."),
+                    self.name
+                ),
             })
     }
 
@@ -206,7 +230,12 @@ impl RestCatalogClient {
             .create_namespace(&ns_ident, properties)
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: clean_iceberg_error(&e),
+                message: format!(
+                    "{} '{}' in catalog '{}'",
+                    clean_iceberg_error(&e),
+                    namespace.join("."),
+                    self.name
+                ),
             })?;
 
         Ok(())
@@ -224,7 +253,12 @@ impl RestCatalogClient {
             .drop_namespace(&ns_ident)
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: clean_iceberg_error(&e),
+                message: format!(
+                    "{} '{}' in catalog '{}'",
+                    clean_iceberg_error(&e),
+                    namespace.join("."),
+                    self.name
+                ),
             })
     }
 
@@ -254,7 +288,13 @@ impl RestCatalogClient {
             .create_table(&ns_ident, creation)
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: clean_iceberg_error(&e),
+                message: format!(
+                    "{} '{}' in namespace '{}' (catalog '{}')",
+                    clean_iceberg_error(&e),
+                    name,
+                    namespace.join("."),
+                    self.name
+                ),
             })
     }
 
@@ -288,7 +328,13 @@ impl RestCatalogClient {
             .drop_table(&table_ident)
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: clean_iceberg_error(&e),
+                message: format!(
+                    "{} '{}' in namespace '{}' (catalog '{}')",
+                    clean_iceberg_error(&e),
+                    name,
+                    namespace.join("."),
+                    self.name
+                ),
             })?;
 
         // If purge requested and we have a location, delete storage
