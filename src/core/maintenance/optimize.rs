@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
@@ -35,7 +35,7 @@ use crate::core::metadata::{
 };
 use crate::error::{Error, Result};
 use crate::utils::core::{format_bytes, generate_unique_id, normalize_relative_path};
-use crate::utils::register_cleanup_handler;
+use crate::utils::resources::get_resource_limits;
 
 /// Result of compacting a single partition group
 struct CompactionResult {
@@ -47,77 +47,10 @@ struct CompactionResult {
 enum BatchMessage {
     /// A record batch to write (already coerced if needed)
     Batch(RecordBatch),
-    /// A file has been completely read (for progress tracking)
-    FileComplete,
+    /// All readers are done - writers should finish and exit
+    Done,
     /// An error occurred during reading
     Error(String),
-}
-
-/// Timing stats for profiling (temporary)
-#[derive(Default)]
-struct TimingStats {
-    read_metadata_ms: AtomicU64,
-    read_batches_ms: AtomicU64,
-    coalesce_ms: AtomicU64,
-    write_ms: AtomicU64,
-    close_writer_ms: AtomicU64,
-    head_request_ms: AtomicU64,
-    files_read: AtomicU64,
-    batches_written: AtomicU64,
-}
-
-/// Coalesces small batches into larger ones for efficient writing
-/// Reduces write overhead when dealing with many small files
-struct BatchCoalescer {
-    schema: SchemaRef,
-    buffer: Vec<RecordBatch>,
-    current_rows: usize,
-    current_bytes: usize,
-    target_rows: usize,
-    target_bytes: usize,
-}
-
-impl BatchCoalescer {
-    fn new(schema: SchemaRef) -> Self {
-        Self {
-            schema,
-            buffer: Vec::with_capacity(64),
-            current_rows: 0,
-            current_bytes: 0,
-            target_rows: 100_000,      // 100K rows per coalesced batch
-            target_bytes: 64 * 1024 * 1024, // 64MB
-        }
-    }
-
-    /// Add a batch, returns coalesced batch if threshold reached
-    fn push(&mut self, batch: RecordBatch) -> Option<RecordBatch> {
-        let batch_rows = batch.num_rows();
-        let batch_bytes = batch.get_array_memory_size();
-
-        self.buffer.push(batch);
-        self.current_rows += batch_rows;
-        self.current_bytes += batch_bytes;
-
-        if self.current_rows >= self.target_rows || self.current_bytes >= self.target_bytes {
-            self.flush()
-        } else {
-            None
-        }
-    }
-
-    /// Flush buffered batches into single large batch
-    fn flush(&mut self) -> Option<RecordBatch> {
-        if self.buffer.is_empty() {
-            return None;
-        }
-
-        let batches = std::mem::take(&mut self.buffer);
-        self.current_rows = 0;
-        self.current_bytes = 0;
-
-        // Use arrow::compute::concat_batches for efficient merge
-        arrow::compute::concat_batches(&self.schema, &batches).ok()
-    }
 }
 
 /// Calculate optimal subgroup size based on workload characteristics
@@ -148,21 +81,6 @@ fn calculate_optimal_subgroup_size(
     // Take the smaller of size-based and parallelism-based limits
     // but ensure at least 50 files per group to avoid excessive overhead
     size_factor.min(max_subgroup_for_parallelism).max(50)
-}
-
-/// Tracks temporary files created during compaction for cleanup on cancellation
-struct TemporaryFileTracker {
-    files: Vec<String>,
-}
-
-impl TemporaryFileTracker {
-    fn new() -> Self {
-        Self { files: Vec::new() }
-    }
-
-    fn add_file(&mut self, path: String) {
-        self.files.push(path);
-    }
 }
 
 /// Service for optimizing tables by compacting small files
@@ -408,7 +326,6 @@ impl OptimizeService {
     ///
     /// Optimizations:
     /// - **Dynamic read concurrency**: 8-32 based on average file size
-    /// - **Batch coalescing**: Accumulates small batches before writing
     /// - **Multiple parallel writers**: Dynamic based on cores and expected output
     /// - **Optimized WriterProperties**: ZSTD level 1, large row groups
     /// - **Schema coercion per-file**: Skip coercion if schema matches
@@ -445,28 +362,16 @@ impl OptimizeService {
         let partition = self.parse_partition_key(&clean_partition_key);
 
         // P2: Optimized WriterProperties - ZSTD level 1 is ~3x faster with ~5% less compression
-        let props = WriterProperties::builder()
-            .set_compression(Compression::ZSTD(ZstdLevel::try_new(1).unwrap_or_default()))
-            .set_max_row_group_size(1_000_000) // 1M rows per row group
-            .set_data_page_size_limit(1024 * 1024) // 1MB pages
-            .set_write_batch_size(10_000)
-            .set_writer_version(WriterVersion::PARQUET_2_0)
-            .set_dictionary_enabled(true)
-            .build();
-
-        // Track temporary files for cleanup
-        let mut temp_tracker = TemporaryFileTracker::new();
-
-        // Register cleanup handler for cancellation
-        let tracker_for_cleanup = temp_tracker.files.clone();
-        let object_store_for_cleanup = object_store.clone();
-        register_cleanup_handler(move || {
-            for path in &tracker_for_cleanup {
-                let object_path = ObjectPath::from(path.as_str());
-                let _ = tokio::runtime::Handle::current()
-                    .block_on(async { object_store_for_cleanup.delete(&object_path).await });
-            }
-        });
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_compression(Compression::ZSTD(ZstdLevel::try_new(1).unwrap_or_default()))
+                .set_max_row_group_size(1_000_000) // 1M rows per row group
+                .set_data_page_size_limit(1024 * 1024) // 1MB pages
+                .set_write_batch_size(10_000)
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_dictionary_enabled(true)
+                .build(),
+        );
 
         // P1: Dynamic read concurrency based on average file size
         let avg_file_size = group.total_size / group.files.len().max(1) as u64;
@@ -478,18 +383,35 @@ impl OptimizeService {
             _ => 4,                      // >10MB: large files, limit concurrency
         };
 
-        // Channel size proportional to read concurrency
-        let channel_size = read_concurrency * 8;
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchMessage>(channel_size);
+        // P0: Calculate number of parallel writers dynamically
+        let available_cores = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+        let expected_output_files = (group.total_size / self.config.target_size).max(1) as usize;
+        let num_writers = available_cores
+            .min(expected_output_files)
+            .min(8) // Cap at 8 writers per group to avoid too much contention
+            .max(1);
 
-        // Timing stats for profiling
-        let stats = Arc::new(TimingStats::default());
-        let stats_for_readers = stats.clone();
+        // Channel size: respect --max-memory if set, otherwise use default
+        // Each batch in channel is ~5MB average, so limit channel to use at most 50% of memory limit
+        let resource_limits = get_resource_limits();
+        let default_channel_size = num_writers * read_concurrency * 4;
+        let channel_size = if resource_limits.has_memory_limit() {
+            let avg_batch_bytes = 5 * 1024 * 1024u64; // ~5MB per batch estimate
+            let max_channel_bytes = resource_limits.max_memory_bytes / 2;
+            let memory_limited_size = (max_channel_bytes / avg_batch_bytes) as usize;
+            memory_limited_size.min(default_channel_size).max(16) // At least 16 for progress
+        } else {
+            default_channel_size
+        };
+        let (tx, rx) = async_channel::bounded::<BatchMessage>(channel_size);
 
         // Spawn reader tasks - multiple files read concurrently
         let files = group.files.clone();
         let object_store_for_readers = object_store.clone();
         let table_schema_for_readers = table_schema.clone();
+        let progress_for_readers = progress.clone();
 
         let reader_handle = tokio::spawn(async move {
             stream::iter(files.into_iter())
@@ -497,7 +419,7 @@ impl OptimizeService {
                     let tx = tx.clone();
                     let object_store = object_store_for_readers.clone();
                     let table_schema = table_schema_for_readers.clone();
-                    let stats = stats_for_readers.clone();
+                    let progress = progress_for_readers.clone();
 
                     async move {
                         // Open parquet reader
@@ -511,7 +433,6 @@ impl OptimizeService {
                         let reader = ParquetObjectReader::new(object_store, path)
                             .with_file_size(file.size);
 
-                        let t0 = Instant::now();
                         let builder = match ParquetRecordBatchStreamBuilder::new(reader).await {
                             Ok(b) => b,
                             Err(e) => {
@@ -521,9 +442,8 @@ impl OptimizeService {
                                 return;
                             }
                         };
-                        stats.read_metadata_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
 
-                        // P2: Check schema once per file, not per batch
+                        // Check schema once per file, not per batch
                         let file_schema = builder.schema().clone();
                         let needs_coercion = file_schema != table_schema;
 
@@ -538,9 +458,8 @@ impl OptimizeService {
                         };
 
                         // Stream batches to channel
-                        let t0 = Instant::now();
                         while let Ok(Some(batch)) = stream.try_next().await {
-                            // P2: Skip coercion if schema matches (zero-copy)
+                            // Skip coercion if schema matches (zero-copy)
                             let output_batch = if needs_coercion {
                                 match Self::coerce_batch_to_schema(&batch, &table_schema) {
                                     Ok(b) => b,
@@ -559,245 +478,221 @@ impl OptimizeService {
                                 return; // Channel closed
                             }
                         }
-                        stats.read_batches_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-                        stats.files_read.fetch_add(1, Ordering::Relaxed);
 
                         // Signal file complete (for progress tracking)
-                        let _ = tx.send(BatchMessage::FileComplete).await;
+                        progress.inc(1);
                     }
                 })
                 .buffer_unordered(read_concurrency)
                 .collect::<Vec<()>>()
                 .await;
 
-            // All files done - channel will close when tx is dropped
+            // Signal all readers are done
+            for _ in 0..num_writers {
+                let _ = tx.send(BatchMessage::Done).await;
+            }
         });
 
-        // P0: Calculate number of parallel writers dynamically
-        let available_cores = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4);
-        let expected_output_files = (group.total_size / self.config.target_size).max(1) as usize;
-        let num_writers = available_cores
-            .min(expected_output_files)
-            .min(self.config.parallelism)
-            .max(1);
+        // P0: Spawn multiple parallel writers
+        let output_files = Arc::new(tokio::sync::Mutex::new(Vec::<DataFileInfo>::new()));
+        let file_counter = Arc::new(AtomicU64::new(0));
+        let error_flag = Arc::new(tokio::sync::Mutex::new(None::<String>));
 
-        // P1: Batch coalescer to accumulate small batches
-        let mut coalescer = BatchCoalescer::new(table_schema.clone());
+        let writer_handles: Vec<_> = (0..num_writers)
+            .map(|writer_id| {
+                let rx = rx.clone();
+                let object_store = object_store.clone();
+                let table_schema = table_schema.clone();
+                let props = props.clone();
+                let partition = partition.clone();
+                let clean_partition_key = clean_partition_key.clone();
+                let data_dir = data_dir.to_path_buf();
+                let table_base = table_base.clone();
+                let output_files = output_files.clone();
+                let file_counter = file_counter.clone();
+                let error_flag = error_flag.clone();
+                let target_size = self.config.target_size;
 
-        // Writer state
-        let mut output_files: Vec<DataFileInfo> = Vec::new();
-        let mut current_writer: Option<
-            AsyncArrowWriter<parquet::arrow::async_writer::ParquetObjectWriter>,
-        > = None;
-        let mut current_path: Option<std::path::PathBuf> = None;
-        let mut current_records = 0u64;
-        let mut current_bytes_estimate = 0u64;
-        let mut file_counter = 0u32;
-        let mut error: Option<String> = None;
-        let data_dir = data_dir.to_path_buf();
+                tokio::spawn(async move {
+                    let mut current_writer: Option<
+                        AsyncArrowWriter<parquet::arrow::async_writer::ParquetObjectWriter>,
+                    > = None;
+                    let mut current_path: Option<std::path::PathBuf> = None;
+                    let mut current_records = 0u64;
+                    let mut current_bytes_estimate = 0u64;
+                    let mut local_output_files: Vec<DataFileInfo> = Vec::new();
 
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                BatchMessage::Batch(batch) => {
-                    // P1: Coalesce small batches
-                    let t0 = Instant::now();
-                    let batches_to_write = if let Some(coalesced) = coalescer.push(batch) {
-                        vec![coalesced]
-                    } else {
-                        continue; // Still accumulating
-                    };
-                    stats.coalesce_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    loop {
+                        let msg = match rx.recv().await {
+                            Ok(m) => m,
+                            Err(_) => break, // Channel closed
+                        };
 
-                    for batch in batches_to_write {
-                        let batch_size_estimate = batch.get_array_memory_size() as u64;
+                        match msg {
+                            BatchMessage::Batch(batch) => {
+                                let batch_size_estimate = batch.get_array_memory_size() as u64;
 
-                        // Check if we need to start a new file
-                        if current_writer.is_some()
-                            && current_bytes_estimate > 0
-                            && current_bytes_estimate + batch_size_estimate > self.config.target_size
-                        {
-                            // Finalize current writer
-                            if let (Some(writer), Some(ref out_path)) =
-                                (current_writer.take(), current_path.take())
-                            {
-                                let t0 = Instant::now();
-                                if let Err(e) = writer.close().await {
-                                    error = Some(format!("Failed to close writer: {}", e));
-                                    break;
+                                // Check if we need to start a new file
+                                if current_writer.is_some()
+                                    && current_bytes_estimate > 0
+                                    && current_bytes_estimate + batch_size_estimate > target_size
+                                {
+                                    // Finalize current writer
+                                    if let (Some(writer), Some(ref out_path)) =
+                                        (current_writer.take(), current_path.take())
+                                    {
+                                        if let Err(e) = writer.close().await {
+                                            *error_flag.lock().await = Some(format!("Writer {}: Failed to close: {}", writer_id, e));
+                                            break;
+                                        }
+
+                                        let out_object_path = match Self::path_to_object_path_static(
+                                            &out_path.to_string_lossy(),
+                                            &table_base,
+                                        ) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                *error_flag.lock().await = Some(e);
+                                                break;
+                                            }
+                                        };
+
+                                        let meta = match object_store.head(&out_object_path).await {
+                                            Ok(m) => m,
+                                            Err(e) => {
+                                                *error_flag.lock().await = Some(format!("Writer {}: Failed to get metadata: {}", writer_id, e));
+                                                break;
+                                            }
+                                        };
+
+                                        local_output_files.push(DataFileInfo {
+                                            path: out_path.to_string_lossy().to_string(),
+                                            size: meta.size,
+                                            record_count: current_records,
+                                            partition: partition.clone(),
+                                        });
+                                    }
+                                    current_records = 0;
+                                    current_bytes_estimate = 0;
                                 }
-                                stats.close_writer_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
 
-                                let out_object_path = match Self::path_to_object_path_static(
-                                    &out_path.to_string_lossy(),
-                                    &table_base,
-                                ) {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        error = Some(e);
+                                // Create new writer if needed
+                                if current_writer.is_none() {
+                                    let file_num = file_counter.fetch_add(1, Ordering::Relaxed);
+                                    let unique_id = generate_unique_id();
+                                    let filename = format!("compact-{}-{}.parquet", unique_id, file_num);
+                                    let output_path = if clean_partition_key.is_empty() {
+                                        data_dir.join(&filename)
+                                    } else {
+                                        data_dir.join(&clean_partition_key).join(&filename)
+                                    };
+
+                                    let output_object_path = match Self::path_to_object_path_static(
+                                        &output_path.to_string_lossy(),
+                                        &table_base,
+                                    ) {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            *error_flag.lock().await = Some(e);
+                                            break;
+                                        }
+                                    };
+
+                                    let writer_obj = parquet::arrow::async_writer::ParquetObjectWriter::new(
+                                        object_store.clone(),
+                                        output_object_path,
+                                    );
+
+                                    let async_writer = match AsyncArrowWriter::try_new(
+                                        writer_obj,
+                                        table_schema.clone(),
+                                        Some((*props).clone()),
+                                    ) {
+                                        Ok(w) => w,
+                                        Err(e) => {
+                                            *error_flag.lock().await = Some(format!("Writer {}: Failed to create: {}", writer_id, e));
+                                            break;
+                                        }
+                                    };
+
+                                    current_writer = Some(async_writer);
+                                    current_path = Some(output_path);
+                                }
+
+                                // Write the batch
+                                if let Some(ref mut writer) = current_writer {
+                                    current_records += batch.num_rows() as u64;
+                                    current_bytes_estimate += batch_size_estimate;
+                                    if let Err(e) = writer.write(&batch).await {
+                                        *error_flag.lock().await = Some(format!("Writer {}: Failed to write: {}", writer_id, e));
                                         break;
                                     }
-                                };
-
-                                let t0 = Instant::now();
-                                let meta = match object_store.head(&out_object_path).await {
-                                    Ok(m) => m,
-                                    Err(e) => {
-                                        error = Some(format!("Failed to get metadata: {}", e));
-                                        break;
-                                    }
-                                };
-                                stats.head_request_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-
-                                let file_path = out_path.to_string_lossy().to_string();
-                                temp_tracker.add_file(file_path.clone());
-                                output_files.push(DataFileInfo {
-                                    path: file_path,
-                                    size: meta.size,
-                                    record_count: current_records,
-                                    partition: partition.clone(),
-                                });
+                                }
                             }
-                            current_records = 0;
-                            current_bytes_estimate = 0;
-                        }
-
-                        // Create new writer if needed
-                        if current_writer.is_none() {
-                            let unique_id = generate_unique_id();
-                            let filename = format!("compact-{}-{}.parquet", unique_id, file_counter);
-                            let output_path = if clean_partition_key.is_empty() {
-                                data_dir.join(&filename)
-                            } else {
-                                data_dir.join(&clean_partition_key).join(&filename)
-                            };
-                            file_counter += 1;
-
-                            let output_object_path = match Self::path_to_object_path_static(
-                                &output_path.to_string_lossy(),
-                                &table_base,
-                            ) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    error = Some(e);
-                                    break;
-                                }
-                            };
-
-                            let writer_obj = parquet::arrow::async_writer::ParquetObjectWriter::new(
-                                object_store.clone(),
-                                output_object_path,
-                            );
-
-                            let async_writer = match AsyncArrowWriter::try_new(
-                                writer_obj,
-                                table_schema.clone(),
-                                Some(props.clone()),
-                            ) {
-                                Ok(w) => w,
-                                Err(e) => {
-                                    error = Some(format!("Failed to create writer: {}", e));
-                                    break;
-                                }
-                            };
-
-                            current_writer = Some(async_writer);
-                            current_path = Some(output_path);
-                        }
-
-                        // Write the batch
-                        if let Some(ref mut writer) = current_writer {
-                            current_records += batch.num_rows() as u64;
-                            current_bytes_estimate += batch_size_estimate;
-                            let t0 = Instant::now();
-                            if let Err(e) = writer.write(&batch).await {
-                                error = Some(format!("Failed to write batch: {}", e));
+                            BatchMessage::Done => {
+                                break; // Exit writer loop
+                            }
+                            BatchMessage::Error(e) => {
+                                *error_flag.lock().await = Some(e);
                                 break;
                             }
-                            stats.write_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-                            stats.batches_written.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
-                    if error.is_some() {
-                        break;
+                    // Finalize the last writer for this worker
+                    if let (Some(writer), Some(ref out_path)) = (current_writer, current_path) {
+                        if let Err(e) = writer.close().await {
+                            *error_flag.lock().await = Some(format!("Writer {}: Failed to close final: {}", writer_id, e));
+                            return;
+                        }
+
+                        let out_object_path = match Self::path_to_object_path_static(
+                            &out_path.to_string_lossy(),
+                            &table_base,
+                        ) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                *error_flag.lock().await = Some(e);
+                                return;
+                            }
+                        };
+
+                        let meta = match object_store.head(&out_object_path).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                *error_flag.lock().await = Some(format!("Writer {}: Failed to get final metadata: {}", writer_id, e));
+                                return;
+                            }
+                        };
+
+                        local_output_files.push(DataFileInfo {
+                            path: out_path.to_string_lossy().to_string(),
+                            size: meta.size,
+                            record_count: current_records,
+                            partition: partition.clone(),
+                        });
                     }
-                }
-                BatchMessage::FileComplete => {
-                    // Update progress per file
-                    progress.inc(1);
-                }
-                BatchMessage::Error(e) => {
-                    error = Some(e);
-                    break;
-                }
-            }
+
+                    // Merge local output files into shared list
+                    output_files.lock().await.extend(local_output_files);
+                })
+            })
+            .collect();
+
+        // Wait for all tasks
+        let _ = reader_handle.await;
+        for handle in writer_handles {
+            let _ = handle.await;
         }
 
-        // Wait for reader to finish
-        let _ = reader_handle.await;
-
         // Check for errors
-        if let Some(e) = error {
+        if let Some(e) = error_flag.lock().await.take() {
             return Err(Error::Metadata { message: e });
         }
 
-        // P1: Flush any remaining coalesced batches
-        if let Some(final_batch) = coalescer.flush() {
-            if let Some(ref mut writer) = current_writer {
-                current_records += final_batch.num_rows() as u64;
-                if let Err(e) = writer.write(&final_batch).await {
-                    return Err(Error::Metadata {
-                        message: format!("Failed to write final batch: {}", e),
-                    });
-                }
-            }
-        }
-
-        // Finalize the last writer
-        if let (Some(writer), Some(ref out_path)) = (current_writer, current_path) {
-            writer.close().await.map_err(|e| Error::Metadata {
-                message: format!("Failed to close writer: {}", e),
-            })?;
-
-            let out_object_path = Self::path_to_object_path_static(
-                &out_path.to_string_lossy(),
-                &table_base,
-            ).map_err(|e| Error::Metadata { message: e })?;
-
-            let meta = object_store
-                .head(&out_object_path)
-                .await
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to get file metadata: {}", e),
-                })?;
-
-            let file_path = out_path.to_string_lossy().to_string();
-            temp_tracker.add_file(file_path.clone());
-            output_files.push(DataFileInfo {
-                path: file_path,
-                size: meta.size,
-                record_count: current_records,
-                partition: partition.clone(),
-            });
-        }
-
-        // Print timing stats for profiling
-        eprintln!(
-            "[TIMING] files_read={} batches_written={} | read_meta={}ms read_batches={}ms coalesce={}ms write={}ms close={}ms head={}ms",
-            stats.files_read.load(Ordering::Relaxed),
-            stats.batches_written.load(Ordering::Relaxed),
-            stats.read_metadata_ms.load(Ordering::Relaxed),
-            stats.read_batches_ms.load(Ordering::Relaxed),
-            stats.coalesce_ms.load(Ordering::Relaxed),
-            stats.write_ms.load(Ordering::Relaxed),
-            stats.close_writer_ms.load(Ordering::Relaxed),
-            stats.head_request_ms.load(Ordering::Relaxed),
-        );
-
-        // Log optimization stats (debug only)
-        let _ = num_writers; // Used for future parallel writer implementation
+        let output_files = Arc::try_unwrap(output_files)
+            .map(|mutex| mutex.into_inner())
+            .unwrap_or_else(|arc| arc.blocking_lock().clone());
 
         Ok(CompactionResult {
             added: output_files,

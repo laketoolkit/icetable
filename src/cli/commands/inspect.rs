@@ -5,7 +5,7 @@
 
 use colored::Colorize;
 
-use super::common::resolve_table_from_context;
+use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::format_timestamp_ms;
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
 use crate::cli::parser::{CliTableContext, InspectArgs};
@@ -40,9 +40,13 @@ impl InspectCommand {
         // Execute inspection using the core operation
         let result = IcebergTableInspector::inspect(&table, &options)?;
 
-        // Format and display result
-        let output = Self::format_result(&result, &options);
-        println!("{}", output);
+        // Format and display result based on output format
+        if args.output == "json" {
+            print_json(&result)?;
+        } else {
+            let output = Self::format_result(&result, &options);
+            println!("{}", output);
+        }
 
         Ok(())
     }
