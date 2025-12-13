@@ -15,10 +15,6 @@ pub enum OptimizeCommands {
 /// Arguments for optimize data command
 #[derive(Parser, Debug)]
 pub struct OptimizeDataArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Branch to optimize (defaults to main/current)
     #[arg(short, long)]
     pub branch: Option<String>,
@@ -67,10 +63,6 @@ pub struct OptimizeDataArgs {
 /// Arguments for optimize manifests command
 #[derive(Parser, Debug)]
 pub struct OptimizeManifestsArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Branch to optimize (defaults to main/current)
     #[arg(short, long)]
     pub branch: Option<String>,

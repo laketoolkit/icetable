@@ -1,9 +1,10 @@
 //! Snapshot command formatting utilities
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
+use comfy_table::{Cell, CellAlignment};
 use serde_json::Value;
 
+use super::formatter::{create_styled_table, format_datetime_utc};
 use crate::core::format_bytes;
 
 /// Formatter for snapshot command results
@@ -22,9 +23,7 @@ impl SnapshotFormatter {
             return output.join("\n");
         }
 
-        let mut table = comfy_table::Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
+        let mut table = create_styled_table();
 
         table.set_header(vec![
             Cell::new("ID".cyan().to_string()).set_alignment(CellAlignment::Center),
@@ -37,7 +36,8 @@ impl SnapshotFormatter {
         for snap in snapshots {
             let timestamp_str = snap
                 .timestamp
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .as_ref()
+                .map(format_datetime_utc)
                 .unwrap_or_else(|| "-".to_string());
 
             let parent_str = snap
@@ -45,11 +45,7 @@ impl SnapshotFormatter {
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "-".to_string());
 
-            let operation_str = snap
-                .operation
-                .as_deref()
-                .unwrap_or("-")
-                .to_string();
+            let operation_str = snap.operation.as_deref().unwrap_or("-").to_string();
 
             let status = if snap.is_current {
                 Cell::new("● current".green().to_string())
@@ -68,7 +64,11 @@ impl SnapshotFormatter {
 
         output.push(table.to_string());
         output.push(String::new());
-        output.push(format!("Total: {} snapshots", snapshots.len()).dimmed().to_string());
+        output.push(
+            format!("Total: {} snapshots", snapshots.len())
+                .dimmed()
+                .to_string(),
+        );
         output.join("\n")
     }
 
@@ -147,7 +147,9 @@ impl SnapshotFormatter {
             ));
             output.push(String::new());
             output.push(
-                "Run without --dry-run to apply these changes.".dimmed().to_string()
+                "Run without --dry-run to apply these changes."
+                    .dimmed()
+                    .to_string(),
             );
         } else {
             output.push("Expire complete!".green().bold().to_string());

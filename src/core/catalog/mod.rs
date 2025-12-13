@@ -15,12 +15,13 @@
 //! ```
 
 mod committer;
-mod config;
 mod rest;
 
 pub use committer::TableCommitter;
-pub use config::{CatalogConfig, CatalogType};
 pub use rest::RestCatalogClient;
+
+// Re-export from core::config for backward compatibility
+pub use super::config::{CatalogAuth, CatalogConfig, CatalogType};
 
 use crate::error::{Error, Result};
 use iceberg::table::Table;
@@ -126,15 +127,13 @@ impl CatalogClient {
     /// Load a table by reference
     pub async fn load_table(&self, table_ref: &TableRef) -> Result<Table> {
         match table_ref {
-            TableRef::Path(_path) => {
-                Err(Error::General(
-                    "Direct path loading not supported through CatalogClient. Use IcebergMetadataService instead.".to_string()
-                ))
-            }
+            TableRef::Path(_path) => Err(Error::UnsupportedFeature {
+                feature:
+                    "Direct path loading through CatalogClient. Use IcebergMetadataService instead."
+                        .to_string(),
+            }),
             TableRef::Catalog { namespace, name } => {
-                let client = self.rest_client.as_ref().ok_or_else(|| {
-                    Error::General("REST catalog not configured".to_string())
-                })?;
+                let client = self.rest_client.as_ref().ok_or_else(|| Error::NoCatalog)?;
                 client.load_table(namespace, name).await
             }
         }
@@ -142,17 +141,13 @@ impl CatalogClient {
 
     /// List namespaces in the catalog
     pub async fn list_namespaces(&self, parent: Option<&[String]>) -> Result<Vec<Vec<String>>> {
-        let client = self.rest_client.as_ref().ok_or_else(|| {
-            Error::General("REST catalog not configured".to_string())
-        })?;
+        let client = self.rest_client.as_ref().ok_or_else(|| Error::NoCatalog)?;
         client.list_namespaces(parent).await
     }
 
     /// List tables in a namespace
     pub async fn list_tables(&self, namespace: &[String]) -> Result<Vec<String>> {
-        let client = self.rest_client.as_ref().ok_or_else(|| {
-            Error::General("REST catalog not configured".to_string())
-        })?;
+        let client = self.rest_client.as_ref().ok_or_else(|| Error::NoCatalog)?;
         client.list_tables(namespace).await
     }
 }

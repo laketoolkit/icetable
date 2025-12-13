@@ -63,7 +63,7 @@ impl ViewItem {
 /// Complete inspection view
 #[derive(Debug, Clone)]
 pub struct InspectionView {
-    /// Format name (e.g., "Apache Iceberg", "Delta Lake")
+    /// Format name (e.g., "Apache Iceberg", "Iceberg")
     pub format_name: String,
     /// View sections
     pub sections: Vec<ViewSection>,
@@ -335,7 +335,7 @@ impl InspectionViewBuilder {
         self
     }
 
-    /// Add file-based layout (Delta/Iceberg)
+    /// Add file-based layout (Iceberg)
     fn add_file_layout(mut self, files: &FileBasedLayout) -> Self {
         let mut items = vec![
             ViewItem::kv("Data Files", format_number(files.num_files as i64)),
@@ -459,196 +459,5 @@ impl InspectionViewBuilder {
 impl Default for InspectionViewBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Convert InspectionView to CLI BoxItems for rendering
-pub fn view_to_box_items(view: &InspectionView) -> Vec<crate::cli::output::BoxItem> {
-    use crate::cli::output::BoxItem;
-
-    // Calculate global key width across ALL sections
-    let global_key_width = view
-        .sections
-        .iter()
-        .flat_map(|s| s.items.iter())
-        .filter_map(|item| {
-            if let ViewItem::KeyValue { key, .. } = item {
-                Some(key.len())
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(20);
-
-    let mut items = Vec::new();
-
-    for section in &view.sections {
-        // Add section title
-        items.push(BoxItem::Text(format!("------ {} ------", section.title)));
-        items.push(BoxItem::Empty);
-
-        // Add section items
-        for item in &section.items {
-            match item {
-                ViewItem::KeyValue { key, value, .. } => {
-                    items.push(BoxItem::KeyValue {
-                        key: key.clone(),
-                        value: value.clone(),
-                        key_width: Some(global_key_width),
-                    });
-                }
-                ViewItem::Text(text) => {
-                    items.push(BoxItem::Text(text.clone()));
-                }
-                ViewItem::Empty => {
-                    items.push(BoxItem::Empty);
-                }
-                ViewItem::List(list_items) => {
-                    for list_item in list_items {
-                        items.push(BoxItem::Text(format!("  - {}", list_item)));
-                    }
-                }
-                ViewItem::Table { headers, rows } => {
-                    // Create table header
-                    let header_text = headers.join("  ");
-                    items.push(BoxItem::Text(header_text));
-                    items.push(BoxItem::Separator);
-
-                    // Create table rows
-                    for row in rows {
-                        let row_text = row.join("  ");
-                        items.push(BoxItem::Text(row_text));
-                    }
-                }
-            }
-        }
-
-        items.push(BoxItem::Empty);
-    }
-
-    items
-}
-
-/// Convert InspectionView to PhysicalInspectResult for CLI rendering
-pub fn view_to_inspect_result(
-    view: &InspectionView,
-) -> crate::cli::commands::inspect::common::PhysicalInspectResult {
-    use crate::cli::output::BoxItem;
-
-    // First pass: calculate the maximum key width across ALL sections
-    let global_key_width = view
-        .sections
-        .iter()
-        .flat_map(|s| s.items.iter())
-        .filter_map(|item| {
-            if let ViewItem::KeyValue { key, .. } = item {
-                Some(key.len())
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(20);
-
-    let mut file_info = Vec::new();
-    let mut schema = None;
-    let mut layout = None;
-    let mut statistics = None;
-
-    for section in &view.sections {
-        let mut section_items = Vec::new();
-
-        // Convert section items to BoxItems
-        for item in &section.items {
-            match item {
-                ViewItem::KeyValue { key, value, .. } => {
-                    section_items.push(BoxItem::KeyValue {
-                        key: key.clone(),
-                        value: value.clone(),
-                        key_width: Some(global_key_width),
-                    });
-                }
-                ViewItem::Text(text) => {
-                    section_items.push(BoxItem::Text(text.clone()));
-                }
-                ViewItem::Empty => {
-                    section_items.push(BoxItem::Empty);
-                }
-                ViewItem::List(list_items) => {
-                    for list_item in list_items {
-                        section_items.push(BoxItem::Text(format!("  - {}", list_item)));
-                    }
-                }
-                ViewItem::Table { headers, rows } => {
-                    // Create table header
-                    let header_text = headers.join("  ");
-                    section_items.push(BoxItem::Text(header_text));
-                    section_items.push(BoxItem::Separator);
-
-                    // Create table rows
-                    for row in rows {
-                        let row_text = row.join("  ");
-                        section_items.push(BoxItem::Text(row_text));
-                    }
-                }
-            }
-        }
-
-        // Assign to appropriate section
-        match section.title.as_str() {
-            "File Information" | "Table Information" => {
-                file_info = section_items;
-            }
-            "Table Properties" => {
-                // Append to file_info with a styled header
-                file_info.push(BoxItem::Empty);
-                file_info.push(BoxItem::Text("== Table Properties ==".to_string()));
-                file_info.extend(section_items);
-            }
-            "Schema" => {
-                schema = Some(section_items);
-            }
-            "Physical Layout" | "Layout" => {
-                layout = Some(section_items);
-            }
-            "Statistics" | "File Contents" => {
-                statistics = Some(section_items);
-            }
-            "Orphan Files" | "Potentially Orphan Files" => {
-                // Add orphan files as a subsection of statistics with styled header
-                let header = format!("== {} ==", section.title);
-                if let Some(ref mut stats) = statistics {
-                    stats.push(BoxItem::Empty);
-                    stats.push(BoxItem::Text(header));
-                    stats.extend(section_items);
-                } else {
-                    let mut items = vec![BoxItem::Text(header)];
-                    items.extend(section_items);
-                    statistics = Some(items);
-                }
-            }
-            _ => {
-                // Unknown section - append to statistics
-                if let Some(ref mut stats) = statistics {
-                    stats.push(BoxItem::Empty);
-                    stats.push(BoxItem::Text(format!("{}:", section.title)));
-                    stats.extend(section_items);
-                } else {
-                    // No statistics yet, add section header + items
-                    let mut items = vec![BoxItem::Text(format!("{}:", section.title))];
-                    items.extend(section_items);
-                    statistics = Some(items);
-                }
-            }
-        }
-    }
-
-    crate::cli::commands::inspect::common::PhysicalInspectResult {
-        file_info,
-        schema,
-        layout,
-        statistics,
-        stats_title: None,
     }
 }

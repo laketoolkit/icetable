@@ -26,13 +26,15 @@
 
 pub mod ext;
 pub mod factory;
+pub mod file_io;
 
 // Re-export API
-pub use ext::{from_path, to_path, ObjectStoreExt};
-pub use factory::{create_object_store, detect_storage_type, parse_storage_url, Storage};
+pub use ext::{ObjectStoreExt, from_path, to_path};
+pub use factory::{Storage, create_object_store, detect_storage_type, parse_storage_url};
+pub use file_io::create_file_io;
 
 // Re-export object_store types for convenience
 pub use object_store::{
-    path::Path as StoragePath, GetOptions as ObjGetOptions, ObjectMeta, ObjectStore,
-    PutOptions as ObjPutOptions, PutPayload,
+    GetOptions as ObjGetOptions, ObjectMeta, ObjectStore, PutOptions as ObjPutOptions, PutPayload,
+    path::Path as StoragePath,
 };

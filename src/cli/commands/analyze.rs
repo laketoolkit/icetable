@@ -4,110 +4,74 @@
 //! The business logic is delegated to AnalyzeService in core::analysis.
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, CellAlignment, ContentArrangement};
+use comfy_table::{Cell, CellAlignment};
 
-use super::common::resolve_table_path;
-use crate::cli::parser::AnalyzeArgs;
+use super::common::{create_spinner, extract_table_name, print_json, resolve_table_from_context};
+use crate::cli::output::create_styled_table;
+use crate::cli::parser::{AnalyzeArgs, CliTableContext};
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
 };
-use crate::core::metadata::IcebergMetadataService;
-use crate::core::utils::format_bytes;
-use crate::core::{CatalogConfig, TableFormat, detect_table_format_async};
-use crate::error::{Error, Result};
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
+use crate::core::{format_bytes, format_count};
+use crate::error::Result;
+use crate::utils::with_resource_limits;
 
 /// Handler for analyze command
 pub struct AnalyzeCommand;
 
 impl AnalyzeCommand {
     /// Execute analyze command
-    pub async fn execute(args: AnalyzeArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
-        
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: metadata + file lists
-                let estimated_memory = 128 * 1024 * 1024; // 128MB for analysis
-                track_memory_usage(estimated_memory)?;
+    pub async fn execute(args: AnalyzeArgs, ctx: &CliTableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
+        let table_path = resolution.location();
 
-                // Detect table format
-                let format = detect_table_format_async(&table_path).await;
-
-                match format {
-                    TableFormat::Delta => {
-                        println!(
-                            "{}",
-                            "Delta Lake analysis is not supported. Use 'icetable import delta' to convert to Iceberg."
-                                .yellow()
-                        );
-                        Ok(())
-                    }
-                    TableFormat::Iceberg => Self::analyze_iceberg(&table_path, &args).await,
-                    TableFormat::Unknown => Err(Error::General(format!(
-                        "Path '{}' is not a Delta Lake or Iceberg table",
-                        table_path
-                    ))),
-                }
-            }).await
-        }).await
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for analysis
+        with_resource_limits(
+            ESTIMATED_MEMORY,
+            Self::analyze_iceberg(&table_path, &args, &resolution),
+        )
+        .await
     }
 
-    async fn analyze_iceberg(table_path: &str, args: &AnalyzeArgs) -> Result<()> {
-        use indicatif::{ProgressBar, ProgressStyle};
-
+    async fn analyze_iceberg(
+        table_path: &str,
+        args: &AnalyzeArgs,
+        resolution: &super::common::TableResolution,
+    ) -> Result<()> {
         let is_json = args.output == "json";
 
         if !is_json {
-            let table_name = table_path
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or("table");
+            let table_name = extract_table_name(table_path);
 
             println!("{} {}", "Analyzing".green(), table_name.cyan());
             println!("{}", table_path.dimmed());
             println!();
         }
 
-        // Load metadata service
-        let service = IcebergMetadataService::new_async(table_path.to_string()).await?;
+        // Load metadata service using factory method - handles catalog vs path context automatically
+        let service = resolution.to_readonly_service().await?;
 
         // Create analysis service with configuration from args
         let config = AnalysisConfig {
             min_file_size: args.min_file_size,
             skip_orphans: args.skip_orphans,
+            all_snapshots: args.all_snapshots,
         };
         let analyze_service = AnalyzeService::with_config(config);
 
         // Run analysis with progress indicators
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} Analyzing current snapshot...")
-                .expect("hardcoded progress template is valid"),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
+        let pb = create_spinner("Analyzing current snapshot");
         let data_analysis = analyze_service.analyze_data_compaction(&service).await?;
         pb.finish_and_clear();
 
+        let manifest_analysis = analyze_service.analyze_manifests(&service).await?;
         let (metadata, _) = service.load_metadata().await?;
-        let manifest_analysis = analyze_service
-            .analyze_manifests(&metadata, &service)
-            .await?;
         let snapshot_analysis = analyze_service.analyze_snapshots(&metadata);
 
         let orphan_analysis = if !args.skip_orphans {
-            let pb = ProgressBar::new_spinner();
-            pb.set_style(
-                ProgressStyle::default_spinner()
-                    .template("{spinner:.cyan} Scanning for orphan files...")
-                    .expect("hardcoded progress template is valid"),
-            );
-            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+            let pb = create_spinner("Scanning for orphan files");
             let result = analyze_service.analyze_orphans(&service).await?;
             pb.finish_and_clear();
             Some(result)
@@ -128,7 +92,7 @@ impl AnalyzeCommand {
     }
 
     fn print_analysis(
-        _table_path: &str,
+        table_path: &str,
         data: &DataCompactionAnalysis,
         manifest: &ManifestCompactionAnalysis,
         snapshot: &SnapshotExpirationAnalysis,
@@ -137,13 +101,11 @@ impl AnalyzeCommand {
         verbose: bool,
     ) -> Result<()> {
         if output == "json" {
-            return Self::print_json(_table_path, data, manifest, snapshot, orphan);
+            return Self::print_json(table_path, data, manifest, snapshot, orphan);
         }
 
         // Build summary table
-        let mut table = comfy_table::Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
+        let mut table = create_styled_table();
 
         table.set_header(vec![
             Cell::new("Metric".cyan().to_string()).set_alignment(CellAlignment::Center),
@@ -173,8 +135,7 @@ impl AnalyzeCommand {
         };
         table.add_row(vec![
             Cell::new("Manifests"),
-            Cell::new(format_count(manifest.total_manifests))
-                .set_alignment(CellAlignment::Right),
+            Cell::new(format_count(manifest.total_manifests)).set_alignment(CellAlignment::Right),
             Cell::new("-").set_alignment(CellAlignment::Right),
             Cell::new(manifest_status).set_alignment(CellAlignment::Center),
         ]);
@@ -239,7 +200,10 @@ impl AnalyzeCommand {
                 "Expire {} snapshots older than 7 days",
                 snapshot.snapshots_older_than_7d
             );
-            recommendations.push((detail, "icetable snapshot expire --older-than 7d --dry-run".to_string()));
+            recommendations.push((
+                detail,
+                "icetable snapshot expire --older-than 7d --dry-run".to_string(),
+            ));
         }
 
         // Orphan files recommendation
@@ -254,7 +218,10 @@ impl AnalyzeCommand {
             }
             if orphan.has_missing_files() {
                 let detail = format!("Repair {} missing file references", orphan.missing_count);
-                recommendations.push((detail, "icetable repair --remove-missing --dry-run".to_string()));
+                recommendations.push((
+                    detail,
+                    "icetable repair --remove-missing --dry-run".to_string(),
+                ));
             }
         }
 
@@ -347,22 +314,8 @@ impl AnalyzeCommand {
             })),
         });
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json).map_err(|e| Error::General(e.to_string()))?
-        );
+        print_json(&json)?;
 
         Ok(())
-    }
-}
-
-/// Format a count with thousands separators
-fn format_count(count: usize) -> String {
-    if count >= 1_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else if count >= 1_000 {
-        format!("{:.1}K", count as f64 / 1_000.0)
-    } else {
-        count.to_string()
     }
 }

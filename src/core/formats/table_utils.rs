@@ -1,7 +1,7 @@
-//! Utility functions for table formats (Delta Lake, Iceberg)
+//! Utility functions for table formats (Iceberg)
 //!
 //! This module provides shared utility functions for table formats that don't
-//! fit the file-based BaseFormatHandler pattern. Table formats like Delta and
+//! fit the file-based BaseFormatHandler pattern. Table formats that
 //! Iceberg manage collections of files and have different characteristics than
 //! single-file formats like Parquet or CSV.
 //!

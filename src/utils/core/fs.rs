@@ -110,21 +110,13 @@ fn scan_directory_recursive(
     config: &ScanConfig,
     files: &mut Vec<ScannedFile>,
 ) -> Result<()> {
-    let entries = std::fs::read_dir(dir).map_err(|e| {
-        Error::General(format!(
-            "Failed to read directory '{}': {}",
-            dir.display(),
-            e
-        ))
+    let entries = std::fs::read_dir(dir).map_err(|e| Error::Storage {
+        message: format!("Failed to read directory '{}': {}", dir.display(), e),
     })?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| {
-            Error::General(format!(
-                "Failed to read entry in '{}': {}",
-                dir.display(),
-                e
-            ))
+        let entry = entry.map_err(|e| Error::Storage {
+            message: format!("Failed to read entry in '{}': {}", dir.display(), e),
         })?;
 
         let path = entry.path();
@@ -152,22 +144,18 @@ fn scan_directory_recursive(
 }
 
 fn scan_single_file(path: &Path, cutoff_timestamp: Option<i64>) -> Result<Option<ScannedFile>> {
-    let metadata = std::fs::metadata(path).map_err(|e| {
-        Error::General(format!(
-            "Failed to read metadata for '{}': {}",
-            path.display(),
-            e
-        ))
+    let metadata = std::fs::metadata(path).map_err(|e| Error::Storage {
+        message: format!("Failed to read metadata for '{}': {}", path.display(), e),
     })?;
 
     let mtime = metadata
         .modified()
-        .map_err(|e| {
-            Error::General(format!(
+        .map_err(|e| Error::Storage {
+            message: format!(
                 "Failed to get modification time for '{}': {}",
                 path.display(),
                 e
-            ))
+            ),
         })?
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

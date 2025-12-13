@@ -14,7 +14,8 @@ pub struct BranchArgs {
 #[derive(Subcommand, Debug)]
 pub enum BranchCommands {
     /// List all branches
-    List(BranchListArgs),
+    #[command(name = "ls")]
+    Ls(BranchListArgs),
 
     /// Create a new branch
     Create(BranchCreateArgs),
@@ -32,10 +33,6 @@ pub enum BranchCommands {
 /// Arguments for branch list
 #[derive(Parser, Debug)]
 pub struct BranchListArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
@@ -44,10 +41,6 @@ pub struct BranchListArgs {
 /// Arguments for branch create
 #[derive(Parser, Debug)]
 pub struct BranchCreateArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Name for the new branch
     pub name: String,
 
@@ -75,10 +68,6 @@ pub struct BranchCreateArgs {
 /// Arguments for branch delete
 #[derive(Parser, Debug)]
 pub struct BranchDeleteArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Name of branch to delete
     pub name: String,
 
@@ -94,10 +83,6 @@ pub struct BranchDeleteArgs {
 /// Arguments for branch fast-forward
 #[derive(Parser, Debug)]
 pub struct BranchFastForwardArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Name of branch to fast-forward
     pub name: String,
 
@@ -113,10 +98,6 @@ pub struct BranchFastForwardArgs {
 /// Arguments for branch rename
 #[derive(Parser, Debug)]
 pub struct BranchRenameArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Current branch name
     pub old_name: String,
 
@@ -140,7 +121,8 @@ pub struct TagArgs {
 #[derive(Subcommand, Debug)]
 pub enum TagCommands {
     /// List all tags
-    List(TagListArgs),
+    #[command(name = "ls")]
+    Ls(TagListArgs),
 
     /// Create a new tag
     Create(TagCreateArgs),
@@ -155,10 +137,6 @@ pub enum TagCommands {
 /// Arguments for tag list
 #[derive(Parser, Debug)]
 pub struct TagListArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]
     pub output: String,
@@ -167,10 +145,6 @@ pub struct TagListArgs {
 /// Arguments for tag create
 #[derive(Parser, Debug)]
 pub struct TagCreateArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Name for the new tag
     pub name: String,
 
@@ -190,10 +164,6 @@ pub struct TagCreateArgs {
 /// Arguments for tag delete
 #[derive(Parser, Debug)]
 pub struct TagDeleteArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Name of tag to delete
     pub name: String,
 
@@ -209,10 +179,6 @@ pub struct TagDeleteArgs {
 /// Arguments for tag rename
 #[derive(Parser, Debug)]
 pub struct TagRenameArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Current tag name
     pub old_name: String,
 

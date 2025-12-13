@@ -7,11 +7,16 @@
 //! 2. Table integrity check (with --table): Validates Iceberg table structure
 
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
+use comfy_table::{Cell, Color};
 
+use super::common::print_json;
+use crate::cli::output::create_styled_table;
 use crate::cli::parser::DoctorArgs;
-use crate::core::maintenance::{CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService};
+use crate::core::maintenance::{
+    CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
+};
 use crate::error::Result;
+use crate::utils::with_resource_limits;
 
 /// Handler for doctor command
 pub struct DoctorCommand;
@@ -19,11 +24,29 @@ pub struct DoctorCommand;
 impl DoctorCommand {
     /// Execute doctor command
     pub async fn execute(args: DoctorArgs) -> Result<()> {
-        use crate::config::ResolvePath;
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for doctor checks
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+    }
 
-        match args.path.resolve() {
-            Ok(path) => Self::execute_table_check(&args, &path).await,
-            Err(_) => Self::execute_environment_check(&args).await,
+    async fn execute_inner(args: DoctorArgs) -> Result<()> {
+        use crate::config::Config;
+
+        // Try to get a table from current context for table integrity check
+        let config = Config::load().ok();
+        let table_path = config.as_ref().and_then(|c| {
+            c.get_current_table()
+                .and_then(|_| c.get_current_context())
+                .and_then(|ctx| c.resolve_table(ctx).ok())
+                .map(|resolved| match resolved {
+                    crate::config::ResolvedTable::Path(path) => path,
+                    crate::config::ResolvedTable::Catalog { table_name, .. } => table_name,
+                })
+        });
+
+        match table_path {
+            Some(path) => Self::execute_table_check(&args, &path).await,
+            None => Self::execute_environment_check(&args).await,
         }
     }
 
@@ -37,7 +60,10 @@ impl DoctorCommand {
             println!();
         }
 
-        println!("{}", "icetable doctor - Environment Health Check".bold().cyan());
+        println!(
+            "{}",
+            "icetable doctor - Environment Health Check".bold().cyan()
+        );
         println!();
 
         let mut checks = Vec::new();
@@ -64,7 +90,10 @@ impl DoctorCommand {
         let is_json = args.output == "json";
 
         if !is_json {
-            println!("{}", "icetable doctor - Table Integrity Check".bold().cyan());
+            println!(
+                "{}",
+                "icetable doctor - Table Integrity Check".bold().cyan()
+            );
             println!("Table: {}", table_path.cyan());
             println!();
         }
@@ -85,9 +114,15 @@ impl DoctorCommand {
             let summary = CheckSummary::from_checks(&checks);
             println!();
             if summary.has_errors() {
-                println!("{}", "Table integrity issues found. Review the errors above.".red());
+                println!(
+                    "{}",
+                    "Table integrity issues found. Review the errors above.".red()
+                );
             } else if summary.has_warnings() {
-                println!("{}", "Table appears healthy but has warnings worth reviewing.".yellow());
+                println!(
+                    "{}",
+                    "Table appears healthy but has warnings worth reviewing.".yellow()
+                );
             } else {
                 println!("{}", "Table integrity verified. No issues found.".green());
             }
@@ -138,8 +173,14 @@ impl DoctorCommand {
             match config.resolve_table(context) {
                 Ok(resolved) => {
                     let msg = match resolved {
-                        crate::config::ResolvedTable::Path(path) => format!("{} -> {}", context, path),
-                        crate::config::ResolvedTable::Catalog { catalog_name, table_name, .. } => {
+                        crate::config::ResolvedTable::Path(path) => {
+                            format!("{} -> {}", context, path)
+                        }
+                        crate::config::ResolvedTable::Catalog {
+                            catalog_name,
+                            table_name,
+                            ..
+                        } => {
                             format!("{} -> {}.{}", context, catalog_name, table_name)
                         }
                     };
@@ -156,19 +197,28 @@ impl DoctorCommand {
         }
 
         if !config.tables.is_empty() {
-            checks.push(CheckResult::ok("Table aliases", format!("{} configured", config.tables.len())));
+            checks.push(CheckResult::ok(
+                "Table aliases",
+                format!("{} configured", config.tables.len()),
+            ));
         }
 
         if !config.catalogs.is_empty() {
-            checks.push(CheckResult::ok("Catalogs", format!("{} configured", config.catalogs.len())));
+            checks.push(CheckResult::ok(
+                "Catalogs",
+                format!("{} configured", config.catalogs.len()),
+            ));
         }
 
         // Validate specific catalog if requested
         if let Some(catalog_name) = &args.catalog {
             if let Some(catalog) = config.catalogs.get(catalog_name) {
-                checks.push(CheckResult::ok(format!("Catalog '{}'", catalog_name), "Found in config"));
+                checks.push(CheckResult::ok(
+                    format!("Catalog '{}'", catalog_name),
+                    "Found in config",
+                ));
 
-                match Self::test_catalog_connectivity(catalog_name, catalog).await {
+                match DoctorService::test_catalog_connectivity(catalog_name, catalog).await {
                     Ok(_) => {
                         checks.push(CheckResult::ok(
                             format!("Catalog '{}' connectivity", catalog_name),
@@ -195,51 +245,6 @@ impl DoctorCommand {
         checks
     }
 
-    /// Test catalog connectivity
-    async fn test_catalog_connectivity(name: &str, catalog: &crate::config::CatalogConfig) -> Result<()> {
-        use crate::core::CatalogType;
-        use crate::error::Error;
-
-        log::debug!("Testing connectivity to catalog: {}", name);
-
-        if catalog.catalog_type == CatalogType::Rest {
-            if catalog.uri.is_empty() {
-                return Err(Error::Configuration { message: "REST catalog URI is empty".to_string() });
-            }
-
-            if !catalog.uri.starts_with("http://") && !catalog.uri.starts_with("https://") {
-                return Err(Error::Configuration {
-                    message: format!("REST catalog URI should start with http:// or https://: {}", catalog.uri),
-                });
-            }
-
-            let client = reqwest::Client::new();
-            let config_url = format!("{}/v1/config", catalog.uri.trim_end_matches('/'));
-            match client
-                .get(&config_url)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    log::debug!("REST catalog {} is reachable", catalog.uri);
-                    Ok(())
-                }
-                Ok(resp) => Err(Error::Network {
-                    message: format!("REST catalog returned status {}", resp.status()),
-                    source: None,
-                }),
-                Err(e) => Err(Error::Network {
-                    message: format!("Cannot connect to REST catalog: {}", e),
-                    source: None,
-                }),
-            }
-        } else {
-            log::debug!("Catalog type {} configuration validated", catalog.catalog_type);
-            Ok(())
-        }
-    }
-
     /// Output results in appropriate format
     fn output_results(checks: &[CheckResult], output_format: &str) {
         if output_format == "json" {
@@ -261,28 +266,56 @@ impl DoctorCommand {
 
             if summary.has_errors() {
                 println!();
-                println!("{}", "Some checks failed. Review the suggestions above to fix issues.".yellow());
+                println!(
+                    "{}",
+                    "Some checks failed. Review the suggestions above to fix issues.".yellow()
+                );
             }
         }
     }
 
     /// Display results as a table
     fn display_table(checks: &[CheckResult]) {
-        let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
+        let mut table = create_styled_table();
 
         table.set_header(vec![
-            Cell::new("Status").fg(Color::Cyan).set_alignment(comfy_table::CellAlignment::Center),
-            Cell::new("Check").fg(Color::Cyan).set_alignment(comfy_table::CellAlignment::Center),
-            Cell::new("Result").fg(Color::Cyan).set_alignment(comfy_table::CellAlignment::Center),
+            Cell::new("Status")
+                .fg(Color::Cyan)
+                .set_alignment(comfy_table::CellAlignment::Center),
+            Cell::new("Check")
+                .fg(Color::Cyan)
+                .set_alignment(comfy_table::CellAlignment::Center),
+            Cell::new("Result")
+                .fg(Color::Cyan)
+                .set_alignment(comfy_table::CellAlignment::Center),
         ]);
 
         for check in checks {
             let (symbol, color) = match check.status {
-                CheckStatus::Ok => ("✓".green().to_string(), Color::Rgb { r: 80, g: 200, b: 120 }),
-                CheckStatus::Warning => ("⚠".yellow().to_string(), Color::Rgb { r: 220, g: 180, b: 60 }),
-                CheckStatus::Error => ("✗".red().to_string(), Color::Rgb { r: 220, g: 90, b: 90 }),
+                CheckStatus::Ok => (
+                    "✓".green().to_string(),
+                    Color::Rgb {
+                        r: 80,
+                        g: 200,
+                        b: 120,
+                    },
+                ),
+                CheckStatus::Warning => (
+                    "⚠".yellow().to_string(),
+                    Color::Rgb {
+                        r: 220,
+                        g: 180,
+                        b: 60,
+                    },
+                ),
+                CheckStatus::Error => (
+                    "✗".red().to_string(),
+                    Color::Rgb {
+                        r: 220,
+                        g: 90,
+                        b: 90,
+                    },
+                ),
             };
 
             table.add_row(vec![
@@ -339,6 +372,8 @@ impl DoctorCommand {
             }
         });
 
-        println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+        if let Err(e) = print_json(&json) {
+            eprintln!("Error serializing JSON: {}", e);
+        }
     }
 }

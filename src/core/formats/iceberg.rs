@@ -6,18 +6,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+use arrow::datatypes::Schema as ArrowSchema;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::StreamExt;
 use iceberg::TableIdent;
-use iceberg::io::FileIOBuilder;
 use iceberg::table::StaticTable;
 
 use crate::core::formats::table_utils;
 use crate::core::formats::traits::*;
-use crate::core::metadata::{DataFileInfo, IcebergSnapshotWriter};
-use crate::core::storage::{Storage, detect_storage_type};
+use crate::core::metadata::{DataFileInfo, SnapshotWriter};
+use crate::core::storage::{Storage, create_file_io, detect_storage_type};
 use crate::error::{Error, Result};
 
 /// Handler for Apache Iceberg tables
@@ -60,10 +59,7 @@ impl IcebergHandler {
             if metadata.snapshot_by_id(snapshot_id).is_some() {
                 return Ok(Some(snapshot_id));
             } else {
-                return Err(Error::General(format!(
-                    "Snapshot with ID {} not found in table",
-                    snapshot_id
-                )));
+                return Err(Error::SnapshotNotFound { snapshot_id });
             }
         }
 
@@ -86,10 +82,9 @@ impl IcebergHandler {
             if let Some(snapshot_id) = best_snapshot {
                 return Ok(Some(snapshot_id));
             } else {
-                return Err(Error::General(format!(
-                    "No snapshot found at or before timestamp '{}'",
-                    as_of
-                )));
+                return Err(Error::InvalidFormat {
+                    message: format!("No snapshot found at or before timestamp '{}'", as_of),
+                });
             }
         }
 
@@ -123,7 +118,9 @@ impl IcebergHandler {
         // For local paths, convert to absolute
         let table_path = if !is_cloud && !self.path.is_absolute() {
             std::env::current_dir()
-                .map_err(|e| Error::General(format!("Failed to get current dir: {}", e)))?
+                .map_err(|e| Error::Configuration {
+                    message: format!("Failed to get current dir: {}", e),
+                })?
                 .join(&self.path)
                 .to_string_lossy()
                 .to_string()
@@ -135,84 +132,24 @@ impl IcebergHandler {
         let metadata_location = self.find_metadata_location(&table_path).await?;
 
         // Create FileIO based on path scheme
-        let file_io = Self::create_file_io(&table_path)?;
+        let file_io = create_file_io(&table_path)?;
 
         // Create a table identifier (just for identification purposes)
-        let table_ident = TableIdent::from_strs(["iceberg", "table"])
-            .map_err(|e| Error::General(format!("Failed to create table identifier: {}", e)))?;
+        let table_ident =
+            TableIdent::from_strs(["iceberg", "table"]).map_err(|e| Error::InvalidFormat {
+                message: format!("Failed to create table identifier: {}", e),
+            })?;
 
         // Load the static table from the metadata file
         let table =
             StaticTable::from_metadata_file(&metadata_location, table_ident, file_io.clone())
                 .await
-                .map_err(|e| {
-                    Error::General(format!(
-                        "Failed to load Iceberg table from '{}': {}",
-                        metadata_location, e
-                    ))
+                .map_err(|e| Error::IcebergLoad {
+                    path: metadata_location.clone(),
+                    source: Box::new(e),
                 })?;
 
         Ok(table)
-    }
-
-    /// Create FileIO based on path scheme
-    fn create_file_io(path: &str) -> Result<iceberg::io::FileIO> {
-        if path.starts_with("s3://") || path.starts_with("s3a://") {
-            // For S3, build FileIO with s3 scheme
-            // Read credentials and config from environment
-            let mut builder = FileIOBuilder::new("s3");
-
-            // S3 credentials
-            if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                builder = builder.with_prop("s3.access-key-id", key);
-            }
-            if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                builder = builder.with_prop("s3.secret-access-key", secret);
-            }
-            if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
-                builder = builder.with_prop("s3.session-token", token);
-            }
-
-            // S3 endpoint (for MinIO or other S3-compatible storage)
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-                builder = builder.with_prop("s3.endpoint", endpoint);
-            }
-
-            // S3 region
-            if let Ok(region) = std::env::var("AWS_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else {
-                // Default region for MinIO/local S3
-                builder = builder.with_prop("s3.region", "us-east-1");
-            }
-
-            // Enable path-style access for MinIO
-            builder = builder.with_prop("s3.path-style-access", "true");
-
-            builder
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
-        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
-            // For GCS
-            FileIOBuilder::new("gcs")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
-        } else if path.starts_with("az://")
-            || path.starts_with("abfs://")
-            || path.starts_with("abfss://")
-        {
-            // For Azure
-            FileIOBuilder::new("azblob")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
-        } else {
-            // Local filesystem
-            FileIOBuilder::new_fs_io()
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
-        }
     }
 
     /// Find the metadata file location for an Iceberg table
@@ -225,73 +162,7 @@ impl IcebergHandler {
         }
 
         // Use the centralized find_latest_metadata utility
-        crate::core::utils::find_latest_metadata(table_path, &self.storage).await
-    }
-
-    /// Convert Iceberg schema to Arrow schema
-    fn iceberg_schema_to_arrow(iceberg_schema: &iceberg::spec::Schema) -> Result<ArrowSchema> {
-        // Get the struct representation of the schema
-        let struct_type = iceberg_schema.as_struct();
-
-        // Convert each field
-        let fields: Result<Vec<Field>> = struct_type
-            .fields()
-            .iter()
-            .map(|field| {
-                // Convert the iceberg field to an arrow field
-                // Note: Iceberg's `required` means NOT nullable, so we invert it
-                let data_type = Self::iceberg_type_to_arrow(&field.field_type)?;
-                Ok(Field::new(field.name.clone(), data_type, !field.required))
-            })
-            .collect();
-
-        Ok(ArrowSchema::new(Fields::from(fields?)))
-    }
-
-    /// Convert Iceberg type to Arrow DataType
-    fn iceberg_type_to_arrow(iceberg_type: &iceberg::spec::Type) -> Result<DataType> {
-        use iceberg::spec::PrimitiveType;
-
-        match iceberg_type {
-            iceberg::spec::Type::Primitive(prim) => match prim {
-                PrimitiveType::Boolean => Ok(DataType::Boolean),
-                PrimitiveType::Int => Ok(DataType::Int32),
-                PrimitiveType::Long => Ok(DataType::Int64),
-                PrimitiveType::Float => Ok(DataType::Float32),
-                PrimitiveType::Double => Ok(DataType::Float64),
-                PrimitiveType::Date => Ok(DataType::Date32),
-                PrimitiveType::Time => Ok(DataType::Time64(TimeUnit::Microsecond)),
-                PrimitiveType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-                PrimitiveType::Timestamptz => Ok(DataType::Timestamp(
-                    TimeUnit::Microsecond,
-                    Some("UTC".into()),
-                )),
-                PrimitiveType::TimestampNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-                PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(
-                    TimeUnit::Nanosecond,
-                    Some("UTC".into()),
-                )),
-                PrimitiveType::String => Ok(DataType::Utf8),
-                PrimitiveType::Uuid => Ok(DataType::FixedSizeBinary(16)),
-                PrimitiveType::Fixed(size) => Ok(DataType::FixedSizeBinary(*size as i32)),
-                PrimitiveType::Binary => Ok(DataType::Binary),
-                PrimitiveType::Decimal { precision, scale } => {
-                    Ok(DataType::Decimal128(*precision as u8, *scale as i8))
-                }
-            },
-            iceberg::spec::Type::Struct(_) => {
-                // For complex types, we'll return a placeholder for now
-                Err(Error::UnsupportedFeature {
-                    feature: "Nested struct types in Iceberg not yet fully supported".to_string(),
-                })
-            }
-            iceberg::spec::Type::List(_) => Err(Error::UnsupportedFeature {
-                feature: "List types in Iceberg not yet fully supported".to_string(),
-            }),
-            iceberg::spec::Type::Map(_) => Err(Error::UnsupportedFeature {
-                feature: "Map types in Iceberg not yet fully supported".to_string(),
-            }),
-        }
+        crate::utils::core::find_latest_metadata(table_path, &self.storage).await
     }
 }
 
@@ -333,7 +204,11 @@ impl FormatHandler for IcebergHandler {
         let metadata = table.metadata().clone();
         let iceberg_schema = metadata.current_schema();
 
-        let arrow_schema = Self::iceberg_schema_to_arrow(iceberg_schema)?;
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema).map_err(|e| {
+            Error::SchemaValidation {
+                message: format!("Failed to convert schema: {}", e),
+            }
+        })?;
         Ok(Arc::new(arrow_schema))
     }
 
@@ -424,22 +299,22 @@ impl FormatHandler for IcebergHandler {
         };
 
         // Execute the scan (build is now synchronous in 0.7)
-        let scan = scan_builder
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build Iceberg scan: {}", e)))?;
+        let scan = scan_builder.build().map_err(|e| Error::IcebergScan {
+            source: Box::new(e),
+        })?;
 
-        let stream = scan
-            .to_arrow()
-            .await
-            .map_err(|e| Error::General(format!("Failed to execute Iceberg scan: {}", e)))?;
+        let stream = scan.to_arrow().await.map_err(|e| Error::IcebergScan {
+            source: Box::new(e),
+        })?;
 
         // Read all batches from the stream
         let mut batches = Vec::new();
 
         let mut stream = std::pin::pin!(stream);
         while let Some(batch_result) = stream.next().await {
-            let batch =
-                batch_result.map_err(|e| Error::General(format!("Failed to read batch: {}", e)))?;
+            let batch = batch_result.map_err(|e| Error::IcebergScan {
+                source: Box::new(e),
+            })?;
             batches.push(batch);
         }
 
@@ -450,7 +325,7 @@ impl FormatHandler for IcebergHandler {
     }
 
     async fn read_statistics(&self) -> Result<Vec<ColumnStats>> {
-        use iceberg::spec::{ManifestContentType, ManifestList, ManifestStatus};
+        use iceberg::spec::{ManifestContentType, ManifestStatus};
         use std::collections::{HashMap, HashSet};
 
         let table = self.open_table().await?;
@@ -498,18 +373,14 @@ impl FormatHandler for IcebergHandler {
             None => return Ok(build_result(&null_counts, &min_values, &max_values)),
         };
 
-        let file_io = Self::create_file_io(&self.path.to_string_lossy())?;
+        let file_io = create_file_io(&self.path.to_string_lossy())?;
 
-        let content = file_io
-            .new_input(current_snapshot.manifest_list())
-            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-            .read()
+        let manifest_list = current_snapshot
+            .load_manifest_list(&file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
-
-        let manifest_list =
-            ManifestList::parse_with_version(&content, metadata.format_version())
-                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to load manifest list: {}", e),
+            })?;
 
         // Filter to data manifests only
         let data_entries: Vec<_> = manifest_list
@@ -635,7 +506,9 @@ impl FormatHandler for IcebergHandler {
             self.path.clone()
         } else {
             std::env::current_dir()
-                .map_err(|e| Error::General(format!("Failed to get current dir: {}", e)))?
+                .map_err(|e| Error::Configuration {
+                    message: format!("Failed to get current dir: {}", e),
+                })?
                 .join(&self.path)
         };
         let table_path = abs_path.to_string_lossy().to_string();
@@ -646,8 +519,9 @@ impl FormatHandler for IcebergHandler {
 
         // Ensure data directory exists
         let data_dir = format!("{}/data", table_path);
-        std::fs::create_dir_all(&data_dir)
-            .map_err(|e| Error::General(format!("Failed to create data dir: {}", e)))?;
+        std::fs::create_dir_all(&data_dir).map_err(|e| Error::Storage {
+            message: format!("Failed to create data dir: {}", e),
+        })?;
 
         // Write parquet file with unique ID
         let timestamp_nanos = std::time::SystemTime::now()
@@ -680,30 +554,35 @@ impl FormatHandler for IcebergHandler {
         let schema = Arc::new(arrow::datatypes::Schema::new(fields_with_ids));
 
         // Write batches to parquet
-        let file = File::create(&parquet_path)
-            .map_err(|e| Error::General(format!("Failed to create parquet file: {}", e)))?;
+        let file = File::create(&parquet_path).map_err(|e| Error::Storage {
+            message: format!("Failed to create parquet file: {}", e),
+        })?;
         let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
-            .map_err(|e| Error::General(format!("Failed to create parquet writer: {}", e)))?;
+        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).map_err(|e| {
+            Error::Metadata {
+                message: format!("Failed to create parquet writer: {}", e),
+            }
+        })?;
         for batch in &data {
-            writer.write(batch)
-                .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
+            writer.write(batch).map_err(|e| Error::Metadata {
+                message: format!("Failed to write batch: {}", e),
+            })?;
         }
-        writer.close()
-            .map_err(|e| Error::General(format!("Failed to close parquet writer: {}", e)))?;
+        writer.close().map_err(|e| Error::Metadata {
+            message: format!("Failed to close parquet writer: {}", e),
+        })?;
 
         let total_rows: u64 = data.iter().map(|b| b.num_rows() as u64).sum();
         let file_size = std::fs::metadata(&parquet_path)
-            .map_err(|e| Error::General(format!("Failed to get file size: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to get file size: {}", e),
+            })?
             .len();
 
-        // Use IcebergSnapshotWriter for manifest/snapshot/metadata operations
-        let file_io = Self::create_file_io(&table_path)?;
-        let snapshot_writer = IcebergSnapshotWriter::new(
-            table_path.clone(),
-            file_io,
-            self.storage.clone(),
-        );
+        // Use SnapshotWriter for manifest/snapshot/metadata operations
+        let file_io = create_file_io(&table_path)?;
+        let snapshot_writer =
+            SnapshotWriter::with_storage(table_path.clone(), file_io, self.storage.clone());
 
         // Create DataFileInfo
         let data_file_info = DataFileInfo {
@@ -727,10 +606,22 @@ impl FormatHandler for IcebergHandler {
 
         // Write manifest and manifest list
         let manifest_file = snapshot_writer
-            .write_manifest(&[data_file], snapshot_id, sequence_number, &old_metadata, timestamp_nanos)
+            .write_manifest(
+                &[data_file],
+                snapshot_id,
+                sequence_number,
+                &old_metadata,
+                timestamp_nanos,
+            )
             .await?;
         let manifest_list_path = snapshot_writer
-            .write_manifest_list(manifest_file, snapshot_id, parent_snapshot_id, sequence_number, timestamp_nanos)
+            .write_manifest_list(
+                manifest_file,
+                snapshot_id,
+                parent_snapshot_id,
+                sequence_number,
+                timestamp_nanos,
+            )
             .await?;
 
         // Build summary
@@ -763,7 +654,9 @@ impl FormatHandler for IcebergHandler {
             snapshot,
             &current_metadata_path,
         )?;
-        snapshot_writer.write_metadata_file(&new_metadata, &current_metadata_path).await?;
+        snapshot_writer
+            .write_metadata_file(&new_metadata, &current_metadata_path)
+            .await?;
 
         Ok(())
     }

@@ -1,37 +1,31 @@
 //! Import command implementation
 //!
 //! Imports data from external sources (Delta Lake, Parquet files) into Iceberg tables.
+//! This is a thin wrapper that delegates to ImportService in core.
 
 use colored::Colorize;
 
-#[cfg(feature = "delta")]
-use crate::cli::parser::ImportDeltaArgs;
-use crate::cli::parser::ImportParquetArgs;
-use crate::core::storage::{ObjectMeta, ObjectStoreExt, Storage};
+use super::common::{print_dry_run_header, resolve_table};
+use crate::cli::parser::{CliTableContext, ImportDeltaArgs, ImportParquetArgs};
+use crate::core::extract_filename;
+use crate::core::format_bytes;
+use crate::core::operations::{ImportConfig, ImportService};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::error::{Error, Result};
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
+use crate::utils::with_resource_limits;
 
 /// Handler for import commands
 pub struct ImportCommand;
 
 impl ImportCommand {
     /// Import from Delta Lake table
-    #[cfg(feature = "delta")]
-    pub async fn delta(args: ImportDeltaArgs) -> Result<()> {
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: Delta metadata + file lists
-                let estimated_memory = 128 * 1024 * 1024; // 128MB for Delta operations
-                track_memory_usage(estimated_memory)?;
-                
-                Self::delta_inner(args).await
-            }).await
-        }).await
+    pub async fn delta(args: ImportDeltaArgs, ctx: &CliTableContext) -> Result<()> {
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for Delta operations
+        with_resource_limits(ESTIMATED_MEMORY, Self::delta_inner(args, ctx)).await
     }
-    
-    #[cfg(feature = "delta")]
-    async fn delta_inner(args: ImportDeltaArgs) -> Result<()> {
+
+    async fn delta_inner(args: ImportDeltaArgs, ctx: &CliTableContext) -> Result<()> {
         use deltalake::DeltaTableBuilder;
 
         println!(
@@ -50,19 +44,23 @@ impl ImportCommand {
         let delta_table = DeltaTableBuilder::from_uri(&args.source)
             .load()
             .await
-            .map_err(|e| Error::General(format!("Failed to load Delta table: {}", e)))?;
+            .map_err(|e| Error::TableNotFound {
+                path: format!("{} (Delta error: {})", args.source, e),
+            })?;
 
         let log_store = delta_table.log_store();
-        let snapshot = delta_table
-            .snapshot()
-            .map_err(|e| Error::General(format!("Failed to get Delta snapshot: {}", e)))?;
+        let snapshot = delta_table.snapshot().map_err(|e| Error::Metadata {
+            message: format!("Failed to get Delta snapshot: {}", e),
+        })?;
 
         // Get schema and files from Delta
         let schema = snapshot.schema();
         let files = snapshot
             .file_actions(log_store.as_ref())
             .await
-            .map_err(|e| Error::General(format!("Failed to get Delta files: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to get Delta files: {}", e),
+            })?;
 
         let total_files = files.len();
         let total_bytes: i64 = files.iter().map(|f| f.size).sum();
@@ -74,15 +72,11 @@ impl ImportCommand {
             schema.fields().len().to_string().cyan()
         );
         println!("  Data files:     {}", total_files.to_string().cyan());
-        println!(
-            "  Total size:     {}",
-            crate::core::format_bytes(total_bytes as u64)
-        );
+        println!("  Total size:     {}", format_bytes(total_bytes as u64));
 
         if args.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-            println!();
+            print_dry_run_header();
             println!("Schema:");
             for field in schema.fields() {
                 println!("  {} ({})", field.name().cyan(), field.data_type());
@@ -90,13 +84,8 @@ impl ImportCommand {
             println!();
             println!("Files to import:");
             for (i, file) in files.iter().take(10).enumerate() {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-                println!(
-                    "  {}. {} ({})",
-                    i + 1,
-                    name,
-                    crate::core::format_bytes(file.size)
-                );
+                let name = extract_filename(&file.path);
+                println!("  {}. {} ({})", i + 1, name, format_bytes(file.size as u64));
             }
             if total_files > 10 {
                 println!("  ... and {} more files", total_files - 10);
@@ -104,98 +93,47 @@ impl ImportCommand {
             return Ok(());
         }
 
-        // Create/load Iceberg table and import data
-        Self::import_to_iceberg(&args.target, &args.source, &files, args.name.as_deref()).await?;
+        // Resolve target table and create metadata service with catalog context
+        let resolution = resolve_table(&Some(args.target.clone()), ctx.catalog_config.as_ref())
+            .await
+            .map_err(|e| Error::TableNotFound {
+                path: format!(
+                    "{} ({}). Use 'icetable init iceberg {}' first.",
+                    args.target, e, args.target
+                ),
+            })?;
+        let metadata_service = resolution
+            .to_writable_service(ctx.catalog_config.as_ref(), None)
+            .await?;
+
+        // Delegate to ImportService
+        let config = ImportConfig {
+            source: "delta-import".to_string(),
+        };
+        let service = ImportService::with_config(config);
+        let result = service
+            .import_delta(&metadata_service, &args.source, &files)
+            .await?;
 
         println!();
         println!("{}", "Import complete!".green().bold());
         println!(
             "Imported {} files ({}) from Delta to Iceberg",
-            total_files,
-            crate::core::format_bytes(total_bytes as u64)
+            result.files_imported,
+            format_bytes(result.bytes_imported)
         );
 
         Ok(())
     }
 
-    /// Helper to import files into Iceberg table
-    #[cfg(feature = "delta")]
-    async fn import_to_iceberg(
-        target_path: &str,
-        source_path: &str,
-        files: &[deltalake::kernel::Add],
-        _table_name: Option<&str>,
-    ) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
-        use std::collections::HashMap;
-
-        // Check if Iceberg table exists
-        let metadata_service = match IcebergMetadataService::new_async(target_path.to_string())
-            .await
-        {
-            Ok(service) => service,
-            Err(_) => {
-                // Table doesn't exist - create it
-                return Err(Error::General(format!(
-                    "Target Iceberg table does not exist at '{}'. Use 'icetable init iceberg {}' first.",
-                    target_path, target_path
-                )));
-            }
-        };
-
-        // Build data file changes
-        let mut changes = crate::core::metadata::DataFileChanges::new();
-
-        for file in files {
-            // Construct the source file path
-            let file_path = if file.path.starts_with("s3://") || file.path.starts_with('/') {
-                file.path.clone()
-            } else {
-                format!("{}/{}", source_path.trim_end_matches('/'), file.path)
-            };
-
-            changes.added.push(crate::core::metadata::DataFileInfo {
-                path: file_path,
-                size: file.size as u64,
-                record_count: file
-                    .stats
-                    .as_ref()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                    .and_then(|v| v.get("numRecords").and_then(|n| n.as_u64()))
-                    .unwrap_or(0),
-                partition: HashMap::new(),
-            });
-        }
-
-        // Write snapshot
-        use crate::core::metadata::{MetadataService, OperationType};
-        let mut summary = HashMap::new();
-        summary.insert("source".to_string(), "delta-import".to_string());
-
-        metadata_service
-            .write_snapshot(changes, OperationType::Append, summary)
-            .await?;
-
-        Ok(())
-    }
-
     /// Import from Parquet files
-    pub async fn parquet(args: ImportParquetArgs) -> Result<()> {
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: file lists + parquet reading buffers
-                let estimated_memory = 256 * 1024 * 1024; // 256MB for Parquet operations
-                track_memory_usage(estimated_memory)?;
-                
-                Self::parquet_inner(args).await
-            }).await
-        }).await
+    pub async fn parquet(args: ImportParquetArgs, ctx: &CliTableContext) -> Result<()> {
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for Parquet operations
+        with_resource_limits(ESTIMATED_MEMORY, Self::parquet_inner(args, ctx)).await
     }
-    
-    async fn parquet_inner(args: ImportParquetArgs) -> Result<()> {
-        use crate::core::storage::create_object_store;
 
+    async fn parquet_inner(args: ImportParquetArgs, ctx: &CliTableContext) -> Result<()> {
         println!(
             "{} Parquet files from {} to Iceberg at {}",
             if args.dry_run {
@@ -221,7 +159,7 @@ impl ImportCommand {
             .iter()
             .filter(|obj| {
                 let path_str = obj.location.to_string();
-                let name = path_str.rsplit('/').next().unwrap_or(&path_str);
+                let name = extract_filename(&path_str);
                 if name.ends_with(".parquet") {
                     // Simple glob matching: *.parquet matches all, **/*.parquet matches all
                     if pattern == "*.parquet" || pattern == "**/*.parquet" {
@@ -236,10 +174,12 @@ impl ImportCommand {
             .collect();
 
         if parquet_files.is_empty() {
-            return Err(Error::General(format!(
-                "No Parquet files found matching pattern '{}' at '{}'",
-                args.pattern, args.source
-            )));
+            return Err(Error::FileNotFound {
+                path: std::path::PathBuf::from(format!(
+                    "{} (no files matching pattern '{}')",
+                    args.source, args.pattern
+                )),
+            });
         }
 
         let total_files = parquet_files.len();
@@ -248,22 +188,16 @@ impl ImportCommand {
         println!();
         println!("Parquet Files Summary:");
         println!("  Files found:  {}", total_files.to_string().cyan());
-        println!("  Total size:   {}", crate::core::format_bytes(total_bytes));
+        println!("  Total size:   {}", format_bytes(total_bytes));
 
         if args.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-            println!();
+            print_dry_run_header();
             println!("Files to import:");
             for (i, file) in parquet_files.iter().take(10).enumerate() {
                 let path_str = file.location.to_string();
-                let name = path_str.rsplit('/').next().unwrap_or(&path_str);
-                println!(
-                    "  {}. {} ({})",
-                    i + 1,
-                    name,
-                    crate::core::format_bytes(file.size)
-                );
+                let name = extract_filename(&path_str);
+                println!("  {}. {} ({})", i + 1, name, format_bytes(file.size));
             }
             if total_files > 10 {
                 println!("  ... and {} more files", total_files - 10);
@@ -271,71 +205,35 @@ impl ImportCommand {
             return Ok(());
         }
 
-        // Import files into Iceberg
-        Self::import_parquet_to_iceberg(&args.target, &parquet_files, &storage).await?;
+        // Resolve target table and create metadata service with catalog context
+        let resolution = resolve_table(&Some(args.target.clone()), ctx.catalog_config.as_ref())
+            .await
+            .map_err(|e| Error::TableNotFound {
+                path: format!(
+                    "{} ({}). Use 'icetable init iceberg {}' first.",
+                    args.target, e, args.target
+                ),
+            })?;
+        let metadata_service = resolution
+            .to_writable_service(ctx.catalog_config.as_ref(), None)
+            .await?;
+
+        // Delegate to ImportService
+        let config = ImportConfig {
+            source: "parquet-import".to_string(),
+        };
+        let service = ImportService::with_config(config);
+        let result = service
+            .import_parquet(&metadata_service, &parquet_files, &storage)
+            .await?;
 
         println!();
         println!("{}", "Import complete!".green().bold());
         println!(
             "Imported {} Parquet files ({}) to Iceberg",
-            total_files,
-            crate::core::format_bytes(total_bytes)
+            result.files_imported,
+            format_bytes(result.bytes_imported)
         );
-
-        Ok(())
-    }
-
-    /// Helper to import parquet files into Iceberg table
-    async fn import_parquet_to_iceberg(
-        target_path: &str,
-        files: &[&ObjectMeta],
-        storage: &Storage,
-    ) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
-        use parquet::file::reader::FileReader;
-        use std::collections::HashMap;
-
-        // Load Iceberg table
-        let metadata_service = match IcebergMetadataService::new_async(target_path.to_string())
-            .await
-        {
-            Ok(service) => service,
-            Err(_) => {
-                return Err(Error::General(format!(
-                    "Target Iceberg table does not exist at '{}'. Use 'icetable init iceberg {}' first.",
-                    target_path, target_path
-                )));
-            }
-        };
-
-        // Build data file changes
-        let mut changes = crate::core::metadata::DataFileChanges::new();
-
-        for file in files {
-            // Read parquet file to get row count
-            let file_path = file.location.to_string();
-            let data = storage.get_bytes_str(&file_path).await?;
-            let reader = parquet::file::reader::SerializedFileReader::new(data)
-                .map_err(|e| Error::General(format!("Failed to read parquet: {}", e)))?;
-            let metadata = reader.metadata();
-            let row_count: i64 = metadata.row_groups().iter().map(|rg| rg.num_rows()).sum();
-
-            changes.added.push(crate::core::metadata::DataFileInfo {
-                path: file_path,
-                size: file.size,
-                record_count: row_count as u64,
-                partition: HashMap::new(),
-            });
-        }
-
-        // Write snapshot
-        use crate::core::metadata::{MetadataService, OperationType};
-        let mut summary = HashMap::new();
-        summary.insert("source".to_string(), "parquet-import".to_string());
-
-        metadata_service
-            .write_snapshot(changes, OperationType::Append, summary)
-            .await?;
 
         Ok(())
     }

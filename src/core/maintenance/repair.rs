@@ -1,20 +1,16 @@
 //! Repair service for fixing table metadata
 //!
-//! This service handles metadata repair operations for both Delta Lake and Iceberg tables
+//! This service handles metadata repair operations for both Iceberg tables
 //! by detecting orphan files and missing metadata entries.
 
 use std::collections::{HashMap, HashSet};
 
 use super::MaintenanceConfig;
+use crate::core::inspection::formatters::extract_filename;
 use crate::core::metadata::{
     DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
 };
 use crate::error::Result;
-
-/// Extract filename from a path (handles both local and cloud paths)
-fn extract_filename(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
-}
 
 /// Service for repairing table metadata
 pub struct RepairService {

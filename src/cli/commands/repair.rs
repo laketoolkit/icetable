@@ -1,18 +1,17 @@
 //! Repair command implementation
 //!
-//! Thin wrapper that delegates to RepairService for both Delta Lake and Iceberg tables.
+//! Thin wrapper that delegates to RepairService for Iceberg tables.
 
 use colored::Colorize;
 
-use super::common::resolve_table_path;
-use crate::cli::parser::RepairArgs;
+use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
+use crate::cli::parser::{CliTableContext, RepairArgs};
+use crate::core::extract_filename;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
-use crate::core::storage::create_object_store;
-use crate::core::utils::detect_table_format_with_storage;
-use crate::core::{CatalogConfig, TableFormat, format_bytes};
+use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
+use crate::utils::with_resource_limits;
 
 /// Repair options specifying what actions to take
 #[derive(Debug, Clone, Copy)]
@@ -28,44 +27,32 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(args: RepairArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
-        
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: storage scanning + metadata
-                let estimated_memory = 256 * 1024 * 1024; // 256MB for repair operations
-                track_memory_usage(estimated_memory)?;
-                
-                Self::repair_inner(table_path, args, catalog_config).await
-            }).await
-        }).await
-    }
-    
-    async fn repair_inner(table_path: String, mut args: RepairArgs, _catalog_config: Option<CatalogConfig>) -> Result<()> {
-        args.path = Some(table_path.clone());
+    pub async fn execute(args: RepairArgs, ctx: &CliTableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
+        let table_path = resolution.location();
 
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for repair operations
+        with_resource_limits(
+            ESTIMATED_MEMORY,
+            Self::repair_inner(table_path, args, &resolution, ctx.catalog_config.as_ref()),
+        )
+        .await
+    }
+
+    async fn repair_inner(
+        table_path: String,
+        args: RepairArgs,
+        resolution: &TableResolution,
+        cli_catalog: Option<&crate::core::CatalogConfig>,
+    ) -> Result<()> {
         // Validate at least one repair option is specified
         if !args.sync_metadata && !args.remove_missing && !args.add_orphans {
-            return Err(Error::General(
-                "Must specify at least one repair option: --sync-metadata, --remove-missing, or --add-orphans".to_string(),
-            ));
+            return Err(Error::MissingArgument {
+                argument: "repair option".to_string(),
+                description: "Must specify at least one of: --sync-metadata, --remove-missing, or --add-orphans".to_string(),
+            });
         }
-
-        // Create storage backend (supports local and cloud)
-        let storage = create_object_store(&table_path).await?;
-
-        // Detect table format (use explicit format if provided, otherwise auto-detect)
-        let format = if let Some(format_str) = &args.format {
-            match format_str.as_str() {
-                "delta" => TableFormat::Delta,
-                "iceberg" => TableFormat::Iceberg,
-                _ => TableFormat::Unknown,
-            }
-        } else {
-            detect_table_format_with_storage(&table_path, &storage).await
-        };
 
         // Determine repair options
         let options = RepairOptions {
@@ -81,27 +68,15 @@ impl RepairCommand {
 
         let service = RepairService::with_config(config);
 
-        match format {
-            TableFormat::Delta => Self::repair_delta(&args, &service, options).await,
-            TableFormat::Iceberg => {
-                Self::repair_iceberg(&args, &service, options, &table_path).await
-            }
-            TableFormat::Unknown => Err(Error::General(format!(
-                "Path '{}' is not a Delta Lake or Iceberg table",
-                table_path
-            ))),
-        }
-    }
-
-    /// Repair Delta Lake table - not supported, use Iceberg instead
-    async fn repair_delta(
-        _args: &RepairArgs,
-        _service: &RepairService,
-        _options: RepairOptions,
-    ) -> Result<()> {
-        Err(Error::UnsupportedFeature {
-            feature: "Delta Lake repair is not supported. Use 'icetable import delta' to convert to Iceberg.".to_string(),
-        })
+        Self::repair_iceberg(
+            &args,
+            &service,
+            options,
+            &table_path,
+            resolution,
+            cli_catalog,
+        )
+        .await
     }
 
     /// Repair Iceberg table
@@ -110,8 +85,9 @@ impl RepairCommand {
         service: &RepairService,
         options: RepairOptions,
         table_path: &str,
+        resolution: &TableResolution,
+        cli_catalog: Option<&CatalogConfig>,
     ) -> Result<()> {
-        use crate::core::metadata::IcebergMetadataService;
         println!(
             "{} Iceberg table at {}",
             if args.dry_run {
@@ -123,7 +99,8 @@ impl RepairCommand {
             table_path
         );
 
-        let metadata_service = IcebergMetadataService::new_async(table_path.to_string()).await?;
+        // Create metadata service using factory method - handles catalog vs path context automatically
+        let metadata_service = resolution.to_writable_service(cli_catalog, None).await?;
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;
@@ -212,18 +189,17 @@ impl RepairCommand {
 
         if args.dry_run {
             println!();
-            println!("{}", "DRY RUN - No changes made".yellow().bold());
-
+            print_dry_run_header();
             if options.remove_missing {
                 for file in &analysis.missing_files {
-                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    let name = extract_filename(&file.path);
                     println!("  Would remove reference: {}", name.red());
                 }
             }
 
             if options.add_orphans {
                 for file in &analysis.orphan_files {
-                    let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                    let name = extract_filename(&file.path);
                     println!(
                         "  Would add: {} ({})",
                         name.green(),

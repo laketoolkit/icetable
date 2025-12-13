@@ -78,7 +78,9 @@ impl BoxSection {
     /// Si la sección es lazy, se convierte a eager primero.
     pub fn item(mut self, item: BoxItem) -> Self {
         // Convert lazy to eager if needed
-        if let ItemSource::Lazy(iter) = std::mem::replace(&mut self.source, ItemSource::Eager(Vec::new())) {
+        if let ItemSource::Lazy(iter) =
+            std::mem::replace(&mut self.source, ItemSource::Eager(Vec::new()))
+        {
             self.source = ItemSource::Eager(iter.collect());
         }
         if let ItemSource::Eager(items) = &mut self.source {
@@ -92,7 +94,9 @@ impl BoxSection {
     /// Si la sección es lazy, se convierte a eager primero.
     pub fn items(mut self, new_items: impl IntoIterator<Item = BoxItem>) -> Self {
         // Convert lazy to eager if needed
-        if let ItemSource::Lazy(iter) = std::mem::replace(&mut self.source, ItemSource::Eager(Vec::new())) {
+        if let ItemSource::Lazy(iter) =
+            std::mem::replace(&mut self.source, ItemSource::Eager(Vec::new()))
+        {
             self.source = ItemSource::Eager(iter.collect());
         }
         if let ItemSource::Eager(items) = &mut self.source {

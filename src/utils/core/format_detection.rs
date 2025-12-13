@@ -7,7 +7,7 @@ use std::path::Path;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 
-use crate::core::storage::{create_object_store, Storage, StoragePath};
+use crate::core::storage::{Storage, create_object_store};
 
 /// Supported table formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,39 +50,34 @@ pub fn detect_table_format(path: &Path) -> TableFormat {
 /// Creates a storage backend and checks for format-specific directories.
 pub async fn detect_table_format_async(path: &str) -> TableFormat {
     match create_object_store(path).await {
-        Ok(storage) => detect_format(&storage).await,
+        Ok(storage) => detect_format(path, &storage).await,
         Err(_) => TableFormat::Unknown,
     }
 }
 
-/// Detect the table format using an existing storage (object_store)
+/// Detect the table format for a table path
 ///
 /// Checks for the presence of format-specific directories:
-/// - `_delta_log` for Delta Lake
+/// - `_delta_log` for Delta Lake (only for import purposes)
 /// - `metadata` for Iceberg
-pub async fn detect_format(storage: &Storage) -> TableFormat {
+pub async fn detect_format(table_path: &str, storage: &Storage) -> TableFormat {
+    use crate::core::storage::to_path;
+
+    let table_path = table_path.trim_end_matches('/');
+
     // Check for Delta Lake (_delta_log directory)
-    // The storage is already prefixed to the table path, so we just check relative paths
-    let delta_prefix = StoragePath::from("_delta_log");
+    let delta_prefix = to_path(&format!("{}/_delta_log/", table_path));
     if let Ok(Some(_)) = storage.list(Some(&delta_prefix)).try_next().await {
         return TableFormat::Delta;
     }
 
     // Check for Iceberg (metadata directory)
-    let iceberg_prefix = StoragePath::from("metadata");
+    let iceberg_prefix = to_path(&format!("{}/metadata/", table_path));
     if let Ok(Some(_)) = storage.list(Some(&iceberg_prefix)).try_next().await {
         return TableFormat::Iceberg;
     }
 
     TableFormat::Unknown
-}
-
-/// Legacy function for backward compatibility during migration
-pub async fn detect_table_format_with_storage(
-    _path: &str,
-    storage: &Storage,
-) -> TableFormat {
-    detect_format(storage).await
 }
 
 #[cfg(test)]

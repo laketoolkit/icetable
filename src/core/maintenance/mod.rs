@@ -2,7 +2,7 @@
 //!
 //! Provides high-level services for table maintenance operations.
 //! These services use the MetadataService trait to work with both
-//! Delta Lake and Iceberg tables through a unified interface.
+//! Iceberg tables through a unified interface.
 
 mod doctor;
 mod manifest;
@@ -16,19 +16,19 @@ mod vacuum;
 pub use doctor::{CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService};
 pub use manifest::{ManifestAnalysis, ManifestConfig, ManifestRewriteResult, ManifestService};
 pub use optimize::OptimizeService;
-pub use partition_filter::{matches_partition_filter, PartitionFilter};
+pub use partition_filter::{PartitionFilter, matches_partition_filter};
 pub use refs::{BranchRetention, RefConfig, RefResult, RefService};
 pub use repair::{RepairAnalysis, RepairService};
 pub use snapshot::{
-    CreateBackupResult, ExpireSnapshotsResult, ListSnapshotsResult, SetSnapshotResult,
-    SnapshotConfig, SnapshotDetails, SnapshotService,
+    CreateBackupResult, ExpireSnapshotsResult, LineageEntry, LineageResult, ListSnapshotsResult,
+    SetSnapshotResult, SnapshotConfig, SnapshotDetails, SnapshotService,
 };
 pub use vacuum::{OrphanFile, VacuumAnalysis, VacuumConfig, VacuumResult, VacuumService};
 
 use std::collections::HashMap;
 
 use crate::core::metadata::DataFileInfo;
-use crate::core::utils::sizes;
+use crate::utils::core::sizes;
 
 /// Common configuration for maintenance operations
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ impl Default for MaintenanceConfig {
             min_size: sizes::DEFAULT_MIN_SIZE,
             max_size: sizes::DEFAULT_MAX_SIZE,
             dry_run: false,
-            parallelism: 4,
+            parallelism: 16, // Higher default for I/O-bound operations
             partition_filter: None,
             max_files: None,
             max_bytes: None,

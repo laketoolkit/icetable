@@ -5,9 +5,9 @@ use clap::Parser;
 /// Arguments for generate command
 #[derive(Parser, Debug)]
 pub struct GenerateArgs {
-    /// Path where the table will be created (local or s3://, gs://, etc.)
-    #[arg(short = 't', long = "table")]
-    pub path: String,
+    /// Catalog name (uses current if not specified)
+    #[arg(short = 'c', long)]
+    pub catalog: Option<String>,
 
     /// Schema definition as "col:type,col:type" (e.g., "id:int,name:string,ts:timestamp")
     #[arg(long)]
@@ -17,12 +17,12 @@ pub struct GenerateArgs {
     #[arg(long, value_enum)]
     pub template: Option<SchemaTemplate>,
 
-    /// Number of rows to generate
+    /// Number of rows per file
     #[arg(long, default_value = "10000")]
     pub rows: u64,
 
     /// Number of data files to create
-    #[arg(long, default_value = "4")]
+    #[arg(long, default_value = "1")]
     pub files: u32,
 
     /// Partition columns (comma-separated, e.g., "year,month")
@@ -40,6 +40,10 @@ pub struct GenerateArgs {
     /// Dry run - show what would be generated without creating data
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Skip confirmation when appending to existing table
+    #[arg(short = 'f', long)]
+    pub force: bool,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]

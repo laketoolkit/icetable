@@ -14,7 +14,7 @@
 //!        ┌─────────────────────┼─────────────────────┐
 //!        │                     │                     │
 //! ┌──────┴──────┐      ┌───────┴───────┐     ┌───────┴───────┐
-//! │ParquetInsp. │      │ IcebergInsp.  │     │  DeltaInsp.   │
+//! │ParquetInsp. │      │ IcebergInsp.  │     │  IcebergInsp.   │
 //! └─────────────┘      └───────────────┘     └───────────────┘
 //! ```
 //!
@@ -66,7 +66,6 @@
 use crate::error::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Verbosity level for inspection output
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -198,7 +197,7 @@ pub enum LayoutInfo {
     RowGroupBased(RowGroupLayout),
     /// Batch-based layout (Arrow IPC)
     BatchBased(BatchLayout),
-    /// File-based layout (Delta Lake, Iceberg)
+    /// File-based layout (Iceberg, Iceberg)
     FileBased(FileBasedLayout),
     /// Unstructured layout (CSV, JSON)
     Unstructured(UnstructuredLayout),
@@ -265,7 +264,7 @@ pub struct BatchMetadata {
     pub body_length: u64,
 }
 
-/// File-based layout (Delta/Iceberg)
+/// File-based layout (Iceberg)
 #[derive(Debug, Clone)]
 pub struct FileBasedLayout {
     /// Number of data files
@@ -321,7 +320,7 @@ pub struct ColumnStatistics {
 ///
 /// This trait defines the interface that all format inspectors must implement.
 /// It enables icetable to work uniformly with different table formats (Parquet,
-/// Iceberg, Delta Lake, etc.) while allowing each implementation to handle
+/// Iceberg, Iceberg, etc.) while allowing each implementation to handle
 /// format-specific details.
 ///
 /// # Required Methods
@@ -362,8 +361,8 @@ pub struct ColumnStatistics {
 ///         "My Custom Format"
 ///     }
 ///
-///     fn can_inspect(&self, path: &Path) -> bool {
-///         path.extension().map_or(false, |ext| ext == "myformat")
+///     fn can_inspect(&self, path: &str) -> bool {
+///         path.ends_with(".myformat")
 ///     }
 /// }
 /// ```
@@ -388,7 +387,7 @@ pub trait PhysicalInspector: Send + Sync {
     /// Get format name
     ///
     /// Returns a human-readable name for the format (e.g., "Apache Iceberg",
-    /// "Apache Parquet", "Delta Lake").
+    /// "Apache Parquet", "Iceberg").
     fn format_name(&self) -> &str;
 
     /// Quick detection (fast, based on extension/magic bytes)
@@ -399,10 +398,10 @@ pub trait PhysicalInspector: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `path` - The path to check
+    /// * `path` - The path or URL to check (e.g., "s3://bucket/table" or "/local/path")
     ///
     /// # Returns
     ///
     /// `true` if this inspector can likely handle the given path
-    fn can_inspect(&self, path: &Path) -> bool;
+    fn can_inspect(&self, path: &str) -> bool;
 }

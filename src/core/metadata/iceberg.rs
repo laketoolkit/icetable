@@ -13,28 +13,30 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use iceberg::TableIdent;
-use iceberg::io::{FileIO, FileIOBuilder};
-use iceberg::spec::{DataFile, ManifestList, ManifestStatus, Summary, TableMetadata};
+use iceberg::io::FileIO;
+use iceberg::spec::{DataFile, Summary, TableMetadata};
 use iceberg::table::StaticTable;
 use object_store::ObjectStore;
 
 use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
-use crate::core::storage::{Storage, create_object_store, ObjectStoreExt};
-use crate::core::utils::{
-    extract_version_from_path, find_latest_metadata, iceberg_to_arrow_type,
-};
+use crate::core::storage::{ObjectStoreExt, Storage, create_file_io, create_object_store};
 use crate::error::{Error, Result};
+use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 
 use super::iceberg_operations;
 use super::iceberg_partition;
-use super::iceberg_writer::IcebergSnapshotWriter;
+use super::refs::{self, RefInfo};
+use super::refs_scanner;
+use super::writer::SnapshotWriter;
 
 /// Iceberg metadata service for transactional operations
 pub struct IcebergMetadataService {
     table_path: String,
     file_io: FileIO,
     storage: Storage,
+    /// The loaded Iceberg table (StaticTable for direct path access)
+    table: StaticTable,
     /// Target branch for operations (defaults to "main")
     target_branch: Option<String>,
     /// Optional committer for catalog-aware commits
@@ -42,15 +44,40 @@ pub struct IcebergMetadataService {
 }
 
 impl IcebergMetadataService {
+    /// Load StaticTable from path
+    async fn load_static_table(
+        table_path: &str,
+        file_io: &FileIO,
+        storage: &Storage,
+    ) -> Result<StaticTable> {
+        use iceberg::NamespaceIdent;
+
+        // find_latest_metadata returns full path (e.g., /path/to/table/metadata/00001-xxx.json)
+        let metadata_file = find_latest_metadata(table_path, storage).await?;
+
+        let table_ident = TableIdent::new(
+            NamespaceIdent::new("iceberg".to_string()),
+            "table".to_string(),
+        );
+
+        StaticTable::from_metadata_file(&metadata_file, table_ident, file_io.clone())
+            .await
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to load table: {}", e),
+            })
+    }
+
     /// Create a new Iceberg metadata service
     pub async fn new_async(table_path: String) -> Result<Self> {
-        let file_io = Self::create_file_io(&table_path)?;
+        let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
+        let table = Self::load_static_table(&table_path, &file_io, &storage).await?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
+            table,
             target_branch: None,
             committer: None,
         })
@@ -58,34 +85,104 @@ impl IcebergMetadataService {
 
     /// Create a new Iceberg metadata service targeting a specific branch
     pub async fn new_with_branch(table_path: String, branch: Option<String>) -> Result<Self> {
-        let file_io = Self::create_file_io(&table_path)?;
+        let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
+        let table = Self::load_static_table(&table_path, &file_io, &storage).await?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
+            table,
             target_branch: branch,
             committer: None,
         })
     }
 
-    /// Create a new Iceberg metadata service with a catalog committer
-    pub async fn new_with_committer(
-        table_path: String,
+    /// Create a new Iceberg metadata service from a catalog-loaded table
+    ///
+    /// This ensures we use the metadata from the catalog, not from storage,
+    /// which is required for proper catalog commit consistency.
+    pub async fn from_catalog_table(
+        catalog_table: &crate::core::IcebergTable,
         branch: Option<String>,
         committer: TableCommitter,
     ) -> Result<Self> {
-        let file_io = Self::create_file_io(&table_path)?;
+        let table_path = catalog_table.metadata().location().to_string();
+        let file_io = create_file_io(&table_path)?;
         let storage = create_object_store(&table_path).await?;
+
+        // Create StaticTable from the catalog table's metadata
+        // This ensures UUID and snapshot IDs match the catalog
+        let table_ident = catalog_table.identifier().clone();
+        let static_table = StaticTable::from_metadata(
+            catalog_table.metadata().clone(),
+            table_ident,
+            file_io.clone(),
+        )
+        .await
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to create static table from catalog metadata: {}", e),
+        })?;
 
         Ok(Self {
             table_path,
             file_io,
             storage,
+            table: static_table,
             target_branch: branch,
             committer: Some(committer),
         })
+    }
+
+    /// Create a read-only Iceberg metadata service from a catalog-loaded table
+    ///
+    /// Use this for read-only operations (analyze, inspect) that don't need
+    /// to commit changes. Uses catalog metadata for consistency but without a committer.
+    pub async fn from_catalog_table_readonly(
+        catalog_table: &crate::core::IcebergTable,
+    ) -> Result<Self> {
+        let table_path = catalog_table.metadata().location().to_string();
+        let file_io = create_file_io(&table_path)?;
+        let storage = create_object_store(&table_path).await?;
+
+        // Create StaticTable from the catalog table's metadata
+        let table_ident = catalog_table.identifier().clone();
+        let static_table = StaticTable::from_metadata(
+            catalog_table.metadata().clone(),
+            table_ident,
+            file_io.clone(),
+        )
+        .await
+        .map_err(|e| Error::Metadata {
+            message: format!("Failed to create static table from catalog metadata: {}", e),
+        })?;
+
+        Ok(Self {
+            table_path,
+            file_io,
+            storage,
+            table: static_table,
+            target_branch: None,
+            committer: None,
+        })
+    }
+
+    /// Refresh the table after modifications
+    pub async fn refresh(&mut self) -> Result<()> {
+        self.table =
+            Self::load_static_table(&self.table_path, &self.file_io, &self.storage).await?;
+        Ok(())
+    }
+
+    /// Get access to the underlying table
+    pub fn table(&self) -> &StaticTable {
+        &self.table
+    }
+
+    /// Get table metadata
+    pub fn metadata(&self) -> Arc<TableMetadata> {
+        self.table.metadata()
     }
 
     /// Get the target branch name (defaults to "main" if not set)
@@ -93,67 +190,14 @@ impl IcebergMetadataService {
         self.target_branch.as_deref().unwrap_or("main")
     }
 
-    /// Create FileIO based on path scheme
-    fn create_file_io(path: &str) -> Result<FileIO> {
-        if path.starts_with("s3://") || path.starts_with("s3a://") {
-            let mut builder = FileIOBuilder::new("s3");
-
-            if let Ok(key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                builder = builder.with_prop("s3.access-key-id", key);
-            }
-            if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                builder = builder.with_prop("s3.secret-access-key", secret);
-            }
-            if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
-                builder = builder.with_prop("s3.session-token", token);
-            }
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-                builder = builder.with_prop("s3.endpoint", endpoint);
-            }
-            if let Ok(region) = std::env::var("AWS_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            } else {
-                builder = builder.with_prop("s3.region", "us-east-1");
-            }
-            builder = builder.with_prop("s3.path-style-access", "true");
-
-            builder
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create S3 FileIO: {}", e)))
-        } else if path.starts_with("gs://") || path.starts_with("gcs://") {
-            FileIOBuilder::new("gcs")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create GCS FileIO: {}", e)))
-        } else if path.starts_with("az://")
-            || path.starts_with("abfs://")
-            || path.starts_with("abfss://")
-        {
-            FileIOBuilder::new("azblob")
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create Azure FileIO: {}", e)))
-        } else {
-            FileIOBuilder::new_fs_io()
-                .build()
-                .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
-        }
-    }
-
     /// Load current table metadata
+    ///
+    /// Returns the cached metadata from the StaticTable. Call `refresh()`
+    /// after modifications to get updated metadata.
     pub async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
         let metadata_file = find_latest_metadata(&self.table_path, &self.storage).await?;
         let version = extract_version_from_path(&metadata_file).unwrap_or(0);
-
-        let table_ident = TableIdent::from_strs(["iceberg", "table"])
-            .map_err(|e| Error::General(format!("Failed to create table ident: {}", e)))?;
-
-        let static_table =
-            StaticTable::from_metadata_file(&metadata_file, table_ident, self.file_io.clone())
-                .await
-                .map_err(|e| Error::General(format!("Failed to load table metadata: {}", e)))?;
-
-        Ok((static_table.metadata(), version))
+        Ok((self.table.metadata(), version))
     }
 
     /// Get the FileIO for loading manifests
@@ -166,9 +210,19 @@ impl IcebergMetadataService {
         &self.table_path
     }
 
+    /// Alias for table_path() - for convenience
+    pub fn path(&self) -> &str {
+        &self.table_path
+    }
+
     /// Get the storage backend
     pub fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    /// Get the committer if configured (for catalog-aware operations)
+    pub fn committer(&self) -> Option<TableCommitter> {
+        self.committer.clone()
     }
 
     /// Get current metadata file path
@@ -177,181 +231,82 @@ impl IcebergMetadataService {
     }
 
     /// List all references (branches and tags) from raw metadata JSON
-    /// Returns a list of (name, snapshot_id, ref_type) tuples
+    ///
+    /// Note: This parses raw JSON because iceberg 0.7 doesn't have a method
+    /// to list all refs (only `snapshot_for_ref()` for single lookups).
     pub async fn list_refs(&self) -> Result<Vec<RefInfo>> {
         let metadata_path = self.current_metadata_path().await?;
-        let content = self.storage.get_bytes_str(&metadata_path).await?;
-        let json: serde_json::Value = serde_json::from_slice(&content)
-            .map_err(|e| Error::General(format!("Failed to parse metadata JSON: {}", e)))?;
-
-        let mut refs = Vec::new();
-
-        // Parse refs from JSON
-        if let Some(refs_obj) = json.get("refs").and_then(|v| v.as_object()) {
-            for (name, ref_value) in refs_obj {
-                let snapshot_id = ref_value
-                    .get("snapshot-id")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-
-                let ref_type = ref_value
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                refs.push(RefInfo {
-                    name: name.clone(),
-                    snapshot_id,
-                    ref_type,
-                });
-            }
-        }
-
-        // Always include "main" pointing to current snapshot if not already present
-        if !refs.iter().any(|r| r.name == "main")
-            && let Some(current_id) = json.get("current-snapshot-id").and_then(|v| v.as_i64()) {
-                refs.push(RefInfo {
-                    name: "main".to_string(),
-                    snapshot_id: current_id,
-                    ref_type: "branch".to_string(),
-                });
-            }
-
-        Ok(refs)
+        refs::list_refs(&self.storage, &metadata_path).await
     }
 
-    /// Get snapshot ID for a branch name
-    /// Returns the snapshot ID that the branch points to, or error if branch doesn't exist
-    pub async fn get_branch_snapshot_id(&self, branch_name: &str) -> Result<i64> {
-        let refs = self.list_refs().await?;
-
-        refs.iter()
-            .find(|r| r.name == branch_name && r.ref_type == "branch")
-            .map(|r| r.snapshot_id)
-            .ok_or_else(|| Error::General(format!("Branch '{}' not found", branch_name)))
-    }
-
-    /// Get the snapshot ID for a branch name, or current snapshot ID if branch is None
+    /// Resolve branch name to snapshot ID using iceberg's native API
+    ///
+    /// If branch is None, returns current snapshot ID.
+    /// If branch is Some, uses iceberg's `snapshot_for_ref()` directly.
     pub async fn resolve_branch_snapshot_id(&self, branch: Option<&str>) -> Result<i64> {
-        if let Some(branch_name) = branch {
-            self.get_branch_snapshot_id(branch_name).await
-        } else {
-            let (metadata, _) = self.load_metadata().await?;
-            metadata.current_snapshot_id()
-                .ok_or_else(|| Error::General("No current snapshot".to_string()))
-        }
+        let (metadata, _) = self.load_metadata().await?;
+        refs::resolve_branch_snapshot_id(&metadata, branch)
     }
 
     /// List data files for a specific snapshot (by ID)
-    ///
-    /// This is the branch-aware version of list_data_files
-    pub async fn list_data_files_for_snapshot(&self, snapshot_id: i64) -> Result<Vec<DataFileInfo>> {
-        use std::collections::HashSet;
+    pub async fn list_data_files_for_snapshot(
+        &self,
+        snapshot_id: i64,
+    ) -> Result<Vec<DataFileInfo>> {
+        use futures::TryStreamExt;
 
-        let (metadata, _) = self.load_metadata().await?;
+        // Build scan targeting the specific snapshot
+        let scan = self
+            .table
+            .scan()
+            .snapshot_id(snapshot_id)
+            .build()
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build scan: {}", e),
+            })?;
 
-        // Find the specific snapshot
-        let snapshot = metadata.snapshots()
-            .find(|s| s.snapshot_id() == snapshot_id)
-            .ok_or_else(|| Error::General(format!("Snapshot {} not found", snapshot_id)))?;
-
-        // Read manifest list
-        let manifest_list_path = snapshot.manifest_list();
-        let manifest_list_content = self
-            .file_io
-            .new_input(manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-            .read()
+        // Use plan_files() to get all data files
+        let tasks: Vec<_> = scan
+            .plan_files()
             .await
-            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to plan files: {}", e),
+            })?
+            .try_collect()
+            .await
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to collect file tasks: {}", e),
+            })?;
 
-        let manifest_list =
-            ManifestList::parse_with_version(&manifest_list_content, metadata.format_version())
-                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
-
-        // Read all manifests and collect data files
-        let mut seen_paths: HashSet<String> = HashSet::new();
-        let mut deleted_paths: HashSet<String> = HashSet::new();
-        let mut data_files = Vec::new();
-
-        // First pass: collect all deleted paths
-        for manifest_file_entry in manifest_list.entries() {
-            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
-                continue;
-            }
-
-            let manifest = manifest_file_entry
-                .load_manifest(&self.file_io)
-                .await
-                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
-
-            for entry in manifest.entries() {
-                if entry.status() == ManifestStatus::Deleted {
-                    deleted_paths.insert(entry.data_file().file_path().to_string());
-                }
-            }
-        }
-
-        // Second pass: collect alive files
-        for manifest_file_entry in manifest_list.entries() {
-            if manifest_file_entry.content != iceberg::spec::ManifestContentType::Data {
-                continue;
-            }
-
-            let manifest = manifest_file_entry
-                .load_manifest(&self.file_io)
-                .await
-                .map_err(|e| Error::General(format!("Failed to load manifest: {}", e)))?;
-
-            for entry in manifest.entries() {
-                if entry.status() == ManifestStatus::Deleted {
-                    continue;
-                }
-
-                let data_file = entry.data_file();
-                let path = data_file.file_path().to_string();
-
-                if deleted_paths.contains(&path) || seen_paths.contains(&path) {
-                    continue;
-                }
-                seen_paths.insert(path.clone());
-
-                data_files.push(DataFileInfo {
-                    path,
-                    size: data_file.file_size_in_bytes(),
-                    record_count: data_file.record_count(),
-                    partition: iceberg_partition::extract_partition_from_path_static(
-                        data_file.file_path(),
-                    ),
-                });
-            }
-        }
+        // Convert FileScanTasks to DataFileInfo
+        let data_files = tasks
+            .iter()
+            .map(|task| DataFileInfo {
+                path: task.data_file_path().to_string(),
+                size: task.length,
+                record_count: task.record_count.unwrap_or(0),
+                partition: iceberg_partition::extract_partition_from_path_static(
+                    task.data_file_path(),
+                ),
+            })
+            .collect();
 
         Ok(data_files)
     }
 
     /// List data files for a branch (or current if None)
-    pub async fn list_data_files_for_branch(&self, branch: Option<&str>) -> Result<Vec<DataFileInfo>> {
+    pub async fn list_data_files_for_branch(
+        &self,
+        branch: Option<&str>,
+    ) -> Result<Vec<DataFileInfo>> {
         let snapshot_id = self.resolve_branch_snapshot_id(branch).await?;
         self.list_data_files_for_snapshot(snapshot_id).await
     }
 
     /// Get the branch name to use (defaults to "main" if None)
     pub fn branch_name_or_default(branch: Option<&str>) -> &str {
-        branch.unwrap_or("main")
+        refs::branch_name_or_default(branch)
     }
-}
-
-/// Information about a reference (branch or tag)
-#[derive(Debug, Clone)]
-pub struct RefInfo {
-    /// Name of the reference
-    pub name: String,
-    /// Snapshot ID the reference points to
-    pub snapshot_id: i64,
-    /// Type of reference: "branch" or "tag"
-    pub ref_type: String,
 }
 
 #[async_trait]
@@ -369,119 +324,48 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn list_data_files(&self) -> Result<Vec<DataFileInfo>> {
-        use futures::stream::{self, StreamExt};
-        use std::collections::HashSet;
+        use futures::TryStreamExt;
 
-        let (metadata, _) = self.load_metadata().await?;
+        // Build scan, optionally targeting a specific branch/snapshot
+        let mut scan_builder = self.table.scan();
 
-        // Use the target branch snapshot, or current snapshot if not set/not found
-        let current_snapshot = if let Some(ref branch) = self.target_branch {
-            match metadata.snapshot_for_ref(branch) {
-                Some(s) => s,
-                None => match metadata.current_snapshot() {
-                    Some(s) => s,
-                    None => return Ok(Vec::new()),
-                },
+        // If targeting a specific branch, get its snapshot ID
+        if let Some(ref branch) = self.target_branch {
+            let metadata = self.table.metadata();
+            if let Some(snapshot) = metadata.snapshot_for_ref(branch) {
+                scan_builder = scan_builder.snapshot_id(snapshot.snapshot_id());
             }
-        } else {
-            match metadata.current_snapshot() {
-                Some(s) => s,
-                None => return Ok(Vec::new()),
-            }
-        };
+        }
 
-        // Read manifest list
-        let manifest_list_path = current_snapshot.manifest_list();
-        let manifest_list_content = self
-            .file_io
-            .new_input(manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-            .read()
+        let scan = scan_builder.build().map_err(|e| Error::Metadata {
+            message: format!("Failed to build scan: {}", e),
+        })?;
+
+        // Use plan_files() to get all data files
+        let tasks: Vec<_> = scan
+            .plan_files()
             .await
-            .map_err(|e| Error::General(format!("Failed to read manifest list: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to plan files: {}", e),
+            })?
+            .try_collect()
+            .await
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to collect file tasks: {}", e),
+            })?;
 
-        let manifest_list =
-            ManifestList::parse_with_version(&manifest_list_content, metadata.format_version())
-                .map_err(|e| Error::General(format!("Failed to parse manifest list: {}", e)))?;
-
-        // Filter data manifests only
-        let data_manifests: Vec<_> = manifest_list
-            .entries()
+        // Convert FileScanTasks to DataFileInfo
+        let data_files = tasks
             .iter()
-            .filter(|e| e.content == iceberg::spec::ManifestContentType::Data)
-            .cloned()
+            .map(|task| DataFileInfo {
+                path: task.data_file_path().to_string(),
+                size: task.length,
+                record_count: task.record_count.unwrap_or(0),
+                partition: iceberg_partition::extract_partition_from_path_static(
+                    task.data_file_path(),
+                ),
+            })
             .collect();
-
-        if data_manifests.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Load manifests concurrently (limit to 10 at a time to control memory)
-        const CONCURRENCY: usize = 10;
-
-        // Single pass: load all manifests and collect entries
-        // We need to collect deleted paths first, then filter alive files
-        let mut deleted_paths: HashSet<String> = HashSet::new();
-        let mut alive_entries: Vec<(String, u64, u64, HashMap<String, String>)> = Vec::new();
-
-        // Process in batches to control memory
-        for chunk in data_manifests.chunks(CONCURRENCY) {
-            // Clone entries to own them in the async block
-            let chunk_owned: Vec<_> = chunk.to_vec();
-            let file_io = self.file_io.clone();
-
-            let results: Vec<_> = stream::iter(chunk_owned)
-                .map(|entry| {
-                    let file_io = file_io.clone();
-                    async move { entry.load_manifest(&file_io).await.ok() }
-                })
-                .buffer_unordered(CONCURRENCY)
-                .collect()
-                .await;
-
-            for manifest_opt in results {
-                let Some(manifest) = manifest_opt else { continue };
-
-                for entry in manifest.entries() {
-                    let path = entry.data_file().file_path().to_string();
-
-                    match entry.status() {
-                        ManifestStatus::Deleted => {
-                            deleted_paths.insert(path);
-                        }
-                        ManifestStatus::Added | ManifestStatus::Existing => {
-                            let data_file = entry.data_file();
-                            alive_entries.push((
-                                path,
-                                data_file.file_size_in_bytes(),
-                                data_file.record_count(),
-                                iceberg_partition::extract_partition_from_path_static(
-                                    data_file.file_path(),
-                                ),
-                            ));
-                        }
-                    }
-                }
-                // Manifest is dropped here, freeing memory
-            }
-        }
-
-        // Build final result, filtering deleted and deduplicating
-        let mut seen_paths: HashSet<String> = HashSet::new();
-        let mut data_files = Vec::with_capacity(alive_entries.len());
-
-        for (path, size, record_count, partition) in alive_entries {
-            if deleted_paths.contains(&path) || seen_paths.contains(&path) {
-                continue;
-            }
-            seen_paths.insert(path.clone());
-            data_files.push(DataFileInfo {
-                path,
-                size,
-                record_count,
-                partition,
-            });
-        }
 
         Ok(data_files)
     }
@@ -516,12 +400,20 @@ impl MetadataService for IcebergMetadataService {
         operation: OperationType,
         summary: HashMap<String, String>,
     ) -> Result<SnapshotInfo> {
+        // Write operations require a catalog for proper atomicity and concurrency control
+        let use_catalog = self.committer.as_ref().is_some_and(|c| c.uses_catalog());
+        if !use_catalog {
+            return Err(Error::CatalogRequiredForWrite {
+                operation: format!("{:?}", operation).to_lowercase(),
+            });
+        }
+
         // Load current metadata
         let (metadata, _current_version) = self.load_metadata().await?;
         let partition_spec = metadata.default_partition_spec();
         let schema_id = metadata.current_schema().schema_id();
-        // Create snapshot writer
-        let writer = IcebergSnapshotWriter::new(
+        // Create snapshot writer with storage for metadata operations
+        let writer = SnapshotWriter::with_storage(
             self.table_path.clone(),
             self.file_io.clone(),
             self.storage.clone(),
@@ -541,7 +433,7 @@ impl MetadataService for IcebergMetadataService {
 
         // Generate IDs
         let snapshot_id = chrono::Utc::now().timestamp_millis();
-        let timestamp_nanos = crate::core::utils::generate_unique_id();
+        let timestamp_nanos = crate::utils::core::generate_unique_id();
 
         // Get existing files (if replacing/repairing, we need to include unchanged files)
         let mut all_files: Vec<DataFile> = Vec::new();
@@ -628,31 +520,12 @@ impl MetadataService for IcebergMetadataService {
             schema_id,
         );
 
-        // Commit the snapshot - either via catalog or direct write
-        if let Some(ref committer) = self.committer {
-            if committer.uses_catalog() {
-                // Catalog mode: commit via REST API
-                committer
-                    .commit_add_snapshot(&metadata, snapshot, target_branch)
-                    .await?;
-            } else {
-                // Direct mode through committer (fallback)
-                let current_metadata_path = self.current_metadata_path().await?;
-                let new_metadata =
-                    writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
-                writer
-                    .write_metadata_file(&new_metadata, &current_metadata_path)
-                    .await?;
-            }
-        } else {
-            // No committer: direct write to storage
-            let current_metadata_path = self.current_metadata_path().await?;
-            let new_metadata =
-                writer.update_metadata_for_branch((*metadata).clone(), snapshot, &current_metadata_path, target_branch)?;
-            writer
-                .write_metadata_file(&new_metadata, &current_metadata_path)
-                .await?;
-        }
+        // Commit via catalog (required - validated at function entry)
+        self.committer
+            .as_ref()
+            .expect("catalog required - validated at entry")
+            .commit_add_snapshot(&metadata, snapshot, target_branch)
+            .await?;
 
         Ok(SnapshotInfo {
             id: snapshot_id,
@@ -703,115 +576,21 @@ impl MetadataService for IcebergMetadataService {
     }
 
     async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>> {
-        use futures::stream::{self, StreamExt};
-        use indicatif::{ProgressBar, ProgressStyle};
-        use std::collections::HashSet;
-
-        let (metadata, _) = self.load_metadata().await?;
-
-        // Collect unique manifest entries from ALL snapshots (deduplicated by path)
-        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
-        let mut manifest_entries: Vec<iceberg::spec::ManifestFile> = Vec::new();
-
-        for snapshot in metadata.snapshots() {
-            let manifest_list_path = snapshot.manifest_list();
-
-            let manifest_list_content = match self
-                .file_io
-                .new_input(manifest_list_path)
-                .map_err(|e| Error::General(format!("Failed to open manifest list: {}", e)))?
-                .read()
-                .await
-            {
-                Ok(content) => content,
-                Err(_) => continue,
-            };
-
-            let manifest_list = match ManifestList::parse_with_version(
-                &manifest_list_content,
-                metadata.format_version(),
-            ) {
-                Ok(ml) => ml,
-                Err(_) => continue,
-            };
-
-            for entry in manifest_list.entries() {
-                if entry.content == iceberg::spec::ManifestContentType::Data
-                    && !seen_manifest_paths.contains(&entry.manifest_path)
-                {
-                    seen_manifest_paths.insert(entry.manifest_path.clone());
-                    manifest_entries.push(entry.clone());
-                }
-            }
-        }
-
-        let total_manifests = manifest_entries.len();
-
-        let pb = ProgressBar::new(total_manifests as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  {spinner:.cyan} Scanning manifests {bar:30.dim.white/dim} {pos}/{len}")
-                .expect("hardcoded progress template is valid")
-                .progress_chars("━━╺"),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
-        // Process manifests concurrently in batches
-        const CONCURRENCY: usize = 10;
-        let mut all_alive: HashSet<String> = HashSet::new();
-        let mut processed = 0usize;
-
-        for chunk in manifest_entries.chunks(CONCURRENCY) {
-            // Clone entries to own them in the async block
-            let chunk_owned: Vec<_> = chunk.to_vec();
-            let file_io = self.file_io.clone();
-
-            let results: Vec<_> = stream::iter(chunk_owned)
-                .map(|entry| {
-                    let file_io = file_io.clone();
-                    async move { entry.load_manifest(&file_io).await.ok() }
-                })
-                .buffer_unordered(CONCURRENCY)
-                .collect()
-                .await;
-
-            for manifest_opt in results {
-                processed += 1;
-                let Some(manifest) = manifest_opt else { continue };
-
-                for entry in manifest.entries() {
-                    // For orphan detection: if a file appears as Added/Existing in ANY manifest,
-                    // it's referenced and not an orphan
-                    if entry.status() != ManifestStatus::Deleted {
-                        all_alive.insert(entry.data_file().file_path().to_string());
-                    }
-                }
-                // Manifest is dropped here, freeing memory
-            }
-            pb.set_position(processed as u64);
-        }
-
-        pb.finish_and_clear();
-
-        Ok(all_alive)
+        refs_scanner::scan_all_referenced_files(&self.table).await
     }
 
     async fn schema(&self) -> Result<Arc<arrow::datatypes::Schema>> {
         let (metadata, _) = self.load_metadata().await?;
         let iceberg_schema = metadata.current_schema();
 
-        // Convert Iceberg schema to Arrow schema
-        let fields: Vec<arrow::datatypes::Field> = iceberg_schema
-            .as_struct()
-            .fields()
-            .iter()
-            .map(|field| {
-                let arrow_type = iceberg_to_arrow_type(&field.field_type);
-                arrow::datatypes::Field::new(&field.name, arrow_type, !field.required)
-            })
-            .collect();
+        // Use iceberg's native schema conversion
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema).map_err(|e| {
+            Error::Metadata {
+                message: format!("Failed to convert schema: {}", e),
+            }
+        })?;
 
-        Ok(Arc::new(arrow::datatypes::Schema::new(fields)))
+        Ok(Arc::new(arrow_schema))
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {

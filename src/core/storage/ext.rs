@@ -43,9 +43,7 @@ pub trait ObjectStoreExt: ObjectStore {
 
     /// Get a range of bytes from an object
     async fn get_range_bytes(&self, path: &Path, start: u64, end: u64) -> Result<Bytes> {
-        self.get_range(path, start..end)
-            .await
-            .map_err(Error::from)
+        self.get_range(path, start..end).await.map_err(Error::from)
     }
 
     /// List all objects with a given prefix, collecting into a Vec
@@ -75,9 +73,44 @@ pub trait ObjectStoreExt: ObjectStore {
         self.delete(&to_path(path)).await.map_err(Error::from)
     }
 
+    /// Delete multiple objects in batch (more efficient for cloud storage)
+    ///
+    /// Uses the native bulk delete API when available (S3 supports up to 1000 per request).
+    /// Falls back to parallel individual deletes if bulk delete is not supported.
+    async fn delete_bulk(&self, paths: &[String]) -> Result<Vec<String>> {
+        use futures::stream::{self, StreamExt};
+
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Convert to Path objects
+        let object_paths: Vec<Path> = paths.iter().map(|p| to_path(p)).collect();
+
+        // Use bulk delete - object_store handles batching internally
+        let results = self
+            .delete_stream(stream::iter(object_paths).map(Ok).boxed())
+            .collect::<Vec<_>>()
+            .await;
+
+        // Collect errors
+        let errors: Vec<String> = results
+            .into_iter()
+            .zip(paths.iter())
+            .filter_map(|(result, path)| match result {
+                Ok(_) => None,
+                Err(e) => Some(format!("{}: {}", path, e)),
+            })
+            .collect();
+
+        Ok(errors)
+    }
+
     /// Copy an object (string path version)
     async fn copy_str(&self, from: &str, to: &str) -> Result<()> {
-        self.copy(&to_path(from), &to_path(to)).await.map_err(Error::from)
+        self.copy(&to_path(from), &to_path(to))
+            .await
+            .map_err(Error::from)
     }
 }
 
@@ -86,12 +119,26 @@ impl<T: ObjectStore> ObjectStoreExt for T {}
 
 /// Convert a string path to an object_store Path
 ///
-/// Handles both absolute paths (starting with /) and relative paths.
-/// For object stores with prefixes, the path should be relative to the prefix.
+/// Handles both relative paths and full URLs (s3://, gs://, az://, etc.).
+/// For full URLs, extracts the path component after the bucket.
 pub fn to_path(path: &str) -> Path {
-    // object_store::Path expects paths without leading slash for cloud storage
-    // but with leading slash for local filesystem
-    // PrefixStore handles this by stripping the prefix
+    // Handle full URLs (s3://bucket/path, gs://bucket/path, etc.)
+    if let Some(rest) = path
+        .strip_prefix("s3://")
+        .or_else(|| path.strip_prefix("s3a://"))
+        .or_else(|| path.strip_prefix("gs://"))
+        .or_else(|| path.strip_prefix("az://"))
+        .or_else(|| path.strip_prefix("abfs://"))
+        .or_else(|| path.strip_prefix("abfss://"))
+    {
+        // Skip the bucket name and get the rest of the path
+        if let Some(slash_pos) = rest.find('/') {
+            let relative_path = &rest[slash_pos + 1..];
+            return Path::from(relative_path);
+        }
+    }
+
+    // Strip leading slash for relative paths
     let normalized = path.trim_start_matches('/');
     Path::from(normalized)
 }
@@ -106,9 +153,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_path() {
+    fn test_to_path_relative() {
         assert_eq!(to_path("data/file.parquet").as_ref(), "data/file.parquet");
         assert_eq!(to_path("/data/file.parquet").as_ref(), "data/file.parquet");
+        assert_eq!(to_path("metadata/v1.json").as_ref(), "metadata/v1.json");
     }
 
     #[test]

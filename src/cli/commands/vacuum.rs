@@ -3,41 +3,40 @@
 //! Thin wrapper that delegates to VacuumService in core.
 
 use colored::Colorize;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::io;
 
-use super::common::resolve_table_path;
-use crate::cli::parser::VacuumArgs;
+use super::common::{TableResolution, create_spinner, print_json, resolve_table_from_context};
+use crate::cli::parser::{CliTableContext, VacuumArgs};
+use crate::core::extract_filename;
 use crate::core::format_bytes;
 use crate::core::maintenance::{VacuumConfig, VacuumResult, VacuumService};
-use crate::core::CatalogConfig;
 use crate::error::Result;
-use crate::utils::{track_memory_usage, with_cancellation, with_timeout};
+use crate::utils::with_resource_limits;
 
 /// Handler for vacuum command
 pub struct VacuumCommand;
 
 impl VacuumCommand {
     /// Execute vacuum command
-    pub async fn execute(args: VacuumArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        let table_path = resolve_table_path(&args.path, catalog_config.as_ref()).await?;
+    pub async fn execute(args: VacuumArgs, ctx: &CliTableContext) -> Result<()> {
+        let resolution = resolve_table_from_context(ctx).await?;
+        let table_path = resolution.location().to_string();
 
-        // Apply timeout and cancellation
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: manifests + file lists
-                let estimated_memory = 256 * 1024 * 1024; // 256MB for manifest scanning
-                track_memory_usage(estimated_memory)?;
-
-                Self::vacuum_iceberg(&table_path, &args).await
-            })
-            .await
-        })
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for manifest scanning
+        with_resource_limits(
+            ESTIMATED_MEMORY,
+            Self::vacuum_iceberg(&table_path, &args, &resolution),
+        )
         .await
     }
 
     /// Vacuum Iceberg table using VacuumService
-    async fn vacuum_iceberg(table_path: &str, args: &VacuumArgs) -> Result<()> {
+    async fn vacuum_iceberg(
+        table_path: &str,
+        args: &VacuumArgs,
+        resolution: &TableResolution,
+    ) -> Result<()> {
         // Print header
         Self::print_header(table_path, args);
 
@@ -55,17 +54,15 @@ impl VacuumCommand {
         let service = VacuumService::with_config(config);
 
         // Show progress while analyzing
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("hardcoded progress template is valid"),
-        );
-        pb.set_message("Scanning manifests...");
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        let pb = create_spinner("Scanning manifests");
+
+        // Create metadata service using factory method - handles catalog vs path context automatically
+        let metadata_service = resolution.to_readonly_service().await?;
 
         // Execute vacuum (analyze + optionally delete)
-        let result = service.execute(table_path).await?;
+        let result = service
+            .execute_with_service(table_path, Some(&metadata_service))
+            .await?;
 
         pb.finish_and_clear();
 
@@ -75,14 +72,16 @@ impl VacuumCommand {
 
     /// Print header message
     fn print_header(table_path: &str, args: &VacuumArgs) {
+        let action = if args.dry_run {
+            "Analyzing"
+        } else {
+            "Vacuuming"
+        };
+
         if let Some(ref branch) = args.branch {
             println!(
                 "{} Iceberg table at {} (branch: {})",
-                if args.dry_run {
-                    "Analyzing".yellow()
-                } else {
-                    "Vacuuming".green()
-                },
+                action,
                 table_path,
                 branch.cyan()
             );
@@ -91,15 +90,7 @@ impl VacuumCommand {
                 "Note: Vacuum always considers all snapshots for safety".dimmed()
             );
         } else {
-            println!(
-                "{} Iceberg table at {}",
-                if args.dry_run {
-                    "Analyzing".yellow()
-                } else {
-                    "Vacuuming".green()
-                },
-                table_path
-            );
+            println!("{} Iceberg table at {}", action, table_path);
         }
     }
 
@@ -109,45 +100,38 @@ impl VacuumCommand {
         if !args.dry_run && !args.force {
             println!();
             println!(
-                "{}",
-                "⚠ WARNING: This will delete orphan files".yellow().bold()
+                "{} {}",
+                "⚠".yellow(),
+                "This will permanently delete orphan files.".yellow().bold()
             );
-            println!("  Use --dry-run first to see what would be deleted");
-            println!("  Add --force to proceed without this warning");
             println!();
 
             // Ask for confirmation
-            println!(
-                "{}",
-                "Type 'yes' to continue, anything else to cancel:".cyan()
-            );
+            print!("Continue? [y/N] ");
+            io::Write::flush(&mut io::stdout()).ok();
+
             let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_err() || input.trim().to_lowercase() != "yes" {
-                println!("{}", "Vacuum cancelled".yellow());
+            if io::stdin().read_line(&mut input).is_err()
+                || !matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+            {
+                println!("{}", "Cancelled.".dimmed());
                 return Ok(false);
             }
-            println!();
-        } else if args.force && !args.dry_run {
-            println!();
-            println!(
-                "{}",
-                "⚠ WARNING: Running vacuum with --force".yellow().bold()
-            );
-            println!("  Orphan files will be deleted without confirmation");
             println!();
         }
 
         // Warning for low retention period
         if args.retention_hours < 24 && !args.force {
-            println!();
             println!(
-                "{}",
-                "⚠ WARNING: Retention period is less than 24 hours"
-                    .yellow()
-                    .bold()
+                "{} {} {}",
+                "⚠".yellow(),
+                "Retention period is less than 24 hours.".yellow(),
+                format!(
+                    "Files newer than {} hours will be kept.",
+                    args.retention_hours
+                )
+                .dimmed()
             );
-            println!("  Files newer than {} hours will be kept", args.retention_hours);
-            println!("  Add --force if you're sure this is safe");
             println!();
         }
 
@@ -207,11 +191,7 @@ impl VacuumCommand {
                 "bytes_to_free": analysis.orphan_bytes,
                 "retention_hours": analysis.retention_hours,
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json)
-                    .map_err(|e| crate::error::Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!();
             println!("{}", "Would delete the following files:".cyan());
@@ -219,7 +199,7 @@ impl VacuumCommand {
             // Show first 10 files, then summary if more
             let show_count = 10;
             for file in analysis.orphan_files.iter().take(show_count) {
-                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                let name = extract_filename(&file.path);
                 println!("  - {} ({})", name, format_bytes(file.size));
             }
 
@@ -227,7 +207,9 @@ impl VacuumCommand {
                 println!(
                     "  {} {} more files...",
                     "...and".dimmed(),
-                    (analysis.orphan_files.len() - show_count).to_string().dimmed()
+                    (analysis.orphan_files.len() - show_count)
+                        .to_string()
+                        .dimmed()
                 );
             }
 
@@ -255,11 +237,7 @@ impl VacuumCommand {
                 "bytes_freed": result.deleted_bytes,
                 "errors": result.errors.len(),
             });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json)
-                    .map_err(|e| crate::error::Error::General(e.to_string()))?
-            );
+            print_json(&json)?;
         } else {
             println!();
             println!(

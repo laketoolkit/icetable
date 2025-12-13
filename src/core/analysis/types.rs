@@ -139,3 +139,22 @@ impl TableAnalysis {
             || self.orphan_files.as_ref().is_some_and(|o| o.needs_action())
     }
 }
+
+/// Statistics for a specific partition
+///
+/// Used by the stats command to show detailed partition-level metrics.
+#[derive(Debug, Clone, Serialize)]
+pub struct PartitionStats {
+    /// Number of files in the partition
+    pub file_count: usize,
+    /// Total size in bytes
+    pub total_size: u64,
+    /// Average file size in bytes
+    pub avg_file_size: u64,
+    /// Number of small files (less than 128MB)
+    pub small_files: usize,
+    /// Percentage of small files
+    pub small_files_percent: f64,
+    /// Recommended target size for optimize
+    pub recommended_target_size: u64,
+}
