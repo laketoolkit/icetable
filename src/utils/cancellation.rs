@@ -30,8 +30,6 @@ fn get_cancellation_channel() -> &'static (watch::Sender<bool>, Mutex<watch::Rec
     })
 }
 
-
-
 /// Check if cancellation was requested
 pub fn is_cancelled() -> bool {
     CANCELLED.load(Ordering::SeqCst)
@@ -61,20 +59,21 @@ where
     F: Fn() + Send + Sync + 'static,
 {
     if let Some(handlers) = CLEANUP_HANDLERS.get()
-        && let Ok(mut handlers_lock) = handlers.lock() {
-            handlers_lock.push(Box::new(handler));
-        }
+        && let Ok(mut handlers_lock) = handlers.lock()
+    {
+        handlers_lock.push(Box::new(handler));
+    }
 }
 
 /// Create a temporary directory that will be cleaned up on cancellation
 pub fn temp_dir_with_cleanup() -> std::io::Result<tempfile::TempDir> {
     let temp_dir = tempfile::TempDir::new()?;
     let temp_dir_path = temp_dir.path().to_path_buf();
-    
+
     register_cleanup_handler(move || {
         let _ = std::fs::remove_dir_all(&temp_dir_path);
     });
-    
+
     Ok(temp_dir)
 }
 
@@ -156,13 +155,13 @@ pub async fn setup_signal_handlers() -> CancellationTokenSource {
     #[cfg(unix)]
     {
         tokio::spawn(async move {
-            let mut sigterm = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::terminate()
-            ).expect("Failed to setup SIGTERM handler");
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("Failed to setup SIGTERM handler");
 
-            let mut sigint = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::interrupt()
-            ).expect("Failed to setup SIGINT handler");
+            let mut sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                    .expect("Failed to setup SIGINT handler");
 
             tokio::select! {
                 _ = sigterm.recv() => {

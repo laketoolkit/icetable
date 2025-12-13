@@ -63,15 +63,17 @@
 
 // Internal modules (implementation details)
 pub mod cli;
-pub mod config;
 pub mod core;
 pub mod error;
 pub mod utils;
+
+// Re-export config from core for backward compatibility
+pub use core::config;
 
 // Stable public API (v1.x)
 pub mod v1;
 
 // Convenience re-exports for backward compatibility
 // Note: Prefer using v1::* for stable API
-pub use core::{FormatHandler, FormatHandlerFactory, create_object_store, ObjectStoreExt, Storage};
+pub use core::{FormatHandler, FormatHandlerFactory, ObjectStoreExt, Storage, create_object_store};
 pub use error::{Error, Result};

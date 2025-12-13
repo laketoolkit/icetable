@@ -4,8 +4,9 @@ use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment, Color, Table, presets};
+use comfy_table::{Cell, CellAlignment, Color};
 
+use super::formatter::create_styled_table;
 use crate::core::format_bytes;
 use crate::core::formats::{ColumnStats, FileMetadata};
 use crate::core::inspection::formatters::format_number;
@@ -251,8 +252,7 @@ impl InspectionFormatter {
 
     /// Format column statistics as a table
     pub fn format_statistics(stats: &[ColumnStats]) -> String {
-        let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL);
+        let mut table = create_styled_table();
 
         table.set_header(vec![
             "Column".to_string(),
@@ -302,8 +302,7 @@ impl InspectionFormatter {
 
     /// Format an Arrow RecordBatch as a table
     pub fn format_record_batch(batch: &RecordBatch) -> String {
-        let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL);
+        let mut table = create_styled_table();
 
         // Create header
         let schema = batch.schema();
@@ -323,7 +322,9 @@ impl InspectionFormatter {
                 let column = batch.column(col_idx);
                 let cell = match column.data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 => {
-                        if let Some(array) = column.as_any().downcast_ref::<arrow::array::StringArray>() {
+                        if let Some(array) =
+                            column.as_any().downcast_ref::<arrow::array::StringArray>()
+                        {
                             if array.is_null(row_idx) {
                                 Cell::new("NULL").fg(Color::Red)
                             } else {
@@ -338,29 +339,44 @@ impl InspectionFormatter {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<int>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<int>".to_string()),
+                            )
                         }
                     }
                     DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<uint>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<uint>".to_string()),
+                            )
                         }
                     }
                     DataType::Float32 | DataType::Float64 => {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<float>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<float>".to_string()),
+                            )
                         }
                     }
                     DataType::Boolean => {
-                        if let Some(array) = column.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                        if let Some(array) =
+                            column.as_any().downcast_ref::<arrow::array::BooleanArray>()
+                        {
                             if array.is_null(row_idx) {
                                 Cell::new("NULL").fg(Color::Red)
                             } else {
-                                Cell::new(if array.value(row_idx) { "true" } else { "false" })
+                                Cell::new(if array.value(row_idx) {
+                                    "true"
+                                } else {
+                                    "false"
+                                })
                             }
                         } else {
                             Cell::new("<bool>")
@@ -370,7 +386,10 @@ impl InspectionFormatter {
                         if column.is_null(row_idx) {
                             Cell::new("NULL").fg(Color::Red)
                         } else {
-                            Cell::new(arrow::util::display::array_value_to_string(column, row_idx).unwrap_or_else(|_| "<timestamp>".to_string()))
+                            Cell::new(
+                                arrow::util::display::array_value_to_string(column, row_idx)
+                                    .unwrap_or_else(|_| "<timestamp>".to_string()),
+                            )
                         }
                     }
                     _ => Cell::new(format!("{:?}", column.data_type())),

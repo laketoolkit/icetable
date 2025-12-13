@@ -13,11 +13,7 @@ use iceberg::spec::{
 
 use crate::core::catalog::TableCommitter;
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::{create_object_store, ObjectStoreExt};
-use crate::core::utils::{
-    extract_version_from_path, metadata_location_filename, new_metadata_location,
-    next_metadata_location,
-};
+use crate::core::storage::create_object_store;
 use crate::error::{Error, Result};
 
 /// Configuration for manifest rewrite operations
@@ -158,8 +154,7 @@ impl<'a> SnapshotBuilder<'a> {
             .iter()
             .filter(|m| m.content == ManifestContentType::Data)
             .map(|m| {
-                m.added_files_count.unwrap_or(0) as u64
-                    + m.existing_files_count.unwrap_or(0) as u64
+                m.added_files_count.unwrap_or(0) as u64 + m.existing_files_count.unwrap_or(0) as u64
             })
             .sum();
 
@@ -188,10 +183,7 @@ impl<'a> SnapshotBuilder<'a> {
         );
         summary_map.insert("total-data-files".to_string(), total_data_files.to_string());
         summary_map.insert("total-records".to_string(), total_rows.to_string());
-        summary_map.insert(
-            "total-files-size".to_string(),
-            total_files_size.to_string(),
-        );
+        summary_map.insert("total-files-size".to_string(), total_files_size.to_string());
         summary_map.insert("added-data-files".to_string(), "0".to_string());
         summary_map.insert("deleted-data-files".to_string(), "0".to_string());
         summary_map.insert("added-records".to_string(), "0".to_string());
@@ -233,33 +225,38 @@ impl ManifestService {
     }
 
     /// Analyze manifests for potential rewrite (dry-run mode)
-    pub async fn analyze(&self, table_path: &str) -> Result<ManifestAnalysis> {
-        let service = IcebergMetadataService::new_with_branch(
-            table_path.to_string(),
-            self.config.branch.clone(),
-        )
-        .await?;
-        let (metadata, _) = service.load_metadata().await?;
-        let file_io = service.file_io().clone();
+    ///
+    /// The metadata_service should be pre-configured with the appropriate branch
+    /// for catalog-aware operations.
+    pub async fn analyze(
+        &self,
+        metadata_service: &IcebergMetadataService,
+    ) -> Result<ManifestAnalysis> {
+        let (metadata, _) = metadata_service.load_metadata().await?;
+        let file_io = metadata_service.file_io().clone();
 
         let target_branch = self.config.branch.as_deref().unwrap_or("main");
 
         // Get snapshot for the target branch
         let current_snapshot = if target_branch == "main" {
-            metadata
-                .current_snapshot()
-                .ok_or_else(|| Error::General("No current snapshot found".to_string()))?
+            metadata.current_snapshot().ok_or_else(|| Error::Manifest {
+                message: "No current snapshot found".to_string(),
+            })?
         } else {
             metadata
                 .snapshot_for_ref(target_branch)
-                .ok_or_else(|| Error::General(format!("Branch '{}' not found", target_branch)))?
+                .ok_or_else(|| Error::Manifest {
+                    message: format!("Branch '{}' not found", target_branch),
+                })?
         };
 
         // Load manifest list
         let manifest_list = current_snapshot
             .load_manifest_list(&file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to load manifest list: {}", e),
+            })?;
 
         let manifest_entries = manifest_list.entries();
         let total_manifests = manifest_entries.len();
@@ -318,30 +315,30 @@ impl ManifestService {
     }
 
     /// Rewrite manifests for the given table
+    ///
+    /// The metadata_service should be pre-configured with the appropriate committer
+    /// for catalog-aware operations.
     pub async fn rewrite(
         &self,
-        table_path: &str,
-        committer: Option<TableCommitter>,
+        metadata_service: &IcebergMetadataService,
     ) -> Result<ManifestRewriteResult> {
-        let service = IcebergMetadataService::new_with_branch(
-            table_path.to_string(),
-            self.config.branch.clone(),
-        )
-        .await?;
-        let (metadata, _) = service.load_metadata().await?;
-        let file_io = service.file_io().clone();
+        let (metadata, _) = metadata_service.load_metadata().await?;
+        let file_io = metadata_service.file_io().clone();
+        let table_path = metadata_service.path();
 
         let target_branch = self.config.branch.as_deref().unwrap_or("main");
 
         // Get snapshot for the target branch
         let current_snapshot = if target_branch == "main" {
-            metadata
-                .current_snapshot()
-                .ok_or_else(|| Error::General("No current snapshot found".to_string()))?
+            metadata.current_snapshot().ok_or_else(|| Error::Manifest {
+                message: "No current snapshot found".to_string(),
+            })?
         } else {
             metadata
                 .snapshot_for_ref(target_branch)
-                .ok_or_else(|| Error::General(format!("Branch '{}' not found", target_branch)))?
+                .ok_or_else(|| Error::Manifest {
+                    message: format!("Branch '{}' not found", target_branch),
+                })?
         };
 
         let snapshot_id = current_snapshot.snapshot_id();
@@ -352,7 +349,9 @@ impl ManifestService {
         let manifest_list = current_snapshot
             .load_manifest_list(&file_io, &metadata)
             .await
-            .map_err(|e| Error::General(format!("Failed to load manifest list: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to load manifest list: {}", e),
+            })?;
 
         let manifest_entries = manifest_list.entries();
         let total_manifests = manifest_entries.len();
@@ -416,7 +415,9 @@ impl ManifestService {
 
             let output = file_io
                 .new_output(&manifest_path)
-                .map_err(|e| Error::General(format!("Failed to create manifest output: {}", e)))?;
+                .map_err(|e| Error::Manifest {
+                    message: format!("Failed to create manifest output: {}", e),
+                })?;
 
             let mut writer = ManifestWriterBuilder::new(
                 output,
@@ -435,13 +436,18 @@ impl ManifestService {
                         entry.sequence_number().unwrap_or(sequence_number),
                         Some(entry.sequence_number().unwrap_or(sequence_number)),
                     )
-                    .map_err(|e| Error::General(format!("Failed to add entry: {}", e)))?;
+                    .map_err(|e| Error::Manifest {
+                        message: format!("Failed to add entry: {}", e),
+                    })?;
             }
 
-            let manifest_file = writer
-                .write_manifest_file()
-                .await
-                .map_err(|e| Error::General(format!("Failed to write manifest: {}", e)))?;
+            let manifest_file =
+                writer
+                    .write_manifest_file()
+                    .await
+                    .map_err(|e| Error::Manifest {
+                        message: format!("Failed to write manifest: {}", e),
+                    })?;
 
             new_manifest_files.push(manifest_file);
         }
@@ -464,9 +470,12 @@ impl ManifestService {
         );
         let manifest_list_path = format!("{}/{}", metadata_dir, manifest_list_filename);
 
-        let manifest_list_output = file_io
-            .new_output(&manifest_list_path)
-            .map_err(|e| Error::General(format!("Failed to create manifest list output: {}", e)))?;
+        let manifest_list_output =
+            file_io
+                .new_output(&manifest_list_path)
+                .map_err(|e| Error::Manifest {
+                    message: format!("Failed to create manifest list output: {}", e),
+                })?;
 
         let mut manifest_list_writer = ManifestListWriter::v2(
             manifest_list_output,
@@ -477,11 +486,15 @@ impl ManifestService {
 
         manifest_list_writer
             .add_manifests(new_manifest_files.clone().into_iter())
-            .map_err(|e| Error::General(format!("Failed to add manifests: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to add manifests: {}", e),
+            })?;
         manifest_list_writer
             .close()
             .await
-            .map_err(|e| Error::General(format!("Failed to close manifest list writer: {}", e)))?;
+            .map_err(|e| Error::Manifest {
+                message: format!("Failed to close manifest list writer: {}", e),
+            })?;
 
         // Create new snapshot using builder
         let new_snapshot = SnapshotBuilder::new(new_snapshot_id, snapshot_id, sequence_number)
@@ -493,7 +506,7 @@ impl ManifestService {
             .build();
 
         // Commit the snapshot
-        let metadata_file_path = service.current_metadata_path().await?;
+        let metadata_file_path = metadata_service.current_metadata_path().await?;
 
         let ctx = CommitContext {
             table_path,
@@ -503,7 +516,7 @@ impl ManifestService {
             new_snapshot,
             target_branch,
             new_snapshot_id,
-            committer,
+            committer: metadata_service.committer(),
         };
         let new_version = self.commit_snapshot(ctx).await?;
 
@@ -535,7 +548,9 @@ impl ManifestService {
         let build_result = metadata_clone
             .into_builder(Some(ctx.metadata_file_path.to_string()))
             .add_snapshot(ctx.new_snapshot)
-            .map_err(|e| Error::General(format!("Failed to add snapshot: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to add snapshot: {}", e),
+            })?
             .set_ref(
                 ctx.target_branch,
                 SnapshotReference {
@@ -547,9 +562,13 @@ impl ManifestService {
                     },
                 },
             )
-            .map_err(|e| Error::General(format!("Failed to set ref: {}", e)))?
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to set ref: {}", e),
+            })?
             .build()
-            .map_err(|e| Error::General(format!("Failed to build metadata: {}", e)))?;
+            .map_err(|e| Error::Metadata {
+                message: format!("Failed to build metadata: {}", e),
+            })?;
 
         let new_metadata = build_result.metadata;
         self.write_metadata_direct(
@@ -565,28 +584,14 @@ impl ManifestService {
     async fn write_metadata_direct(
         &self,
         table_path: &str,
-        metadata_dir: &str,
-        metadata_file_path: &str,
+        _metadata_dir: &str,       // Kept for API compatibility
+        _metadata_file_path: &str, // Kept for API compatibility
         new_metadata: &TableMetadata,
     ) -> Result<u32> {
         let storage = create_object_store(table_path).await?;
-
-        let next_location = next_metadata_location(metadata_file_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version =
-            extract_version_from_path(&next_location.to_string()).unwrap_or(0) as u32;
-        let new_metadata_path =
-            format!("{}/{}", metadata_dir, metadata_location_filename(&next_location));
-
-        let new_metadata_bytes = serde_json::to_vec_pretty(new_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        storage
-            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
-            .await?;
-
-        Ok(new_version)
+        let result =
+            crate::utils::core::write_metadata_file(table_path, new_metadata, &storage).await?;
+        Ok(result.version as u32)
     }
 }
 

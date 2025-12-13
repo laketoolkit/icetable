@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_custom_transform_step() {
-        let custom = CustomTransformStep::new("test", |batch| Ok(batch));
+        let custom = CustomTransformStep::new("test", Ok);
         assert_eq!(custom.name(), "test");
     }
 }

@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use crate::core::storage::Storage;
-use crate::core::utils::{extract_version_from_path, find_latest_metadata};
 use crate::error::{Error, Result};
+use crate::utils::core::{extract_version_from_path, find_latest_metadata};
 
 /// Result of conflict detection
 #[derive(Debug)]
@@ -91,7 +91,6 @@ impl ConflictDetector {
 
         Ok(ConflictCheckResult::no_conflict(expected_version))
     }
-
 }
 
 /// Helper function to check for conflicts and return error if found
@@ -104,14 +103,12 @@ pub async fn check_and_fail_on_conflict(
     let result = detector.check_for_conflicts(expected_version).await?;
 
     if result.has_conflict {
-        return Err(Error::Conflict(
-            result.details.unwrap_or_else(|| {
-                format!(
-                    "Concurrent modification detected: expected v{}, found v{}",
-                    result.expected_version, result.current_version
-                )
-            }),
-        ));
+        return Err(Error::Conflict(result.details.unwrap_or_else(|| {
+            format!(
+                "Concurrent modification detected: expected v{}, found v{}",
+                result.expected_version, result.current_version
+            )
+        })));
     }
 
     Ok(())
@@ -132,8 +129,14 @@ mod tests {
             extract_version_from_path("/path/to/table/metadata/00123-uuid.metadata.json"),
             Some(123)
         );
-        assert_eq!(extract_version_from_path("00001-test.metadata.json"), Some(1));
-        assert_eq!(extract_version_from_path("00000-initial.metadata.json"), Some(0));
+        assert_eq!(
+            extract_version_from_path("00001-test.metadata.json"),
+            Some(1)
+        );
+        assert_eq!(
+            extract_version_from_path("00000-initial.metadata.json"),
+            Some(0)
+        );
         assert_eq!(extract_version_from_path("invalid"), None);
     }
 

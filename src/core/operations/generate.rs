@@ -3,6 +3,8 @@
 //! This module provides functionality to generate synthetic test data
 //! and create complete, valid Iceberg tables with proper manifests and snapshots
 //! for benchmarking and integration testing.
+//!
+//! Supports both creating new tables and appending data to existing tables.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,17 +16,42 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use futures::stream::{self, StreamExt};
+use iceberg::Catalog;
+use rayon::prelude::*;
+use iceberg::arrow::FieldMatchMode;
+use iceberg::io::FileIO;
+use iceberg::spec::{DataFileFormat, TableMetadata};
+use iceberg::table::Table;
+use iceberg::transaction::Transaction;
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::core::metadata::IcebergSnapshotWriter;
-use crate::core::storage::{Storage, create_object_store, ObjectStoreExt, to_path};
+use crate::core::metadata::{
+    DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType,
+};
+use crate::core::storage::{ObjectStoreExt, create_object_store, to_path};
 use crate::error::{Error, Result};
+use crate::utils::core::find_latest_metadata;
 use crate::utils::track_memory_usage;
 
-use iceberg::io::FileIOBuilder;
-use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct, Summary};
+/// Context for generating a single data file (used internally for parallel generation)
+struct FileGenerationContext {
+    schema: Arc<Schema>,
+    file_io: FileIO,
+    table_metadata: Arc<TableMetadata>,
+    iceberg_schema: Arc<iceberg::spec::Schema>,
+    partition_spec_id: i32,
+    unique_prefix: String,
+    writer_props: Arc<WriterProperties>,
+}
 
 /// Configuration for data generation
 #[derive(Debug, Clone)]
@@ -62,78 +89,403 @@ pub struct GenerateResult {
     pub metadata_path: String,
     /// Snapshot ID of the created snapshot
     pub snapshot_id: i64,
+    /// Whether this was an append to an existing table
+    pub appended: bool,
 }
 
-/// Information about a generated data file
+/// Information about an existing Iceberg table
 #[derive(Debug, Clone)]
-pub struct DataFileInfo {
-    /// Path to the data file
+pub struct ExistingTableInfo {
+    /// Path to the table
     pub path: String,
-    /// Size of the file in bytes
-    pub file_size: u64,
-    /// Number of records in the file
-    pub record_count: u64,
+    /// Number of existing snapshots
+    pub snapshot_count: usize,
+    /// Total existing data files
+    pub data_file_count: usize,
+    /// Total existing records
+    pub total_records: u64,
 }
 
 /// Operation for generating synthetic Iceberg tables
 pub struct GenerateOperation;
 
 impl GenerateOperation {
+    /// Check if an Iceberg table exists at the given path
+    ///
+    /// Returns Some(ExistingTableInfo) if a valid table exists, None otherwise.
+    pub async fn table_exists(path: &str) -> Option<ExistingTableInfo> {
+        let storage = create_object_store(path).await.ok()?;
+
+        // Try to find metadata file
+        if find_latest_metadata(path, &storage).await.is_err() {
+            return None;
+        }
+
+        // Table exists, try to load it to get stats
+        let metadata_service = IcebergMetadataService::new_async(path.to_string())
+            .await
+            .ok()?;
+        let snapshots = metadata_service.list_snapshots(None).await.ok()?;
+        let data_files = metadata_service.list_data_files().await.ok()?;
+
+        let total_records: u64 = data_files.iter().map(|f| f.record_count).sum();
+
+        Some(ExistingTableInfo {
+            path: path.to_string(),
+            snapshot_count: snapshots.len(),
+            data_file_count: data_files.len(),
+            total_records,
+        })
+    }
+
     /// Execute the generate operation - creates a complete valid Iceberg table
-    pub async fn execute(config: GenerateConfig) -> Result<GenerateResult> {
-        let storage = create_object_store(&config.path).await?;
+    ///
+    /// NOTE: This operation requires a catalog. Direct path writes are not supported.
+    pub async fn execute(_config: GenerateConfig) -> Result<GenerateResult> {
+        Err(Error::CatalogRequiredForWrite {
+            operation: "generate".to_string(),
+        })
+    }
+
+    /// Execute generate/append operation using an Iceberg catalog for commits.
+    ///
+    /// This is the recommended way to generate data as it properly integrates
+    /// with the catalog for atomic commits.
+    ///
+    /// File generation is parallelized for better performance.
+    pub async fn execute_with_catalog(
+        table: Table,
+        catalog: &dyn Catalog,
+        schema: Arc<Schema>,
+        rows: u64,
+        files: u32,
+        seed: u64,
+    ) -> Result<GenerateResult> {
+        use iceberg::transaction::ApplyTransactionAction;
+
+        let table_location = table.metadata().location().to_string();
+        let base_path = table_location.trim_end_matches('/').to_string();
+
+        let rows_per_file = (rows / files as u64).max(1);
+
+        // Get resources from table for writers
+        let file_io = table.file_io().clone();
+        let table_metadata = table.metadata().clone();
+        let partition_spec_id = table_metadata.default_partition_spec_id();
+        let iceberg_schema = table_metadata.current_schema().clone();
+
+        // Generate unique prefix for file names using timestamp
+        let timestamp_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after UNIX epoch")
+            .as_nanos();
+        let unique_prefix = format!("{:016x}", timestamp_nanos as u64);
+
+        // Pre-create shared writer properties
+        let writer_props = Arc::new(WriterProperties::default());
+
+        // Create shared context for file generation (all Arc to avoid cloning)
+        let ctx = Arc::new(FileGenerationContext {
+            schema,
+            file_io,
+            table_metadata: Arc::new(table_metadata),
+            iceberg_schema: Arc::new((*iceberg_schema).clone()),
+            partition_spec_id,
+            unique_prefix,
+            writer_props,
+        });
+
+        // Producer-consumer pattern with bounded channel for backpressure:
+        // - Producer (rayon): generates batches using all CPU cores
+        // - Consumer (tokio): writes to S3 with high concurrency
+        // Channel capacity limits memory usage (max ~64 batches in flight)
+
+        let channel_capacity = 64;
+        let (tx, rx) = tokio::sync::mpsc::channel::<(u32, RecordBatch)>(channel_capacity);
+
+        // Spawn producer thread (CPU-bound, uses rayon internally)
+        let schema_for_producer = ctx.schema.clone();
+        let producer = std::thread::spawn(move || {
+            // Generate file configs
+            let file_configs: Vec<_> = (0..files)
+                .map(|file_idx| {
+                    let file_rows = if file_idx == files - 1 {
+                        rows - (rows_per_file * (files - 1) as u64)
+                    } else {
+                        rows_per_file
+                    };
+                    (file_idx, file_rows, seed + file_idx as u64)
+                })
+                .collect();
+
+            // Generate batches in parallel and send through channel
+            file_configs.into_par_iter().for_each(|(file_idx, file_rows, file_seed)| {
+                if let Ok(batch) = Self::generate_batch(&schema_for_producer, file_rows, file_seed) {
+                    // blocking_send waits if channel is full (backpressure)
+                    let _ = tx.blocking_send((file_idx, batch));
+                }
+            });
+            // tx is dropped here, closing the channel
+        });
+
+        // Consumer: read from channel and write to S3
+        let write_concurrency = (files as usize / 4).clamp(8, 256);
+        let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+
+        let results: Vec<Result<(DataFileInfo, iceberg::spec::DataFile)>> = rx_stream
+            .map(|(file_idx, batch)| {
+                let ctx = ctx.clone();
+                async move { Self::write_batch_to_file(&ctx, file_idx, batch).await }
+            })
+            .buffer_unordered(write_concurrency)
+            .collect()
+            .await;
+
+        // Wait for producer to finish
+        producer.join().expect("Producer thread panicked");
+
+        // Collect results
+        let mut total_bytes = 0u64;
+        let mut data_files_info = Vec::new();
+        let mut all_data_files = Vec::new();
+
+        for result in results {
+            let (info, data_file) = result?;
+            total_bytes += info.size;
+            data_files_info.push(info);
+            all_data_files.push(data_file);
+        }
+
+        // Calculate snapshot summary stats manually
+        // This is a workaround for iceberg-rs 0.7.0 bug where mem::take() in
+        // write_added_manifest() clears added_data_files before summary() is called.
+        let added_records: u64 = all_data_files.iter().map(|f| f.record_count()).sum();
+        let added_data_files_count = all_data_files.len() as u32;
+        let added_file_size: u64 = all_data_files.iter().map(|f| f.file_size_in_bytes()).sum();
+
+        // Build snapshot properties with added stats only
+        let mut snapshot_properties = HashMap::new();
+        snapshot_properties.insert("added-records".to_string(), added_records.to_string());
+        snapshot_properties.insert(
+            "added-data-files".to_string(),
+            added_data_files_count.to_string(),
+        );
+        snapshot_properties.insert("added-files-size".to_string(), added_file_size.to_string());
+
+        // Commit using transaction API
+        let tx = Transaction::new(&table);
+        let action = tx
+            .fast_append()
+            .set_snapshot_properties(snapshot_properties)
+            .add_data_files(all_data_files);
+
+        // Apply action to transaction and commit
+        let tx = action.apply(tx).map_err(|e| Error::Metadata {
+            message: format!("Failed to apply transaction: {}", e),
+        })?;
+
+        let updated_table = tx.commit(catalog).await.map_err(|e| Error::Metadata {
+            message: format!("Failed to commit transaction: {}", e),
+        })?;
+
+        let snapshot_id = updated_table
+            .metadata()
+            .current_snapshot()
+            .map(|s| s.snapshot_id())
+            .unwrap_or(0);
+
+        let metadata_path = updated_table
+            .metadata_location()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{}/metadata/latest.json", base_path));
+
+        Ok(GenerateResult {
+            table_path: base_path,
+            total_rows: rows,
+            files_created: files,
+            total_bytes,
+            data_files: data_files_info,
+            metadata_path,
+            snapshot_id,
+            appended: true,
+        })
+    }
+
+    /// Write a pre-generated batch to a single data file (I/O-bound)
+    async fn write_batch_to_file(
+        ctx: &FileGenerationContext,
+        file_idx: u32,
+        batch: RecordBatch,
+    ) -> Result<(DataFileInfo, iceberg::spec::DataFile)> {
+        // Create location generator
+        let location_gen =
+            DefaultLocationGenerator::new((*ctx.table_metadata).clone()).map_err(|e| {
+                Error::Metadata {
+                    message: format!("Failed to create location generator: {}", e),
+                }
+            })?;
+
+        // Create a writer for this file with unique prefix
+        let file_name_gen = DefaultFileNameGenerator::new(
+            format!("{}-{:05}", ctx.unique_prefix, file_idx),
+            None,
+            DataFileFormat::Parquet,
+        );
+
+        let parquet_writer = ParquetWriterBuilder::new_with_match_mode(
+            (*ctx.writer_props).clone(),
+            ctx.iceberg_schema.clone(),
+            None,
+            FieldMatchMode::Name,
+            ctx.file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+
+        let mut writer =
+            DataFileWriterBuilder::new(parquet_writer, None, ctx.partition_spec_id)
+                .build()
+                .await
+                .map_err(|e| Error::Serialization {
+                    message: format!("Failed to build data file writer: {}", e),
+                })?;
+
+        writer.write(batch).await.map_err(|e| Error::Serialization {
+            message: format!("Failed to write batch: {}", e),
+        })?;
+
+        let data_files = writer.close().await.map_err(|e| Error::Serialization {
+            message: format!("Failed to close writer: {}", e),
+        })?;
+
+        let df = data_files
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Metadata {
+                message: "Writer produced no data files".to_string(),
+            })?;
+
+        let info = DataFileInfo {
+            path: df.file_path().to_string(),
+            size: df.file_size_in_bytes(),
+            record_count: df.record_count(),
+            partition: HashMap::new(),
+        };
+
+        Ok((info, df))
+    }
+
+    /// Execute append operation - adds data to an existing Iceberg table
+    ///
+    /// This generates new parquet files and creates a new snapshot that references
+    /// the new files while preserving existing table data.
+    ///
+    /// File generation is parallelized for better performance.
+    pub async fn execute_append(config: GenerateConfig) -> Result<GenerateResult> {
+        let storage = Arc::new(create_object_store(&config.path).await?);
         let base_path = config.path.trim_end_matches('/').to_string();
 
-        let metadata_path = format!("{}/metadata", base_path);
-        let data_path = format!("{}/data", base_path);
-
         let rows_per_file = (config.rows / config.files as u64).max(1);
+
+        // Use timestamp for unique file names to avoid conflicts with existing files
+        let timestamp_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after UNIX epoch")
+            .as_nanos() as u64;
+
+        // Determine concurrency based on file count
+        let concurrency = (config.files as usize / 10).clamp(4, 64);
+
+        // Generate file tasks
+        let file_tasks: Vec<_> = (0..config.files)
+            .map(|file_idx| {
+                let file_rows = if file_idx == config.files - 1 {
+                    config.rows - (rows_per_file * (config.files - 1) as u64)
+                } else {
+                    rows_per_file
+                };
+                (file_idx, file_rows)
+            })
+            .collect();
+
+        // Process files in parallel
+        let schema = config.schema.clone();
+        let seed = config.seed;
+        let base_path_clone = base_path.clone();
+
+        let results: Vec<Result<DataFileInfo>> = stream::iter(file_tasks)
+            .map(|(file_idx, file_rows)| {
+                let schema = schema.clone();
+                let storage = storage.clone();
+                let base_path = base_path_clone.clone();
+
+                async move {
+                    // Generate batch
+                    let batch = Self::generate_batch(&schema, file_rows, seed + file_idx as u64)?;
+
+                    // Use timestamp + seed + index for unique file ID
+                    let file_id = format!(
+                        "{:016x}",
+                        timestamp_nanos
+                            .wrapping_mul(1000003)
+                            .wrapping_add(seed)
+                            .wrapping_add(file_idx as u64)
+                    );
+                    let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
+
+                    // Full path for Iceberg metadata
+                    let iceberg_path = format!("{}/data/{}", base_path, file_name);
+
+                    let parquet_bytes = Self::write_parquet_bytes(&batch)?;
+                    let file_size = parquet_bytes.len() as u64;
+
+                    // Write to storage
+                    storage
+                        .put_bytes(&to_path(&iceberg_path), Bytes::from(parquet_bytes))
+                        .await?;
+
+                    Ok(DataFileInfo {
+                        path: iceberg_path,
+                        size: file_size,
+                        record_count: file_rows,
+                        partition: HashMap::new(),
+                    })
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await;
+
+        // Collect results
         let mut data_files = Vec::new();
         let mut total_bytes = 0u64;
 
-        // Step 1: Generate and write parquet data files
-        for file_idx in 0..config.files {
-            let file_rows = if file_idx == config.files - 1 {
-                config.rows - (rows_per_file * (config.files - 1) as u64)
-            } else {
-                rows_per_file
-            };
-
-            let batch =
-                Self::generate_batch(&config.schema, file_rows, config.seed + file_idx as u64)?;
-
-            let file_id = format!(
-                "{:016x}",
-                config.seed.wrapping_mul(1000003).wrapping_add(file_idx as u64)
-            );
-            let file_name = format!("{:05}-{}.parquet", file_idx, file_id);
-            let file_path = format!("{}/{}", data_path, file_name);
-
-            let parquet_bytes = Self::write_parquet_bytes(&batch)?;
-            let file_size = parquet_bytes.len() as u64;
-            total_bytes += file_size;
-
-            storage
-                .put_bytes(&to_path(&file_path), Bytes::from(parquet_bytes))
-                .await?;
-
-            data_files.push(DataFileInfo {
-                path: file_path,
-                file_size,
-                record_count: file_rows,
-            });
+        for result in results {
+            let info = result?;
+            total_bytes += info.size;
+            data_files.push(info);
         }
 
-        // Step 2: Create complete Iceberg metadata with manifest, manifest list, and snapshot
-        let (metadata_file_path, snapshot_id) = Self::create_complete_iceberg_table(
-            &storage,
-            &base_path,
-            &metadata_path,
-            &config.schema,
-            &data_files,
-            &config.partition_columns,
-        )
-        .await?;
+        // Step 2: Use IcebergMetadataService to append the new data files
+        let metadata_service = IcebergMetadataService::new_async(base_path.clone()).await?;
+
+        // Build data file changes for append
+        let mut changes = DataFileChanges::new();
+        changes.added = data_files.clone();
+
+        // Create summary for the append operation
+        let mut summary = HashMap::new();
+        summary.insert("source".to_string(), "generate-append".to_string());
+
+        // Write the new snapshot
+        let snapshot_info = metadata_service
+            .write_snapshot(changes, OperationType::Append, summary)
+            .await?;
+
+        // Get the latest metadata path after write
+        let metadata_path = find_latest_metadata(&base_path, &storage)
+            .await
+            .unwrap_or_else(|_| format!("{}/metadata/latest.json", base_path));
 
         Ok(GenerateResult {
             table_path: base_path,
@@ -141,236 +493,25 @@ impl GenerateOperation {
             files_created: config.files,
             total_bytes,
             data_files,
-            metadata_path: metadata_file_path,
-            snapshot_id,
+            metadata_path,
+            snapshot_id: snapshot_info.id,
+            appended: true,
         })
-    }
-
-    /// Create a complete Iceberg table with manifest, manifest list, snapshot, and metadata
-    async fn create_complete_iceberg_table(
-        storage: &Storage,
-        base_path: &str,
-        metadata_path: &str,
-        arrow_schema: &Schema,
-        data_files: &[DataFileInfo],
-        partition_cols: &[String],
-    ) -> Result<(String, i64)> {
-        use crate::core::utils::{metadata_location_filename, new_metadata_location};
-
-        // Convert Arrow schema to Iceberg schema
-        let iceberg_schema = Self::arrow_to_iceberg_schema(arrow_schema)?;
-
-        // Build partition spec
-        let partition_spec = if !partition_cols.is_empty() {
-            let mut unbound_fields = Vec::new();
-            for (idx, col) in partition_cols.iter().enumerate() {
-                let field_id = iceberg_schema
-                    .as_struct()
-                    .fields()
-                    .iter()
-                    .find(|f| f.name == *col)
-                    .map(|f| f.id)
-                    .ok_or_else(|| {
-                        Error::General(format!("Partition column '{}' not found in schema", col))
-                    })?;
-
-                unbound_fields.push(
-                    iceberg::spec::UnboundPartitionField::builder()
-                        .source_id(field_id)
-                        .field_id(1000 + idx as i32)
-                        .name(col.clone())
-                        .transform(iceberg::spec::Transform::Identity)
-                        .build(),
-                );
-            }
-            iceberg::spec::UnboundPartitionSpec::builder()
-                .with_spec_id(0)
-                .add_partition_fields(unbound_fields)
-                .map_err(|e| Error::General(format!("Failed to add partition fields: {}", e)))?
-                .build()
-                .bind(iceberg_schema.clone())
-                .map_err(|e| Error::General(format!("Failed to build partition spec: {}", e)))?
-        } else {
-            iceberg::spec::PartitionSpec::unpartition_spec()
-        };
-
-        let sort_order = iceberg::spec::SortOrder::unsorted_order();
-
-        // Build initial table metadata (without snapshot)
-        let build_result = iceberg::spec::TableMetadataBuilder::new(
-            iceberg_schema.clone(),
-            partition_spec.clone(),
-            sort_order,
-            base_path.to_string(),
-            iceberg::spec::FormatVersion::V2,
-            HashMap::new(),
-        )
-        .map_err(|e| Error::General(format!("Failed to create metadata builder: {}", e)))?
-        .build()
-        .map_err(|e| Error::General(format!("Failed to build table metadata: {}", e)))?;
-
-        let initial_metadata = build_result.metadata;
-
-        // Generate snapshot ID and sequence number
-        let snapshot_id = chrono::Utc::now().timestamp_millis();
-        let sequence_number = 1i64;
-        let timestamp_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time is after UNIX epoch")
-            .as_nanos();
-
-        // Create FileIO for writing manifests
-        let file_io = Self::create_file_io(base_path)?;
-
-        // Create snapshot writer
-        let snapshot_writer =
-            IcebergSnapshotWriter::new(base_path.to_string(), file_io, storage.clone());
-
-        // Convert our DataFileInfo to Iceberg DataFile
-        let iceberg_data_files: Vec<iceberg::spec::DataFile> = data_files
-            .iter()
-            .map(|df| {
-                DataFileBuilder::default()
-                    .content(DataContentType::Data)
-                    .file_path(df.path.clone())
-                    .file_format(DataFileFormat::Parquet)
-                    .partition(Struct::empty())
-                    .partition_spec_id(partition_spec.spec_id())
-                    .record_count(df.record_count)
-                    .file_size_in_bytes(df.file_size)
-                    .build()
-                    .map_err(|e| Error::General(format!("Failed to build DataFile: {}", e)))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Write manifest file
-        let manifest_file = snapshot_writer
-            .write_manifest(
-                &iceberg_data_files,
-                snapshot_id,
-                sequence_number,
-                &initial_metadata,
-                timestamp_nanos,
-            )
-            .await?;
-
-        // Write manifest list
-        let manifest_list_path = snapshot_writer
-            .write_manifest_list(
-                manifest_file,
-                snapshot_id,
-                None, // No parent snapshot
-                sequence_number,
-                timestamp_nanos,
-            )
-            .await?;
-
-        // Calculate summary statistics
-        let total_records: u64 = data_files.iter().map(|f| f.record_count).sum();
-        let total_size: u64 = data_files.iter().map(|f| f.file_size).sum();
-
-        let summary = Summary {
-            operation: iceberg::spec::Operation::Append,
-            additional_properties: HashMap::from([
-                ("added-data-files".to_string(), data_files.len().to_string()),
-                ("added-records".to_string(), total_records.to_string()),
-                (
-                    "added-files-size".to_string(),
-                    total_size.to_string(),
-                ),
-                ("total-records".to_string(), total_records.to_string()),
-                ("total-data-files".to_string(), data_files.len().to_string()),
-            ]),
-        };
-
-        // Build snapshot
-        let snapshot = snapshot_writer.build_snapshot(
-            snapshot_id,
-            None, // No parent
-            sequence_number,
-            manifest_list_path,
-            summary,
-            initial_metadata.current_schema().schema_id(),
-        );
-
-        // Update metadata with snapshot
-        let metadata_location = new_metadata_location(base_path);
-        let metadata_with_snapshot = iceberg::spec::TableMetadataBuilder::new_from_metadata(
-            initial_metadata,
-            Some(metadata_location_filename(&metadata_location)),
-        )
-        .set_branch_snapshot(snapshot, iceberg::spec::MAIN_BRANCH)
-        .map_err(|e| Error::General(format!("Failed to set snapshot: {}", e)))?
-        .build()
-        .map_err(|e| Error::General(format!("Failed to build metadata with snapshot: {}", e)))?;
-
-        let final_metadata = metadata_with_snapshot.metadata;
-
-        // Serialize and write final metadata
-        let metadata_json = serde_json::to_string_pretty(&final_metadata)
-            .map_err(|e| Error::General(format!("Failed to serialize metadata: {}", e)))?;
-
-        let metadata_filename = metadata_location_filename(&metadata_location);
-        let metadata_file_path = format!("{}/{}", metadata_path, metadata_filename);
-
-        storage
-            .put_bytes(&to_path(&metadata_file_path), Bytes::from(metadata_json))
-            .await?;
-
-        // Write version-hint.text
-        let version_hint_path = format!("{}/version-hint.text", metadata_path);
-        storage
-            .put_bytes(&to_path(&version_hint_path), Bytes::from("0"))
-            .await?;
-
-        Ok((metadata_file_path, snapshot_id))
-    }
-
-    /// Create FileIO based on path scheme
-    fn create_file_io(base_path: &str) -> Result<iceberg::io::FileIO> {
-        let scheme = if base_path.starts_with("s3://") {
-            "s3"
-        } else if base_path.starts_with("gs://") {
-            "gs"
-        } else if base_path.starts_with("az://") || base_path.starts_with("abfs://") {
-            "az"
-        } else {
-            "file"
-        };
-
-        let mut builder = FileIOBuilder::new(scheme);
-
-        if scheme == "s3" {
-            // For S3, pass through environment variables
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-                builder = builder.with_prop("s3.endpoint", endpoint);
-            }
-            if let Ok(region) = std::env::var("AWS_REGION") {
-                builder = builder.with_prop("s3.region", region);
-            }
-            if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                builder = builder.with_prop("s3.access-key-id", access_key);
-            }
-            if let Ok(secret_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                builder = builder.with_prop("s3.secret-access-key", secret_key);
-            }
-            if std::env::var("AWS_ALLOW_HTTP").is_ok() {
-                builder = builder.with_prop("s3.allow-http", "true");
-            }
-        }
-
-        builder
-            .build()
-            .map_err(|e| Error::General(format!("Failed to create FileIO: {}", e)))
     }
 
     /// Generate a record batch with synthetic data
     pub fn generate_batch(schema: &Arc<Schema>, num_rows: u64, seed: u64) -> Result<RecordBatch> {
-        // Track memory for batch generation
-        let estimated_memory = Self::estimate_batch_memory(schema, num_rows);
-        track_memory_usage(estimated_memory)?;
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
+
+        // Only track memory for large batches (>10K rows) to avoid overhead on small files
+        let estimated_memory = if num_rows > 10_000 {
+            let mem = Self::estimate_batch_memory(schema, num_rows);
+            track_memory_usage(mem)?;
+            mem
+        } else {
+            0
+        };
 
         let mut hasher = DefaultHasher::new();
         seed.hash(&mut hasher);
@@ -391,7 +532,8 @@ impl GenerateOperation {
                         if field.is_nullable() && next_rand(&mut rng_state) % 100 < 5 {
                             builder.append_null();
                         } else {
-                            builder.append_value(i as i64 + next_rand(&mut rng_state) as i64 % 1000);
+                            builder
+                                .append_value(i as i64 + next_rand(&mut rng_state) as i64 % 1000);
                         }
                     }
                     Arc::new(builder.finish())
@@ -459,9 +601,12 @@ impl GenerateOperation {
                     Arc::new(builder.finish())
                 }
                 _ => {
+                    // Use pre-defined sample values to avoid format! allocations in hot path
+                    let sample_values = ["value_a", "value_b", "value_c", "value_d", "value_e"];
                     let mut builder = StringBuilder::with_capacity(num_rows as usize, 16);
-                    for i in 0..num_rows {
-                        builder.append_value(format!("value_{}", i));
+                    for _ in 0..num_rows {
+                        let idx = next_rand(&mut rng_state) as usize % sample_values.len();
+                        builder.append_value(sample_values[idx]);
                     }
                     Arc::new(builder.finish())
                 }
@@ -469,12 +614,11 @@ impl GenerateOperation {
             columns.push(array);
         }
 
-        let batch = RecordBatch::try_new(schema.clone(), columns)
-            .map_err(|e| Error::General(format!("Failed to create record batch: {}", e)))?;
-        
+        let batch = RecordBatch::try_new(schema.clone(), columns)?;
+
         // Release memory tracking for batch generation (actual memory will be tracked by Arrow)
         crate::utils::resources::release_memory(estimated_memory);
-        
+
         Ok(batch)
     }
 
@@ -534,7 +678,7 @@ impl GenerateOperation {
         // Track memory for parquet writing (buffer + compression)
         let estimated_memory = batch.get_array_memory_size() as u64 * 2;
         track_memory_usage(estimated_memory)?;
-        
+
         let mut buf = Vec::new();
 
         let props = WriterProperties::builder()
@@ -542,56 +686,14 @@ impl GenerateOperation {
             .set_max_row_group_size(100_000)
             .build();
 
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))
-            .map_err(|e| Error::General(format!("Failed to create parquet writer: {}", e)))?;
-
-        writer
-            .write(batch)
-            .map_err(|e| Error::General(format!("Failed to write batch: {}", e)))?;
-
-        writer
-            .close()
-            .map_err(|e| Error::General(format!("Failed to close parquet writer: {}", e)))?;
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))?;
+        writer.write(batch)?;
+        writer.close()?;
 
         // Release memory tracking for parquet writing
         crate::utils::resources::release_memory(estimated_memory);
-        
+
         Ok(buf)
-    }
-
-    fn arrow_to_iceberg_schema(arrow_schema: &Schema) -> Result<iceberg::spec::Schema> {
-        use iceberg::spec::{NestedField, PrimitiveType, Type};
-
-        let mut fields = Vec::new();
-
-        for (idx, field) in arrow_schema.fields().iter().enumerate() {
-            let field_id = (idx + 1) as i32;
-            let iceberg_type = match field.data_type() {
-                DataType::Int32 => Type::Primitive(PrimitiveType::Int),
-                DataType::Int64 => Type::Primitive(PrimitiveType::Long),
-                DataType::Float32 => Type::Primitive(PrimitiveType::Float),
-                DataType::Float64 => Type::Primitive(PrimitiveType::Double),
-                DataType::Utf8 => Type::Primitive(PrimitiveType::String),
-                DataType::Boolean => Type::Primitive(PrimitiveType::Boolean),
-                DataType::Timestamp(_, _) => Type::Primitive(PrimitiveType::Timestamp),
-                DataType::Date32 => Type::Primitive(PrimitiveType::Date),
-                DataType::Binary => Type::Primitive(PrimitiveType::Binary),
-                _ => Type::Primitive(PrimitiveType::String),
-            };
-
-            let nested_field = if field.is_nullable() {
-                NestedField::optional(field_id, field.name(), iceberg_type)
-            } else {
-                NestedField::required(field_id, field.name(), iceberg_type)
-            };
-
-            fields.push(nested_field.into());
-        }
-
-        iceberg::spec::Schema::builder()
-            .with_fields(fields)
-            .build()
-            .map_err(|e| Error::General(format!("Failed to build Iceberg schema: {}", e)))
     }
 }
 
@@ -686,21 +788,20 @@ pub fn parse_schema_string(schema_str: &str) -> Result<Schema> {
 
     for part in schema_str.split(',') {
         let part = part.trim();
-        let (name, type_str) = part.split_once(':').ok_or_else(|| {
-            Error::General(format!(
-                "Invalid schema format '{}'. Expected 'name:type'",
-                part
-            ))
-        })?;
+        let (name, type_str) = part
+            .split_once(':')
+            .ok_or_else(|| Error::SchemaValidation {
+                message: format!("Invalid schema format '{}'. Expected 'name:type'", part),
+            })?;
 
         let data_type = parse_arrow_type(type_str.trim())?;
         fields.push(Field::new(name.trim(), data_type, true));
     }
 
     if fields.is_empty() {
-        return Err(Error::General(
-            "Schema must have at least one column".to_string(),
-        ));
+        return Err(Error::SchemaValidation {
+            message: "Schema must have at least one column".to_string(),
+        });
     }
 
     Ok(Schema::new(fields))
@@ -717,9 +818,11 @@ pub fn parse_arrow_type(type_str: &str) -> Result<DataType> {
         "bool" | "boolean" => Ok(DataType::Boolean),
         "timestamp" | "datetime" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         "date" => Ok(DataType::Date32),
-        _ => Err(Error::General(format!(
-            "Unsupported type '{}'. Supported: int, long, float, double, string, bool, timestamp, date",
-            type_str
-        ))),
+        _ => Err(Error::UnsupportedFeature {
+            feature: format!(
+                "Type '{}'. Supported: int, long, float, double, string, bool, timestamp, date",
+                type_str
+            ),
+        }),
     }
 }

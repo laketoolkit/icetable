@@ -3,8 +3,8 @@
 //! Provides utilities for parsing and applying memory limits, timeouts,
 //! and concurrency controls for CLI operations.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::error::{Error, Result};
@@ -13,8 +13,7 @@ use crate::error::{Error, Result};
 static RESOURCE_LIMITS: OnceLock<ResourceLimits> = OnceLock::new();
 
 /// Resource limits for operations
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ResourceLimits {
     /// Maximum memory in bytes (0 = unlimited)
     pub max_memory_bytes: u64,
@@ -24,37 +23,20 @@ pub struct ResourceLimits {
     pub max_concurrency: u32,
 }
 
-
 impl ResourceLimits {
     /// Parse memory string (e.g., "2GB", "512MB", "1024KB") to bytes
     pub fn parse_memory(s: &str) -> Result<u64> {
-        let s = s.trim().to_uppercase();
+        let s = s.trim();
 
         if s == "0" || s.is_empty() {
             return Ok(0);
         }
 
-        let (num_str, multiplier) = if s.ends_with("GB") {
-            (&s[..s.len() - 2], 1024 * 1024 * 1024u64)
-        } else if s.ends_with("MB") {
-            (&s[..s.len() - 2], 1024 * 1024u64)
-        } else if s.ends_with("KB") {
-            (&s[..s.len() - 2], 1024u64)
-        } else if s.ends_with("B") {
-            (&s[..s.len() - 1], 1u64)
-        } else {
-            // Assume bytes if no suffix
-            (s.as_str(), 1u64)
-        };
-
-        let num: u64 = num_str.trim().parse().map_err(|_| {
-            Error::General(format!(
-                "Invalid memory format: '{}'. Use format like '2GB', '512MB', or '1024KB'",
-                s
-            ))
-        })?;
-
-        Ok(num * multiplier)
+        // Use the shared parse_bytes function but convert error type
+        crate::utils::core::parse_bytes(s).map_err(|e| Error::Parse {
+            message: format!("Invalid memory format: {}", e),
+            source: None,
+        })
     }
 
     /// Create limits from CLI arguments
@@ -136,11 +118,13 @@ pub fn track_memory_usage(bytes: u64) -> Result<()> {
 
     if new_total > limits.max_memory_bytes {
         CURRENT_MEMORY.fetch_sub(bytes, Ordering::SeqCst);
-        return Err(Error::General(format!(
-            "Memory limit exceeded: operation requires {} but limit is {}",
-            ResourceLimits::format_memory(new_total),
-            ResourceLimits::format_memory(limits.max_memory_bytes)
-        )));
+        return Err(Error::Configuration {
+            message: format!(
+                "Memory limit exceeded: operation requires {} but limit is {}",
+                ResourceLimits::format_memory(new_total),
+                ResourceLimits::format_memory(limits.max_memory_bytes)
+            ),
+        });
     }
 
     Ok(())
@@ -164,18 +148,46 @@ where
     let limits = get_resource_limits();
 
     match limits.timeout {
-        Some(duration) => {
-            tokio::time::timeout(duration, operation)
-                .await
-                .map_err(|_| {
-                    Error::General(format!(
-                        "Operation timed out after {} seconds",
-                        duration.as_secs()
-                    ))
-                })?
-        }
+        Some(duration) => tokio::time::timeout(duration, operation)
+            .await
+            .map_err(|_| Error::Configuration {
+                message: format!("Operation timed out after {} seconds", duration.as_secs()),
+            })?,
         None => operation.await,
     }
+}
+
+/// Run an async operation with all resource limits (timeout, cancellation, memory)
+///
+/// This is a convenience wrapper that combines:
+/// - Timeout (from global resource limits)
+/// - Cancellation checking
+/// - Memory tracking
+///
+/// # Arguments
+/// * `estimated_memory` - Estimated memory usage in bytes
+/// * `operation` - The async operation to run
+///
+/// # Example
+/// ```ignore
+/// with_resource_limits(256 * 1024 * 1024, async {
+///     // actual work here
+/// }).await
+/// ```
+pub async fn with_resource_limits<F, T>(estimated_memory: u64, operation: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    with_timeout(async {
+        super::cancellation::with_cancellation(async {
+            track_memory_usage(estimated_memory)?;
+            let result = operation.await;
+            release_memory(estimated_memory);
+            result
+        })
+        .await
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -184,14 +196,26 @@ mod tests {
 
     #[test]
     fn test_parse_memory_gb() {
-        assert_eq!(ResourceLimits::parse_memory("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
-        assert_eq!(ResourceLimits::parse_memory("1gb").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(
+            ResourceLimits::parse_memory("2GB").unwrap(),
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            ResourceLimits::parse_memory("1gb").unwrap(),
+            1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_parse_memory_mb() {
-        assert_eq!(ResourceLimits::parse_memory("512MB").unwrap(), 512 * 1024 * 1024);
-        assert_eq!(ResourceLimits::parse_memory("256mb").unwrap(), 256 * 1024 * 1024);
+        assert_eq!(
+            ResourceLimits::parse_memory("512MB").unwrap(),
+            512 * 1024 * 1024
+        );
+        assert_eq!(
+            ResourceLimits::parse_memory("256mb").unwrap(),
+            256 * 1024 * 1024
+        );
     }
 
     #[test]

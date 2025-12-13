@@ -59,7 +59,7 @@ pub mod storage {
     //! - [`create_object_store`] - Create storage from URL or path
 
     pub use crate::core::storage::{
-        create_object_store, detect_storage_type, ObjectMeta, ObjectStoreExt, Storage,
+        ObjectMeta, ObjectStoreExt, Storage, create_object_store, detect_storage_type,
     };
 }
 

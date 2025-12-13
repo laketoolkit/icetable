@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use crate::config::ResolvePath;
 use crate::core::TableFormat;
-use crate::core::storage::{create_object_store, Storage};
-use crate::core::utils::detect_format;
+use crate::core::storage::{Storage, create_object_store};
 use crate::error::{Error, Result};
+use crate::utils::core::detect_format;
 
 use crate::core::metadata::IcebergMetadataService;
 
@@ -42,7 +42,7 @@ impl TableContext {
     /// Create context from an explicit path string
     pub async fn new(path: &str) -> Result<Self> {
         let storage = create_object_store(path).await?;
-        let format = detect_format(&storage).await;
+        let format = detect_format(path, &storage).await;
 
         Ok(Self {
             path: path.to_string(),
@@ -56,18 +56,12 @@ impl TableContext {
         matches!(self.format, TableFormat::Iceberg)
     }
 
-    /// Check if the table is Delta format
-    pub fn is_delta(&self) -> bool {
-        matches!(self.format, TableFormat::Delta)
-    }
-
     /// Require Iceberg format, return error if not
     pub fn require_iceberg(&self) -> Result<()> {
         if !self.is_iceberg() {
-            return Err(Error::General(format!(
-                "Path '{}' is not an Iceberg table",
-                self.path
-            )));
+            return Err(Error::DataValidation {
+                message: format!("Path '{}' is not an Iceberg table", self.path),
+            });
         }
         Ok(())
     }
@@ -109,7 +103,6 @@ impl TableContextBuilder {
     /// Override the detected format
     pub fn format(mut self, format: &str) -> Self {
         self.format_override = Some(match format.to_lowercase().as_str() {
-            "delta" => TableFormat::Delta,
             "iceberg" => TableFormat::Iceberg,
             _ => TableFormat::Unknown,
         });

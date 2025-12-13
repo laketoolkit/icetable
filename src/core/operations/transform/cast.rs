@@ -18,15 +18,16 @@ pub fn apply_casts(batch: RecordBatch, casts: &HashMap<String, DataType>) -> Res
         if let Some(target_type) = casts.get(field.name()) {
             // Cast this column
             let array = batch.column(idx);
-            let casted = compute::cast(array, target_type).map_err(|e| {
-                Error::General(format!(
-                    "Failed to cast column '{}' from {:?} to {:?}: {}",
-                    field.name(),
-                    field.data_type(),
-                    target_type,
-                    e
-                ))
-            })?;
+            let casted =
+                compute::cast(array, target_type).map_err(|e| Error::SchemaValidation {
+                    message: format!(
+                        "Failed to cast column '{}' from {:?} to {:?}: {}",
+                        field.name(),
+                        field.data_type(),
+                        target_type,
+                        e
+                    ),
+                })?;
 
             new_columns.push(casted);
             new_fields.push(Arc::new(Field::new(
@@ -43,6 +44,7 @@ pub fn apply_casts(batch: RecordBatch, casts: &HashMap<String, DataType>) -> Res
 
     let new_schema = Arc::new(Schema::new(new_fields));
 
-    RecordBatch::try_new(new_schema, new_columns)
-        .map_err(|e| Error::General(format!("Failed to apply casts: {}", e)))
+    RecordBatch::try_new(new_schema, new_columns).map_err(|e| Error::SchemaValidation {
+        message: format!("Failed to apply casts: {}", e),
+    })
 }

@@ -14,7 +14,8 @@ pub struct SnapshotArgs {
 #[derive(Subcommand, Debug)]
 pub enum SnapshotCommands {
     /// List all snapshots
-    List(SnapshotListArgs),
+    #[command(name = "ls")]
+    Ls(SnapshotListArgs),
 
     /// Create a new snapshot/checkpoint
     Create(SnapshotCreateArgs),
@@ -35,12 +36,8 @@ pub enum SnapshotCommands {
 /// Arguments for snapshot list
 #[derive(Parser, Debug)]
 pub struct SnapshotListArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Maximum number of snapshots to show
-    #[arg(short = 'n', long, default_value = "10")]
+    #[arg(long, default_value = "10")]
     pub limit: usize,
 
     /// Show all snapshots (no limit)
@@ -55,10 +52,6 @@ pub struct SnapshotListArgs {
 /// Arguments for snapshot create
 #[derive(Parser, Debug)]
 pub struct SnapshotCreateArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Force checkpoint creation even if not needed
     #[arg(long)]
     pub force: bool,
@@ -71,10 +64,6 @@ pub struct SnapshotCreateArgs {
 /// Arguments for snapshot expire
 #[derive(Parser, Debug)]
 pub struct SnapshotExpireArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Branch to expire snapshots from (defaults to main/current)
     #[arg(short, long)]
     pub branch: Option<String>,
@@ -103,24 +92,20 @@ pub struct SnapshotExpireArgs {
 /// Arguments for snapshot set
 #[derive(Parser, Debug)]
 pub struct SnapshotSetArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Snapshot ID to set as current
-    #[arg(long, conflicts_with_all = ["as_of", "branch", "tag"])]
+    #[arg(long, conflicts_with_all = ["as_of", "ref_branch", "tag"])]
     pub id: Option<i64>,
 
     /// Set to snapshot as of time (e.g., "7d", "24h", or "2024-01-15")
-    #[arg(long, conflicts_with_all = ["id", "branch", "tag"])]
+    #[arg(long, conflicts_with_all = ["id", "ref_branch", "tag"])]
     pub as_of: Option<String>,
 
     /// Set to snapshot referenced by branch name
-    #[arg(long, conflicts_with_all = ["id", "as_of", "tag"])]
-    pub branch: Option<String>,
+    #[arg(long = "branch", conflicts_with_all = ["id", "as_of", "tag"])]
+    pub ref_branch: Option<String>,
 
     /// Set to snapshot referenced by tag name
-    #[arg(long, conflicts_with_all = ["id", "as_of", "branch"])]
+    #[arg(long, conflicts_with_all = ["id", "as_of", "ref_branch"])]
     pub tag: Option<String>,
 
     /// Dry run - show what would change without actually setting
@@ -135,10 +120,6 @@ pub struct SnapshotSetArgs {
 /// Arguments for snapshot cherrypick
 #[derive(Parser, Debug)]
 pub struct SnapshotCherrypickArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Source snapshot ID to cherry-pick from
     #[arg(long)]
     pub snapshot_id: i64,
@@ -151,15 +132,11 @@ pub struct SnapshotCherrypickArgs {
 /// Arguments for snapshot lineage
 #[derive(Parser, Debug)]
 pub struct SnapshotLineageArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// Snapshot ID to show lineage for (defaults to current)
     pub snapshot_id: Option<i64>,
 
     /// Number of snapshots to show (default: 10)
-    #[arg(short = 'n', long, default_value = "10")]
+    #[arg(long, default_value = "10")]
     pub limit: usize,
 
     /// Show all snapshots in lineage
@@ -174,10 +151,6 @@ pub struct SnapshotLineageArgs {
 /// Arguments for snapshot diff
 #[derive(Parser, Debug)]
 pub struct SnapshotDiffArgs {
-    /// Path to table (uses default from config if not provided)
-    #[arg(short = 't', long = "table")]
-    pub path: Option<String>,
-
     /// First snapshot ID (older)
     #[arg(long)]
     pub from: i64,

@@ -1,96 +1,44 @@
 //! History command implementation
 //!
 //! Shows version history for Iceberg tables.
-//! This is a thin wrapper that delegates to core services.
+//! Thin wrapper that delegates to HistoryService in core.
 
-use chrono::{DateTime, TimeZone, Utc};
 use colored::Colorize;
 
-use crate::cli::parser::HistoryArgs;
-use crate::core::TableContext;
-use crate::error::{Error, Result};
-
-/// A single version/snapshot entry in history
-#[derive(Debug, Clone)]
-pub struct HistoryEntry {
-    /// Snapshot ID
-    pub version: i64,
-    /// Timestamp of the version
-    pub timestamp: DateTime<Utc>,
-    /// Operation type (e.g., "APPEND", "OVERWRITE")
-    pub operation: String,
-    /// Additional details about the operation
-    pub details: std::collections::HashMap<String, String>,
-    /// Whether this is the current snapshot
-    pub is_current: bool,
-}
+use super::common::{print_json, resolve_table_from_context};
+use crate::cli::output::format_datetime_utc;
+use crate::cli::parser::{CliTableContext, HistoryArgs};
+use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
+use crate::error::Result;
+use crate::utils::with_resource_limits;
 
 /// Handler for history command
 pub struct HistoryCommand;
 
 impl HistoryCommand {
     /// Execute history command
-    pub async fn execute(args: HistoryArgs) -> Result<()> {
-        // 1. Create table context (handles path resolution, storage, format detection)
-        let ctx = TableContext::from_path(args.path.clone()).await?;
-
-        // 2. Verify format
-        if let Some(ref fmt) = args.format
-            && fmt.to_lowercase() != "iceberg"
-        {
-            return Err(Error::UnsupportedFeature {
-                    feature: "Only Iceberg tables are supported. Use 'icetable import delta' to convert Delta tables.".to_string(),
-                });
-        }
-        ctx.require_iceberg()?;
-
-        // 3. Get history from service
-        let entries = Self::get_history(&ctx, &args).await?;
-
-        // 4. Output
-        Self::output(&entries, &args.output)
+    pub async fn execute(args: HistoryArgs, ctx: &CliTableContext) -> Result<()> {
+        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for history
+        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
     }
 
-    /// Get history entries from Iceberg table
-    async fn get_history(ctx: &TableContext, args: &HistoryArgs) -> Result<Vec<HistoryEntry>> {
-        let (metadata, _) = ctx.iceberg_metadata().await?;
+    async fn execute_inner(args: HistoryArgs, ctx: &CliTableContext) -> Result<()> {
+        // 1. Resolve table (supports catalog resolution)
+        let resolution = resolve_table_from_context(ctx).await?;
 
-        let current_snapshot_id = metadata.current_snapshot_id();
-        let mut entries = Vec::new();
+        // 2. Get table using factory method - handles catalog vs path context automatically
+        let table = resolution.to_table().await?;
 
-        // Collect ALL snapshots first, then sort, then apply limit
-        for snapshot in metadata.snapshots() {
-            let summary = snapshot.summary();
-            let mut details = std::collections::HashMap::new();
+        // 3. Build config and delegate to service
+        let config = HistoryConfig {
+            limit: Some(args.limit),
+            all: args.all,
+        };
 
-            details.insert("operation".to_string(), format!("{:?}", summary.operation));
-            for (k, v) in &summary.additional_properties {
-                details.insert(k.clone(), v.clone());
-            }
+        let entries = HistoryService::get_history(&table, &config)?;
 
-            let timestamp = Utc
-                .timestamp_millis_opt(snapshot.timestamp_ms())
-                .single()
-                .unwrap_or_else(Utc::now);
-
-            entries.push(HistoryEntry {
-                version: snapshot.snapshot_id(),
-                timestamp,
-                operation: format!("{:?}", summary.operation),
-                details,
-                is_current: Some(snapshot.snapshot_id()) == current_snapshot_id,
-            });
-        }
-
-        // Sort by timestamp descending (newest first)
-        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-        // Apply limit AFTER sorting
-        if !args.all {
-            entries.truncate(args.limit);
-        }
-
-        Ok(entries)
+        // 5. Output
+        Self::output(&entries, &args.output)
     }
 
     /// Output history in the requested format
@@ -108,60 +56,42 @@ impl HistoryCommand {
             return Ok(());
         }
 
-        // Snapshot IDs can be up to 19 digits (i64), use 20 char width
-        println!(
-            "    {:>20} | {:^19} | {:^10} | {}",
-            "Snapshot ID".bold(),
-            "Timestamp".bold(),
-            "Operation".bold(),
-            "Details".bold()
-        );
-        println!("{}", "─".repeat(105));
-
         for entry in entries {
-            let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
-            let details_str = Self::format_details(&entry.details);
             let marker = if entry.is_current {
-                "●".green().bold().to_string()
+                "●".yellow().bold()
             } else {
-                " ".to_string()
+                "○".dimmed()
+            };
+
+            let timestamp = format_datetime_utc(&entry.timestamp);
+
+            let op = match entry.operation.as_str() {
+                "Append" => "append".green(),
+                "Overwrite" => "overwrite".yellow(),
+                "Delete" => "delete".red(),
+                "Replace" => "replace".cyan(),
+                other => other.normal(),
             };
 
             println!(
-                " {}  {:>20} | {} | {:^10} | {}",
+                "{} {} - {} ({})",
                 marker,
-                entry.version.to_string().cyan(),
-                timestamp,
-                entry.operation.green(),
-                details_str.dimmed()
+                entry.version.to_string().cyan().bold(),
+                op,
+                timestamp.to_string().dimmed()
             );
+
+            // Details line
+            let details = HistoryService::format_details(entry);
+            if !details.is_empty() {
+                println!("  {}", details.join(", ").dimmed());
+            }
+            println!();
         }
 
-        println!();
-        println!("Total: {} entries", entries.len());
+        println!("{} snapshots", entries.len());
 
         Ok(())
-    }
-
-    /// Format details map into a string
-    fn format_details(details: &std::collections::HashMap<String, String>) -> String {
-        let interesting_keys = [
-            "added-data-files",
-            "added-records",
-            "total-records",
-            "total-data-files",
-        ];
-
-        let parts: Vec<String> = interesting_keys
-            .iter()
-            .filter_map(|k| details.get(*k).map(|v| format!("{}={}", k, v)))
-            .collect();
-
-        if parts.is_empty() {
-            "-".to_string()
-        } else {
-            parts.join(", ")
-        }
     }
 
     /// Output history as JSON
@@ -179,11 +109,7 @@ impl HistoryCommand {
             })
             .collect();
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json_entries)
-                .map_err(|e| Error::General(format!("Failed to serialize: {}", e)))?
-        );
+        print_json(&json_entries)?;
 
         Ok(())
     }

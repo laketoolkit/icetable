@@ -121,15 +121,16 @@ pub fn validate_metadata(metadata: &TableMetadata) -> Result<ValidationResult> {
 
     // 4. Check current snapshot reference
     if let Some(current_id) = metadata.current_snapshot_id()
-        && !snapshot_ids.contains(&current_id) {
-            result.add_error(
-                "INVALID_CURRENT_SNAPSHOT",
-                format!(
-                    "Current snapshot {} does not exist in snapshots list",
-                    current_id
-                ),
-            );
-        }
+        && !snapshot_ids.contains(&current_id)
+    {
+        result.add_error(
+            "INVALID_CURRENT_SNAPSHOT",
+            format!(
+                "Current snapshot {} does not exist in snapshots list",
+                current_id
+            ),
+        );
+    }
 
     // 5. Check refs point to valid snapshots
     // Note: metadata.refs() is pub(crate) in iceberg-rs, so we skip this for now
@@ -164,10 +165,9 @@ pub fn validate_or_error(metadata: &TableMetadata) -> Result<()> {
             .map(|e| format!("[{}] {}", e.code, e.message))
             .collect();
 
-        return Err(Error::General(format!(
-            "Metadata validation failed:\n{}",
-            error_messages.join("\n")
-        )));
+        return Err(Error::Metadata {
+            message: format!("Metadata validation failed:\n{}", error_messages.join("\n")),
+        });
     }
 
     Ok(())
@@ -175,7 +175,6 @@ pub fn validate_or_error(metadata: &TableMetadata) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    
 
     // Tests would go here - omitted for brevity
 }

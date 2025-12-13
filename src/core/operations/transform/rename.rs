@@ -30,6 +30,9 @@ pub fn apply_renames(batch: RecordBatch, renames: &HashMap<String, String>) -> R
 
     let new_schema = Arc::new(Schema::new(new_fields));
 
-    RecordBatch::try_new(new_schema, batch.columns().to_vec())
-        .map_err(|e| Error::General(format!("Failed to rename columns: {}", e)))
+    RecordBatch::try_new(new_schema, batch.columns().to_vec()).map_err(|e| {
+        Error::SchemaValidation {
+            message: format!("Failed to rename columns: {}", e),
+        }
+    })
 }

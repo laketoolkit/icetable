@@ -1,324 +1,368 @@
 //! Inspect command implementation
+//!
+//! Shows detailed information about table structure, metadata, and statistics.
+//! Uses IcebergTableInspector from core::operations for the actual inspection logic.
 
-pub mod common;
+use colored::Colorize;
 
-use std::path::Path;
-
-use crate::cli::output::InspectionFormatter;
-use crate::cli::parser::InspectArgs;
-use crate::config::{ResolveTableRef, ResolvedTable};
-use crate::core::formats::{FormatHandlerRegistry, TimeTravelOptions};
-use crate::core::operations::inspect::{InspectOperation, InspectOptions};
-use crate::core::storage::{create_object_store, Storage};
-use crate::core::{CatalogConfig, TableRef};
+use super::common::{print_json, resolve_table_from_context};
+use crate::cli::output::format_timestamp_ms;
+use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
+use crate::cli::parser::{CliTableContext, InspectArgs};
+use crate::core::operations::inspect::{
+    IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
+};
+use crate::core::{format_bytes, format_number};
 use crate::error::Result;
-use crate::utils::{with_timeout, track_memory_usage, with_cancellation};
-
-use common::{PhysicalInspectOptions, VerbosityLevel};
+use crate::utils::with_resource_limits;
 
 /// Handler for inspect command
 pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
-    pub async fn execute(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // Apply timeout and cancellation from global resource limits
-        with_timeout(async {
-            with_cancellation(async {
-                // Estimate memory usage: depends on --deep flag and rows
-                let estimated_memory = if args.deep {
-                    512 * 1024 * 1024 // 512MB for deep inspection
-                } else {
-                    128 * 1024 * 1024 // 128MB for regular inspection
-                };
-                track_memory_usage(estimated_memory)?;
-                
-                Self::inspect_inner(args, catalog_config).await
-            }).await
-        }).await
-    }
-    
-    async fn inspect_inner(args: InspectArgs, catalog_config: Option<CatalogConfig>) -> Result<()> {
-        // Priority 1: If --catalog-uri is provided, use it directly
-        if let Some(ref cli_catalog) = catalog_config {
-            let table_input = args.path.as_ref().ok_or_else(|| {
-                crate::error::Error::General(
-                    "Table identifier required when using --catalog-uri (e.g., namespace.table)".to_string()
-                )
-            })?;
-
-            let table_ref = TableRef::parse(table_input, Some(cli_catalog));
-
-            if let TableRef::Catalog { namespace, name } = &table_ref {
-                return Self::execute_catalog_inspect(
-                    namespace,
-                    name,
-                    cli_catalog,
-                    args,
-                )
-                .await;
-            }
-        }
-
-        // Priority 2: Try to resolve from config (may return path or catalog reference)
-        let resolved = args.path.resolve_ref()?;
-
-        match resolved {
-            ResolvedTable::Path(path_str) => {
-                // Direct path mode
-                return Self::execute_path_inspect(&path_str, args).await;
-            }
-            ResolvedTable::Catalog { catalog_config, table_name, .. } => {
-                // Parse table_name which may be "namespace.table" or "ns1.ns2.table"
-                let parts: Vec<&str> = table_name.split('.').collect();
-                let (namespace, name) = if parts.len() >= 2 {
-                    // Safe: we checked len >= 2, so last() always exists
-                    let name = parts.last().expect("checked len >= 2").to_string();
-                    let namespace: Vec<String> = parts[..parts.len() - 1]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    (namespace, name)
-                } else {
-                    // Single name, use default namespace
-                    (vec!["default".to_string()], table_name.clone())
-                };
-
-                return Self::execute_catalog_inspect(&namespace, &name, &catalog_config, args).await;
-            }
-        }
+    pub async fn execute(args: InspectArgs, ctx: &CliTableContext) -> Result<()> {
+        // Apply resource limits (timeout, cancellation, memory tracking)
+        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for inspection
+        with_resource_limits(ESTIMATED_MEMORY, Self::inspect_inner(args, ctx)).await
     }
 
-    /// Execute inspect for a direct path
-    async fn execute_path_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
-        let path = path_str;
+    async fn inspect_inner(args: InspectArgs, ctx: &CliTableContext) -> Result<()> {
+        // Resolve table - get catalog table directly when using catalog
+        let resolution = resolve_table_from_context(ctx).await?;
 
-        // Check if any physical layout flags are set
-        let physical_mode =
-            args.layout || (!args.schema && !args.metadata && !args.stats && !args.preview);
+        // Get table using factory method - handles catalog vs path context automatically
+        let table = resolution.to_table().await?;
 
-        // If physical mode, use new physical layout inspection
-        if physical_mode {
-            return Self::execute_physical_inspect(path, args).await;
-        }
+        // Build inspection options from CLI args
+        let options = IcebergInspectOptions::from_cli(args.verbose);
 
-        // Otherwise, use legacy inspect (for backwards compatibility)
-        Self::execute_legacy_inspect(path, args).await
-    }
+        // Execute inspection using the core operation
+        let result = IcebergTableInspector::inspect(&table, &options)?;
 
-    /// Execute physical layout inspection (new mode)
-    async fn execute_physical_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
-        // 1. Create storage backend based on path
-        let storage = create_object_store(path_str).await?;
-
-        // 2. Build physical inspect options
-        let verbosity = if args.verbose {
-            VerbosityLevel::Verbose
+        // Format and display result based on output format
+        if args.output == "json" {
+            print_json(&result)?;
         } else {
-            VerbosityLevel::Normal
-        };
-        let options = PhysicalInspectOptions::from_cli_args(
-            args.schema,
-            args.layout,
-            args.stats,
-            verbosity,
-            args.deep,
-        );
-
-        // 3. Inspect physical layout (progress shown inside service)
-        let path = Path::new(path_str);
-        let result = self::inspect_physical_layout(path, storage, &options).await?;
-
-        // 4. Display result
-        println!("{}", result);
-
-        Ok(())
-    }
-
-    /// Execute legacy inspect (old mode, for backwards compatibility)
-    async fn execute_legacy_inspect(path_str: &str, args: InspectArgs) -> Result<()> {
-        // 1. Create storage backend based on path
-        let storage = create_object_store(path_str).await?;
-
-        // 2. Build time-travel options from CLI args
-        let time_travel = TimeTravelOptions {
-            version: args.version,
-            as_of: args.as_of.clone(),
-        };
-
-        // 3. Create format handler with time-travel support
-        let path = Path::new(path_str);
-        let handler = FormatHandlerRegistry::global()
-            .create_handler_with_options(path, storage, time_travel)
-            .await?;
-
-        // 4. Build inspect options
-        // Logic: Default shows file info, metadata, schema, and stats
-        // --preview adds data preview to the default view
-        // Individual flags (-s, -m, --stats) show only what's requested
-        let any_flag_set = args.schema || args.metadata || args.stats;
-
-        let options = InspectOptions {
-            schema_only: args.schema && !args.metadata && !args.stats && !args.preview,
-            show_schema: if any_flag_set { args.schema } else { true },
-            show_metadata: if any_flag_set { args.metadata } else { true },
-            show_stats: if any_flag_set { args.stats } else { true },
-            show_data: args.preview,
-            num_rows: args.rows,
-            columns: args.columns,
-            sample: args.sample,
-        };
-
-        // 5. Execute inspect operation
-        let operation = InspectOperation::new(handler);
-        let result = operation.execute(&options).await?;
-
-        // 6. Format and display output based on output format
-        match args.output.as_str() {
-            "json" => {
-                // For JSON output, we need to create a serializable structure
-                let json_output = serde_json::json!({
-                    "format": result.format_name,
-                    "schema": {
-                        "fields": result.schema.fields().iter().map(|f| {
-                            serde_json::json!({
-                                "name": f.name(),
-                                "type": format!("{:?}", f.data_type()),
-                                "nullable": f.is_nullable(),
-                            })
-                        }).collect::<Vec<_>>(),
-                    },
-                    "metadata": result.metadata.as_ref().map(|m| {
-                        serde_json::json!({
-                            "num_rows": m.num_rows,
-                            "compressed_size": m.compressed_size,
-                            "uncompressed_size": m.uncompressed_size,
-                            "compression": m.compression,
-                            "format_version": m.format_version,
-                        })
-                    }),
-                });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json_output)
-                        .map_err(|e| crate::error::Error::General(e.to_string()))?
-                );
-            }
-            "yaml" => {
-                // Similar to JSON but YAML format
-                let yaml_output = serde_json::json!({
-                    "format": result.format_name,
-                    "schema": {
-                        "fields": result.schema.fields().iter().map(|f| {
-                            serde_json::json!({
-                                "name": f.name(),
-                                "type": format!("{:?}", f.data_type()),
-                                "nullable": f.is_nullable(),
-                            })
-                        }).collect::<Vec<_>>(),
-                    },
-                });
-                println!(
-                    "{}",
-                    serde_yaml::to_string(&yaml_output)
-                        .map_err(|e| crate::error::Error::General(e.to_string()))?
-                );
-            }
-            _ => {
-                // Default table format
-                let output = InspectionFormatter::format_inspect_result(&result, &options);
-                println!("{}", output);
-            }
+            let output = Self::format_result(&result, &options);
+            println!("{}", output);
         }
 
         Ok(())
     }
 
-    /// Execute catalog-based inspect (REST catalog mode)
-    async fn execute_catalog_inspect(
-        namespace: &[String],
-        name: &str,
-        catalog_config: &CatalogConfig,
-        args: InspectArgs,
-    ) -> Result<()> {
-        use crate::core::CatalogClient;
-        use colored::Colorize;
+    /// Format inspection result for display
+    fn format_result(result: &IcebergInspectResult, options: &IcebergInspectOptions) -> String {
+        let layout = BoxLayout::new(100);
+        let renderer = BoxRenderer::new(layout);
+        let mut container = Box::titled("Iceberg Table Inspection");
 
-        // Create catalog client
-        let catalog = CatalogClient::new(Some(catalog_config.clone())).await?;
+        // ═══════════════════════════════════════════════════════════════════════
+        // TABLE INFORMATION
+        // ═══════════════════════════════════════════════════════════════════════
+        let key_width = 18;
+        let mut table_info = vec![
+            BoxItem::kv_aligned(
+                "Format",
+                format!("Iceberg v{}", result.format_version),
+                key_width,
+            ),
+            BoxItem::kv_aligned("Location", &result.location, key_width),
+            BoxItem::kv_aligned("Table UUID", &result.table_uuid, key_width),
+            BoxItem::kv_aligned(
+                "Current Snapshot",
+                result
+                    .current_snapshot_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "None".to_string()),
+                key_width,
+            ),
+            BoxItem::kv_aligned(
+                "Snapshot Count",
+                result.snapshot_count.to_string(),
+                key_width,
+            ),
+            BoxItem::kv_aligned(
+                "Last Updated",
+                format_timestamp_ms(result.last_updated_ms),
+                key_width,
+            ),
+        ];
 
-        // Load table from catalog
-        let table = catalog.load_table(&crate::core::TableRef::Catalog {
-            namespace: namespace.to_vec(),
-            name: name.to_string(),
-        }).await?;
-
-        // Get table metadata
-        let metadata = table.metadata();
-
-        // Print basic info
-        println!("{}", "Iceberg Table (via Catalog)".cyan().bold());
-        println!();
-        println!("{}: {}.{}", "Table".bold(), namespace.join("."), name);
-        println!("{}: {}", "Format Version".bold(), metadata.format_version());
-        println!("{}: {}", "Location".bold(), metadata.location());
-
-        if let Some(current_snapshot_id) = metadata.current_snapshot_id() {
-            println!("{}: {}", "Current Snapshot".bold(), current_snapshot_id);
+        // Add sequence number in verbose mode
+        if options.verbose {
+            table_info.push(BoxItem::kv_aligned(
+                "Last Sequence",
+                result.last_sequence_number.to_string(),
+                key_width,
+            ));
         }
 
-        println!("{}: {}", "Snapshots".bold(), metadata.snapshots().len());
+        container = container.section(BoxSection::titled("Table Information").items(table_info));
 
-        // Show schema if requested
-        if args.schema || (!args.metadata && !args.stats && !args.preview) {
-            println!();
-            println!("{}", "Schema:".cyan().bold());
-            let schema = metadata.current_schema();
-            for field in schema.as_struct().fields() {
-                let nullable = if field.required { "" } else { " (nullable)" };
-                println!("  {} : {}{}", field.name.bold(), field.field_type, nullable);
+        // ═══════════════════════════════════════════════════════════════════════
+        // CURRENT STATE (records, files, delete files, size)
+        // Always show these fields even if some values are missing
+        // ═══════════════════════════════════════════════════════════════════════
+        let state = &result.current_state;
+        let mut state_items = Vec::new();
+
+        // Total Records
+        state_items.push(BoxItem::kv_aligned(
+            "Total Records",
+            state
+                .total_records
+                .map(format_number)
+                .unwrap_or_else(|| "-".to_string()),
+            16,
+        ));
+
+        // Data Files
+        state_items.push(BoxItem::kv_aligned(
+            "Data Files",
+            state
+                .total_data_files
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            16,
+        ));
+
+        // Delete Files - always show, highlight if > 0
+        let delete_files_str = match state.total_delete_files {
+            Some(v) if v > 0 => format!("{} {}", v, "(compaction recommended)".yellow()),
+            Some(v) => v.to_string(),
+            None => "0".to_string(),
+        };
+        state_items.push(BoxItem::kv_aligned("Delete Files", delete_files_str, 16));
+
+        // Total Size
+        state_items.push(BoxItem::kv_aligned(
+            "Total Size",
+            state
+                .total_files_size
+                .map(|v| format_bytes(v as u64))
+                .unwrap_or_else(|| "-".to_string()),
+            16,
+        ));
+
+        container = container.section(BoxSection::titled("Current State").items(state_items));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // SCHEMA
+        // ═══════════════════════════════════════════════════════════════════════
+        let mut schema_items = vec![
+            BoxItem::kv_aligned("Schema ID", result.schema_id.to_string(), 12),
+            BoxItem::kv_aligned("Columns", result.fields.len().to_string(), 12),
+        ];
+
+        // Show identifier fields if any
+        if !result.identifier_field_ids.is_empty() {
+            let id_names: Vec<&str> = result
+                .fields
+                .iter()
+                .filter(|f| f.is_identifier)
+                .map(|f| f.name.as_str())
+                .collect();
+            schema_items.push(BoxItem::kv_aligned("Identifier", id_names.join(", "), 12));
+        }
+
+        // Add subsection header for fields
+        schema_items.push(BoxItem::Empty);
+        schema_items.push(BoxItem::text(format!(
+            "{} Fields {}",
+            "──".white(),
+            "─".repeat(80).white()
+        )));
+
+        // Calculate max field name width for alignment
+        let max_name_width = result
+            .fields
+            .iter()
+            .map(|f| f.name.len())
+            .max()
+            .unwrap_or(0);
+
+        for field in &result.fields {
+            let nullable_str = if field.required { "" } else { " (nullable)" };
+            let id_marker = if field.is_identifier { " [ID]" } else { "" };
+
+            if options.verbose {
+                // Verbose: show field ID after name
+                let name_with_id = format!("{} ({})", field.name, field.field_id);
+                let max_verbose_width = max_name_width + 6; // account for " (XX)"
+                schema_items.push(BoxItem::text(format!(
+                    "  {:<width$}  {}{}{}",
+                    name_with_id.white().bold(),
+                    field.field_type.cyan(),
+                    nullable_str.dimmed(),
+                    id_marker.yellow(),
+                    width = max_verbose_width
+                )));
+
+                // Show doc string if present
+                if let Some(ref doc) = field.doc {
+                    schema_items.push(BoxItem::text(format!(
+                        "    {} {}",
+                        "doc:".dimmed(),
+                        doc.dimmed()
+                    )));
+                }
+            } else {
+                // Normal mode: simpler format
+                schema_items.push(BoxItem::text(format!(
+                    "  {:<width$}  {}{}{}",
+                    field.name.white().bold(),
+                    field.field_type.cyan(),
+                    nullable_str.dimmed(),
+                    id_marker.yellow(),
+                    width = max_name_width
+                )));
             }
         }
 
-        // Show partition spec
-        let spec = metadata.default_partition_spec();
-        if !spec.fields().is_empty() {
-            println!();
-            println!("{}", "Partition Spec:".cyan().bold());
-            for field in spec.fields() {
-                println!("  {} ({})", field.name, field.transform);
+        container = container.section(BoxSection::titled("Schema").items(schema_items));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // PARTITION & SORT
+        // ═══════════════════════════════════════════════════════════════════════
+        let mut partition_items = Vec::new();
+
+        if result.partition_fields.is_empty() {
+            partition_items.push(BoxItem::kv_aligned("Partitioning", "Unpartitioned", 14));
+        } else {
+            partition_items.push(BoxItem::kv_aligned(
+                "Partition Spec",
+                format!("ID {}", result.partition_spec_id),
+                14,
+            ));
+            for (i, field) in result.partition_fields.iter().enumerate() {
+                let is_last = i == result.partition_fields.len() - 1;
+                let prefix = if is_last { "└" } else { "├" };
+                partition_items.push(BoxItem::text(format!(
+                    "{} {}: {}",
+                    prefix.bright_black(),
+                    field.name.white().bold(),
+                    field.transform.cyan()
+                )));
             }
         }
 
-        Ok(())
+        if result.sort_fields.is_empty() {
+            partition_items.push(BoxItem::kv_aligned("Sort Order", "Unsorted", 14));
+        } else {
+            partition_items.push(BoxItem::kv_aligned(
+                "Sort Order",
+                format!("ID {}", result.sort_order_id),
+                14,
+            ));
+            for (i, sf) in result.sort_fields.iter().enumerate() {
+                let is_last = i == result.sort_fields.len() - 1;
+                let prefix = if is_last { "└" } else { "├" };
+                partition_items.push(BoxItem::text(format!(
+                    "{} field {}: {} {}",
+                    prefix.bright_black(),
+                    sf.source_id,
+                    sf.direction.cyan(),
+                    sf.null_order.dimmed()
+                )));
+            }
+        }
+
+        container =
+            container.section(BoxSection::titled("Partition & Sort").items(partition_items));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // PROPERTIES
+        // Normal mode: key properties only
+        // Verbose mode: all properties sorted
+        // ═══════════════════════════════════════════════════════════════════════
+        if !result.properties.is_empty() {
+            let mut prop_items = Vec::new();
+
+            if options.verbose {
+                // Show ALL properties sorted alphabetically
+                let mut sorted_props: Vec<_> = result.properties.iter().collect();
+                sorted_props.sort_by_key(|(k, _)| *k);
+                for (key, value) in sorted_props {
+                    prop_items.push(BoxItem::text(format!("{} = {}", key.cyan(), value)));
+                }
+            } else {
+                // Show only the most important properties
+                let key_properties = [
+                    "write.format.default",
+                    "write.parquet.compression-codec",
+                    "write.target-file-size-bytes",
+                    "write.delete.mode",
+                    "write.update.mode",
+                    "write.merge.mode",
+                ];
+
+                for key in &key_properties {
+                    if let Some(value) = result.properties.get(*key) {
+                        prop_items.push(BoxItem::text(format!("{} = {}", key.cyan(), value)));
+                    }
+                }
+            }
+
+            if !prop_items.is_empty() {
+                container = container.section(BoxSection::titled("Properties").items(prop_items));
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // REFS (branches and tags) - verbose mode only
+        // ═══════════════════════════════════════════════════════════════════════
+        if options.verbose && !result.refs.is_empty() {
+            let mut ref_items = Vec::new();
+            for r in &result.refs {
+                let type_str = if r.ref_type == "branch" {
+                    "branch".green()
+                } else {
+                    "tag".blue()
+                };
+                ref_items.push(BoxItem::text(format!(
+                    "{} ({}) → snapshot {}",
+                    r.name.white().bold(),
+                    type_str,
+                    r.snapshot_id
+                )));
+            }
+            container = container.section(BoxSection::titled("Refs").items(ref_items));
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // METADATA (verbose mode only)
+        // ═══════════════════════════════════════════════════════════════════════
+        if options.verbose {
+            let mut meta_items = vec![
+                BoxItem::kv_aligned("Schema Versions", result.schemas_count.to_string(), 20),
+                BoxItem::kv_aligned(
+                    "Partition Specs",
+                    result.partition_specs_count.to_string(),
+                    20,
+                ),
+                BoxItem::kv_aligned("Sort Orders", result.sort_orders_count.to_string(), 20),
+            ];
+
+            if !result.metadata_log.is_empty() {
+                meta_items.push(BoxItem::kv_aligned(
+                    "Metadata Files",
+                    result.metadata_log.len().to_string(),
+                    20,
+                ));
+                // Show current metadata file location
+                if let Some(latest) = result.metadata_log.last() {
+                    meta_items.push(BoxItem::kv_aligned(
+                        "Current Metadata",
+                        &latest.metadata_file,
+                        20,
+                    ));
+                }
+            }
+
+            container = container.section(BoxSection::titled("Metadata").items(meta_items));
+        }
+
+        renderer.render(container)
     }
-}
-
-/// Inspect physical layout of a file
-async fn inspect_physical_layout(
-    path: &Path,
-    _storage: Storage,
-    options: &PhysicalInspectOptions,
-) -> Result<String> {
-    // Use the new PhysicalInspectionService with dynamic inspector registry
-    use crate::core::inspection::{PhysicalInspectionService, view_to_inspect_result};
-
-    // Convert CLI options to core options (same structure, different types)
-    let core_options = crate::core::inspection::PhysicalInspectOptions {
-        show_schema: options.show_schema,
-        show_layout: options.show_layout,
-        show_stats: options.show_stats,
-        verbosity: match options.verbosity {
-            VerbosityLevel::Normal => crate::core::inspection::VerbosityLevel::Normal,
-            VerbosityLevel::Verbose => crate::core::inspection::VerbosityLevel::Verbose,
-        },
-        deep_scan: options.deep_scan,
-    };
-
-    let service = PhysicalInspectionService::new();
-    let view = service.inspect(path, core_options).await?;
-
-    // Convert InspectionView to PhysicalInspectResult and render
-    let result = view_to_inspect_result(&view);
-    Ok(result.render(&view.format_name))
 }

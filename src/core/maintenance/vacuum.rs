@@ -7,13 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::stream::{self, StreamExt};
-use iceberg::spec::ManifestList;
+use iceberg::spec::ManifestStatus;
 
 use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
-use crate::core::storage::{create_object_store, ObjectStoreExt};
-use crate::core::utils::{format_bytes, sizes};
+use crate::core::storage::{ObjectStoreExt, create_object_store};
 use crate::error::{Error, Result};
+use crate::utils::core::{format_bytes, sizes};
 
 /// Service for vacuuming tables (removing unreferenced files)
 pub struct VacuumService {
@@ -36,7 +35,7 @@ impl Default for VacuumConfig {
         Self {
             retention_hours: sizes::DEFAULT_RETENTION_HOURS,
             dry_run: false,
-            parallelism: 32,
+            parallelism: 256, // High parallelism for I/O-bound delete operations
         }
     }
 }
@@ -55,71 +54,72 @@ impl VacuumService {
     }
 
     /// Analyze files that would be deleted (works with any storage backend)
-    pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
-        let service = IcebergMetadataService::new_async(table_path.to_string())
-            .await
-            .map_err(|_| Error::table_not_found(table_path))?;
+    /// If metadata_service is provided, uses it; otherwise creates one from table_path
+    pub async fn analyze_with_service(
+        &self,
+        table_path: &str,
+        metadata_service: Option<&IcebergMetadataService>,
+    ) -> Result<VacuumAnalysis> {
+        // Use provided service or create one
+        let owned_service;
+        let service = match metadata_service {
+            Some(s) => s,
+            None => {
+                owned_service = IcebergMetadataService::new_async(table_path.to_string())
+                    .await
+                    .map_err(|_| Error::TableNotFound {
+                        path: table_path.to_string(),
+                    })?;
+                &owned_service
+            }
+        };
 
-        let (metadata, _) = service.load_metadata().await?;
-        let file_io = service.file_io().clone();
+        let table = service.table();
+        let metadata = table.metadata();
+        let file_io = service.file_io();
 
         // Step 1: Collect all referenced files from ALL snapshots
+        // Use manifest-level caching to avoid re-reading shared manifests
+        // (many snapshots share the same manifests)
         let snapshots: Vec<_> = metadata.snapshots().collect();
-        let mut seen_manifest_paths: HashSet<String> = HashSet::new();
-        let mut manifest_entries: Vec<iceberg::spec::ManifestFile> = Vec::new();
+
+        // Cache: manifest_path -> Vec<data_file_path>
+        let mut manifest_cache: HashMap<String, Vec<String>> = HashMap::new();
+        let mut referenced_files: HashSet<String> = HashSet::new();
 
         for snapshot in &snapshots {
-            let manifest_list_path = snapshot.manifest_list();
-
-            let manifest_list_content = match file_io
-                .new_input(manifest_list_path)
-                .map_err(|e| Error::manifest(format!("Failed to open manifest list: {}", e)))?
-                .read()
-                .await
-            {
-                Ok(content) => content,
-                Err(_) => continue,
-            };
-
-            let manifest_list = match ManifestList::parse_with_version(
-                &manifest_list_content,
-                metadata.format_version(),
-            ) {
+            let manifest_list = match snapshot.load_manifest_list(file_io, &metadata).await {
                 Ok(ml) => ml,
                 Err(_) => continue,
             };
 
-            for entry in manifest_list.entries() {
-                if !seen_manifest_paths.contains(&entry.manifest_path) {
-                    seen_manifest_paths.insert(entry.manifest_path.clone());
-                    manifest_entries.push(entry.clone());
+            for manifest_entry in manifest_list.entries() {
+                let manifest_path = manifest_entry.manifest_path.to_string();
+
+                // Check cache first - if we've seen this manifest, reuse the files
+                if let Some(files) = manifest_cache.get(&manifest_path) {
+                    referenced_files.extend(files.iter().cloned());
+                    continue;
                 }
+
+                // Load manifest and cache results
+                let manifest = match manifest_entry.load_manifest(file_io).await {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                let files: Vec<String> = manifest
+                    .entries()
+                    .iter()
+                    .filter(|e| e.status() != ManifestStatus::Deleted)
+                    .map(|e| e.data_file().file_path().to_string())
+                    .collect();
+
+                referenced_files.extend(files.iter().cloned());
+
+                // Cache for future snapshots that share this manifest
+                manifest_cache.insert(manifest_path, files);
             }
-        }
-
-        // Step 2: Load all manifests in parallel to get referenced data files
-        let manifest_results: Vec<Vec<String>> = stream::iter(manifest_entries.into_iter())
-            .map(|manifest_entry| {
-                let file_io = file_io.clone();
-                async move {
-                    if let Ok(manifest) = manifest_entry.load_manifest(&file_io).await {
-                        manifest
-                            .entries()
-                            .iter()
-                            .map(|e| e.file_path().to_string())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    }
-                }
-            })
-            .buffer_unordered(self.config.parallelism)
-            .collect()
-            .await;
-
-        let mut referenced_files: HashSet<String> = HashSet::new();
-        for paths in manifest_results {
-            referenced_files.extend(paths);
         }
 
         // Build filename lookup set for O(1) matching
@@ -169,9 +169,21 @@ impl VacuumService {
         })
     }
 
+    /// Analyze files that would be deleted - convenience method using table path
+    pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
+        self.analyze_with_service(table_path, None).await
+    }
+
     /// Execute vacuum operation - deletes orphan files
-    pub async fn execute(&self, table_path: &str) -> Result<VacuumResult> {
-        let analysis = self.analyze(table_path).await?;
+    /// If metadata_service is provided, uses it; otherwise creates one from table_path
+    pub async fn execute_with_service(
+        &self,
+        table_path: &str,
+        metadata_service: Option<&IcebergMetadataService>,
+    ) -> Result<VacuumResult> {
+        let analysis = self
+            .analyze_with_service(table_path, metadata_service)
+            .await?;
 
         if analysis.orphan_files.is_empty() {
             return Ok(VacuumResult {
@@ -193,23 +205,20 @@ impl VacuumService {
             });
         }
 
-        // Actually delete the files
+        // Delete files using bulk delete API (much faster for cloud storage)
         let storage = create_object_store(table_path).await?;
-        let mut deleted_count = 0;
-        let mut deleted_bytes = 0u64;
-        let mut errors = Vec::new();
 
-        for file in &analysis.orphan_files {
-            match storage.delete_str(&file.path).await {
-                Ok(_) => {
-                    deleted_count += 1;
-                    deleted_bytes += file.size;
-                }
-                Err(e) => {
-                    errors.push(format!("{}: {}", file.path, e));
-                }
-            }
-        }
+        let paths: Vec<String> = analysis.orphan_files.iter().map(|f| f.path.clone()).collect();
+        let errors = storage.delete_bulk(&paths).await?;
+
+        let deleted_count = analysis.orphan_files.len() - errors.len();
+        let deleted_bytes: u64 = analysis
+            .orphan_files
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !errors.iter().any(|e| e.starts_with(&paths[*i])))
+            .map(|(_, f)| f.size)
+            .sum();
 
         Ok(VacuumResult {
             deleted_count,
@@ -218,6 +227,11 @@ impl VacuumService {
             dry_run: false,
             analysis,
         })
+    }
+
+    /// Execute vacuum operation - convenience method using table path
+    pub async fn execute(&self, table_path: &str) -> Result<VacuumResult> {
+        self.execute_with_service(table_path, None).await
     }
 
     /// Convert vacuum result to MaintenanceResult for consistent output
@@ -235,8 +249,14 @@ impl VacuumService {
                 format_bytes(result.analysis.orphan_bytes),
             );
         } else {
-            details.insert("deleted_files".to_string(), result.deleted_count.to_string());
-            details.insert("freed_bytes".to_string(), format_bytes(result.deleted_bytes));
+            details.insert(
+                "deleted_files".to_string(),
+                result.deleted_count.to_string(),
+            );
+            details.insert(
+                "freed_bytes".to_string(),
+                format_bytes(result.deleted_bytes),
+            );
             if !result.errors.is_empty() {
                 details.insert("errors".to_string(), result.errors.len().to_string());
             }

@@ -21,10 +21,10 @@ pub struct PartitionFilter {
 /// Comparison operator for range filters
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CompareOp {
-    GreaterThanOrEqual,  // >=
-    GreaterThan,         // >
-    LessThanOrEqual,     // <=
-    LessThan,            // <
+    GreaterThanOrEqual, // >=
+    GreaterThan,        // >
+    LessThanOrEqual,    // <=
+    LessThan,           // <
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,11 @@ enum FilterCondition {
     /// Key exists check
     Exists { key: String },
     /// Range comparison: key>=value, key<value, etc.
-    Range { key: String, op: CompareOp, value: String },
+    Range {
+        key: String,
+        op: CompareOp,
+        value: String,
+    },
 }
 
 impl PartitionFilter {
@@ -72,7 +76,11 @@ impl PartitionFilter {
             if key.is_empty() || value.is_empty() {
                 return Err(format!("Invalid filter: '{}'", part));
             }
-            return Ok(FilterCondition::Range { key, op: CompareOp::GreaterThanOrEqual, value });
+            return Ok(FilterCondition::Range {
+                key,
+                op: CompareOp::GreaterThanOrEqual,
+                value,
+            });
         }
         if let Some(idx) = part.find("<=") {
             let key = part[..idx].trim().to_string();
@@ -80,7 +88,11 @@ impl PartitionFilter {
             if key.is_empty() || value.is_empty() {
                 return Err(format!("Invalid filter: '{}'", part));
             }
-            return Ok(FilterCondition::Range { key, op: CompareOp::LessThanOrEqual, value });
+            return Ok(FilterCondition::Range {
+                key,
+                op: CompareOp::LessThanOrEqual,
+                value,
+            });
         }
         // Check single operators (but not inside a value after =)
         if let Some(idx) = part.find('>') {
@@ -91,7 +103,11 @@ impl PartitionFilter {
                 if key.is_empty() || value.is_empty() {
                     return Err(format!("Invalid filter: '{}'", part));
                 }
-                return Ok(FilterCondition::Range { key, op: CompareOp::GreaterThan, value });
+                return Ok(FilterCondition::Range {
+                    key,
+                    op: CompareOp::GreaterThan,
+                    value,
+                });
             }
         }
         if let Some(idx) = part.find('<') {
@@ -102,7 +118,11 @@ impl PartitionFilter {
                 if key.is_empty() || value.is_empty() {
                     return Err(format!("Invalid filter: '{}'", part));
                 }
-                return Ok(FilterCondition::Range { key, op: CompareOp::LessThan, value });
+                return Ok(FilterCondition::Range {
+                    key,
+                    op: CompareOp::LessThan,
+                    value,
+                });
             }
         }
 
@@ -169,11 +189,9 @@ impl PartitionFilter {
                 parts.get(key.as_str()).is_some_and(|v| pattern.is_match(v))
             }
             FilterCondition::Exists { key } => parts.contains_key(key.as_str()),
-            FilterCondition::Range { key, op, value } => {
-                parts.get(key.as_str()).is_some_and(|v| {
-                    Self::compare_values(v, value, *op)
-                })
-            }
+            FilterCondition::Range { key, op, value } => parts
+                .get(key.as_str())
+                .is_some_and(|v| Self::compare_values(v, value, *op)),
         })
     }
 
@@ -270,8 +288,14 @@ mod tests {
 
     #[test]
     fn test_helper_function() {
-        assert!(matches_partition_filter("date=2024-01-01", "date=2024-01-*"));
-        assert!(!matches_partition_filter("date=2024-02-01", "date=2024-01-*"));
+        assert!(matches_partition_filter(
+            "date=2024-01-01",
+            "date=2024-01-*"
+        ));
+        assert!(!matches_partition_filter(
+            "date=2024-02-01",
+            "date=2024-01-*"
+        ));
     }
 
     #[test]

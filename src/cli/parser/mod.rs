@@ -39,16 +39,34 @@ pub use snapshot::*;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::utils::credentials::CredentialSource;
+use crate::core::config::CredentialSource;
 
-/// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and migrate from Delta Lake
+/// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and more
 #[derive(Parser, Debug)]
 #[command(name = "icetable")]
 #[command(version, about, long_about = None)]
 #[command(disable_help_flag = true)]
 pub struct Cli {
+    /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
+    #[arg(
+        short = 't',
+        long = "table",
+        global = true,
+        help_heading = "Global Options"
+    )]
+    pub table: Option<String>,
+
+    /// Namespace (e.g., "db.schema")
+    #[arg(
+        short = 'n',
+        long = "namespace",
+        global = true,
+        help_heading = "Global Options"
+    )]
+    pub namespace: Option<String>,
+
     /// Suppress non-error output
-    #[arg(short, long, global = true, help_heading = "Global Options")]
+    #[arg(short = 'q', long, global = true, help_heading = "Global Options")]
     pub quiet: bool,
 
     /// Log level [default: off]
@@ -59,48 +77,85 @@ pub struct Cli {
     #[arg(long, global = true, help_heading = "Global Options")]
     pub log_file: Option<PathBuf>,
 
-    /// REST Catalog URI [env: ICETABLE_CATALOG_URI]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide_env = true, help_heading = "Catalog Options")]
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Hidden global options - use `icetable options` to see all
+    // ═══════════════════════════════════════════════════════════════════════════
+    /// REST Catalog URI for ad-hoc catalog access
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide = true)]
     pub catalog_uri: Option<String>,
 
-    /// Catalog warehouse location [env: ICETABLE_CATALOG_WAREHOUSE]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide_env = true, help_heading = "Catalog Options")]
+    /// Catalog warehouse location
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide = true)]
     pub catalog_warehouse: Option<String>,
 
-    /// Catalog credential [env: ICETABLE_CATALOG_CREDENTIAL]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide_env = true, help_heading = "Catalog Options")]
+    /// Catalog credential (client_id:client_secret)
+    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide = true)]
     pub catalog_credential: Option<String>,
 
-    /// Catalog credential from environment variable [env: ICETABLE_CATALOG_CREDENTIAL_ENV]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_ENV", hide_env = true, help_heading = "Catalog Options")]
+    /// Catalog credential from environment variable
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL_ENV",
+        hide = true
+    )]
     pub catalog_credential_env: Option<String>,
 
-    /// Catalog credential from file [env: ICETABLE_CATALOG_CREDENTIAL_FILE]
-    #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL_FILE", hide_env = true, help_heading = "Catalog Options")]
+    /// Catalog credential from file
+    #[arg(
+        long,
+        global = true,
+        env = "ICETABLE_CATALOG_CREDENTIAL_FILE",
+        hide = true
+    )]
     pub catalog_credential_file: Option<std::path::PathBuf>,
 
     /// Use IAM role for authentication (AWS, GCP, Azure)
-    #[arg(long, global = true, help_heading = "Catalog Options")]
+    #[arg(long, global = true, hide = true)]
     pub catalog_use_iam_role: bool,
 
     /// Use OAuth2 for authentication
-    #[arg(long, global = true, help_heading = "Catalog Options")]
+    #[arg(long, global = true, hide = true)]
     pub catalog_use_oauth2: bool,
 
-    /// Maximum memory usage (e.g., 2GB, 512MB). 0 = unlimited [env: ICETABLE_MAX_MEMORY]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_MEMORY", hide_env = true, help_heading = "Resource Limits")]
+    /// Maximum memory usage (e.g., 2GB, 512MB). 0 = unlimited
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_MEMORY",
+        hide = true
+    )]
     pub max_memory: String,
 
-    /// Operation timeout in seconds. 0 = no timeout [env: ICETABLE_TIMEOUT]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_TIMEOUT", hide_env = true, help_heading = "Resource Limits")]
+    /// Operation timeout in seconds. 0 = no timeout
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_TIMEOUT",
+        hide = true
+    )]
     pub timeout: u64,
 
-    /// Maximum concurrent operations [env: ICETABLE_MAX_CONCURRENCY]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_CONCURRENCY", hide_env = true, help_heading = "Resource Limits")]
+    /// Maximum concurrent operations
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_CONCURRENCY",
+        hide = true
+    )]
     pub max_concurrency: u32,
 
-    /// Maximum worker threads for runtime. 0 = use system default [env: ICETABLE_MAX_THREADS]
-    #[arg(long, global = true, default_value = "0", env = "ICETABLE_MAX_THREADS", hide_env = true, help_heading = "Resource Limits")]
+    /// Maximum worker threads for runtime. 0 = use system default
+    #[arg(
+        long,
+        global = true,
+        default_value = "0",
+        env = "ICETABLE_MAX_THREADS",
+        hide = true
+    )]
     pub max_threads: usize,
 
     /// Print help
@@ -115,10 +170,19 @@ pub struct Cli {
 /// Available commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// List namespaces or tables in a catalog
+    Ls(LsArgs),
+
+    /// Create a namespace or table in a catalog
+    Create(CreateArgs),
+
+    /// Delete a namespace or table from a catalog
+    Delete(DeleteArgs),
+
     /// Analyze table health and get optimization recommendations
     Analyze(AnalyzeArgs),
 
-    /// Create a new empty table
+    /// Create a new empty table (local path)
     Init(InitArgs),
 
     /// Inspect table contents and metadata
@@ -136,7 +200,7 @@ pub enum Commands {
     /// View table version history
     History(HistoryArgs),
 
-    /// Remove old files no longer referenced by the table
+    /// Clean up old files no longer referenced by the table
     Vacuum(VacuumArgs),
 
     /// Compact and optimize table data and metadata
@@ -159,11 +223,8 @@ pub enum Commands {
     /// Manage table tags
     Tag(TagArgs),
 
-    /// Manage configuration (default table context)
+    /// Manage configuration (aliases, catalogs)
     Config(ConfigArgs),
-
-    /// Interact with Iceberg REST catalogs (Nessie, Polaris, etc.)
-    Catalog(CatalogArgs),
 
     /// Generate synthetic test data for benchmarking and testing
     Generate(GenerateArgs),
@@ -174,9 +235,54 @@ pub enum Commands {
     /// Diagnose environment health (credentials, connectivity)
     Doctor(DoctorArgs),
 
+    /// Print all global options (kubectl style)
+    Options,
+
     /// Interactive Terminal UI
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
+}
+
+/// Global context for table operations
+///
+/// Contains the global options from CLI that are relevant to table operations.
+/// This is passed to commands instead of individual parameters.
+#[derive(Debug, Clone)]
+pub struct CliTableContext {
+    /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
+    pub table: Option<String>,
+    /// Namespace (e.g., "db.schema")
+    pub namespace: Option<String>,
+    /// Catalog configuration from CLI
+    pub catalog_config: Option<crate::core::CatalogConfig>,
+}
+
+impl CliTableContext {
+    /// Get the full table reference, combining namespace and table if both are present
+    ///
+    /// If both namespace and table are specified, returns "namespace.table".
+    /// If only table is specified, returns the table as-is.
+    /// If neither is specified, returns None.
+    pub fn table_ref(&self) -> Option<String> {
+        match (&self.namespace, &self.table) {
+            (Some(ns), Some(t)) => {
+                // If table already contains namespace (has '.'), use it as-is
+                if t.contains('.')
+                    || t.starts_with("s3://")
+                    || t.starts_with("gs://")
+                    || t.starts_with("az://")
+                    || t.starts_with("file://")
+                    || t.starts_with("/")
+                {
+                    Some(t.clone())
+                } else {
+                    Some(format!("{}.{}", ns, t))
+                }
+            }
+            (None, Some(t)) => Some(t.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl Cli {
@@ -204,6 +310,15 @@ impl Cli {
 
             config
         })
+    }
+
+    /// Build table context from CLI global options
+    pub fn table_context(&self) -> CliTableContext {
+        CliTableContext {
+            table: self.table.clone(),
+            namespace: self.namespace.clone(),
+            catalog_config: self.catalog_config(),
+        }
     }
 }
 

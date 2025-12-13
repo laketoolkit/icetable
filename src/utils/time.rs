@@ -26,15 +26,21 @@ pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
     }
     if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         // Safe: 0,0,0 is always a valid time
-        return Ok(date.and_hms_opt(0, 0, 0).expect("00:00:00 is a valid time").and_utc());
+        return Ok(date
+            .and_hms_opt(0, 0, 0)
+            .expect("00:00:00 is a valid time")
+            .and_utc());
     }
 
-    Err(Error::General(format!(
-        "Invalid timestamp format: '{}'. Expected:\n  \
-         - Relative: 7d (days), 24h (hours), 30m (minutes), 2w (weeks)\n  \
-         - Absolute: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS",
-        s
-    )))
+    Err(Error::Parse {
+        message: format!(
+            "Invalid timestamp format: '{}'. Expected:\n  \
+             - Relative: 7d (days), 24h (hours), 30m (minutes), 2w (weeks)\n  \
+             - Absolute: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS",
+            s
+        ),
+        source: None,
+    })
 }
 
 /// Parse relative duration string (e.g., "7d", "24h", "30m", "2w")

@@ -275,7 +275,8 @@ icetable catalog -c nessie drop-namespace analytics --force
 
 ### generate
 
-Create synthetic Iceberg tables for testing and development.
+Create synthetic Iceberg tables for testing and development. If the table already exists,
+generates new data and appends it as a new snapshot.
 
 ```bash
 # Generate table with predefined template
@@ -291,6 +292,12 @@ icetable generate -t s3://bucket/custom \
 
 # Reproducible with seed
 icetable generate -t /tmp/test --template events --rows 1000 --seed 42
+
+# Append to existing table (will prompt for confirmation)
+icetable generate -t /tmp/test --template events --rows 5000
+
+# Append without confirmation
+icetable generate -t /tmp/test --template events --rows 5000 --force
 ```
 
 ### Other commands
