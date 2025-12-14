@@ -4,14 +4,20 @@
 //! - Application config (load/save from ~/.config/icetable/)
 //! - Catalog configurations (REST, auth methods)
 //! - Credential management (tokens, OAuth2, IAM)
+//! - Catalog credentials (separate credentials.yaml file)
+//! - Auth service (login, logout, status operations)
 //! - Table resolution (aliases, paths, catalog references)
 
+mod auth_service;
 mod catalog;
+mod catalog_credentials;
 mod credentials;
 mod manager;
 mod resolver;
 
-pub use catalog::{CatalogAuth, CatalogConfig, CatalogType};
+pub use auth_service::{AuthService, AuthStatus, LoginResult, LogoutResult};
+pub use catalog::{CatalogAuth, CatalogConfig, CatalogProvider, CatalogType};
+pub use catalog_credentials::{CatalogCredentials, OAuth2LoginRequest};
 pub use credentials::CredentialSource;
 pub use manager::Config;
 pub use resolver::{ResolvePath, ResolveTableRef, ResolvedTable};

@@ -1,14 +1,14 @@
 //! List command implementation
 //!
-//! Context-aware listing:
-//! - If context is a table → show table info (snapshots, branches, tags)
-//! - If context is a namespace → show tables
-//! - If context is a catalog → show namespaces
+//! Explicit subcommands:
+//! - `ls namespaces` - list namespaces in catalog
+//! - `ls tables` - list tables in namespace
+//! - `ls` (no subcommand) - auto-detect from context
 
 use colored::Colorize;
 
-use super::common::{CatalogResolution, print_json, resolve_catalog};
-use crate::cli::parser::{CliTableContext, LsArgs};
+use super::common::{print_json, resolve_catalog, CatalogResolution};
+use crate::cli::parser::{CliTableContext, LsArgs, LsCommands};
 use crate::core::metadata::{IcebergMetadataService, MetadataService};
 use crate::error::Result;
 
@@ -23,45 +23,79 @@ pub struct LsCommand;
 impl LsCommand {
     /// Execute ls command
     pub async fn execute(args: LsArgs, ctx: &CliTableContext) -> Result<()> {
-        // Resolve catalog context (error propagates with full context)
-        let catalog = resolve_catalog(ctx, args.catalog.as_deref()).await?;
+        // Resolve catalog context
+        let catalog = resolve_catalog(ctx).await?;
 
-        // If we have a table in context, show table info
-        if let (Some(table_name), Some(ns)) = (catalog.table(), catalog.namespace()) {
-            return Self::show_table_info(&catalog, ns, table_name, &args.output).await;
+        match args.command {
+            Some(LsCommands::Namespaces) => {
+                Self::list_namespaces(&catalog, &args.output).await
+            }
+            Some(LsCommands::Tables) => {
+                Self::list_tables(&catalog, &args.output).await
+            }
+            None => {
+                // Auto-detect from context (backwards compatible behavior)
+                Self::auto_detect(&catalog, &args.output).await
+            }
         }
+    }
 
-        // Otherwise, list tables or namespaces
-        if let Some(ns) = catalog.namespace() {
-            // List tables in namespace
-            let tables = catalog.list_tables().await?;
+    /// List namespaces in catalog
+    async fn list_namespaces(catalog: &CatalogResolution, output: &str) -> Result<()> {
+        let namespaces = catalog.list_namespaces().await?;
 
-            if args.output == "json" {
-                let json = serde_json::json!({
-                    "catalog": catalog.catalog_name,
-                    "namespace": ns,
-                    "tables": tables,
-                });
-                print_json(&json)?;
-            } else {
-                Self::print_tables_tree(&catalog.catalog_name, ns, &tables);
-            }
+        if output == "json" {
+            let json = serde_json::json!({
+                "catalog": catalog.catalog_name,
+                "namespaces": namespaces.iter().map(|ns| ns.join(".")).collect::<Vec<_>>(),
+            });
+            print_json(&json)?;
         } else {
-            // List namespaces
-            let namespaces = catalog.list_namespaces().await?;
-
-            if args.output == "json" {
-                let json = serde_json::json!({
-                    "catalog": catalog.catalog_name,
-                    "namespaces": namespaces.iter().map(|ns| ns.join(".")).collect::<Vec<_>>(),
-                });
-                print_json(&json)?;
-            } else {
-                Self::print_namespaces_tree(&catalog.catalog_name, &namespaces);
-            }
+            Self::print_namespaces_tree(&catalog.catalog_name, &namespaces);
         }
 
         Ok(())
+    }
+
+    /// List tables in namespace
+    async fn list_tables(catalog: &CatalogResolution, output: &str) -> Result<()> {
+        let namespace = catalog.namespace().ok_or_else(|| {
+            crate::error::Error::MissingArgument {
+                argument: "-n/--namespace".to_string(),
+                description: "Namespace required to list tables. Use -n or set context with 'icetable config use'".to_string(),
+            }
+        })?;
+
+        let tables = catalog.list_tables().await?;
+
+        if output == "json" {
+            let json = serde_json::json!({
+                "catalog": catalog.catalog_name,
+                "namespace": namespace,
+                "tables": tables,
+            });
+            print_json(&json)?;
+        } else {
+            Self::print_tables_tree(&catalog.catalog_name, namespace, &tables);
+        }
+
+        Ok(())
+    }
+
+    /// Auto-detect what to list based on context
+    async fn auto_detect(catalog: &CatalogResolution, output: &str) -> Result<()> {
+        // If we have a table in context, show table info
+        if let (Some(table_name), Some(ns)) = (catalog.table(), catalog.namespace()) {
+            return Self::show_table_info(catalog, ns, table_name, output).await;
+        }
+
+        // If we have a namespace, list tables
+        if catalog.namespace().is_some() {
+            return Self::list_tables(catalog, output).await;
+        }
+
+        // Otherwise, list namespaces
+        Self::list_namespaces(catalog, output).await
     }
 
     /// Show table information (snapshots, branches, tags)
@@ -74,9 +108,7 @@ impl LsCommand {
         let table = catalog.load_table(table_name).await?;
         let location = table.metadata().location();
 
-        // Create metadata service from catalog table (uses catalog metadata for consistency)
-        // Note: This is a special case - ls works from config context, not table args,
-        // so we create the service directly from the already-loaded catalog table
+        // Create metadata service from catalog table
         let metadata_service = IcebergMetadataService::from_catalog_table_readonly(&table).await?;
         let snapshots = metadata_service
             .list_snapshots(None)
@@ -218,7 +250,6 @@ impl LsCommand {
 
     /// Print namespaces in tree format
     fn print_namespaces_tree(catalog: &str, namespaces: &[Vec<String>]) {
-        // Header: catalog (count)
         println!(
             "{} {}",
             catalog.cyan(),
@@ -240,7 +271,6 @@ impl LsCommand {
 
     /// Print tables in tree format
     fn print_tables_tree(catalog: &str, namespace: &str, tables: &[String]) {
-        // Header: catalog.namespace (count)
         println!(
             "{}.{} {}",
             catalog.cyan(),

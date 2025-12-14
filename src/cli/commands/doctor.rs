@@ -18,6 +18,13 @@ use crate::core::maintenance::{
 use crate::error::Result;
 use crate::utils::with_resource_limits;
 
+/// Detected storage types from configuration
+struct ConfiguredStorageTypes {
+    uses_s3: bool,
+    uses_gcs: bool,
+    uses_azure: bool,
+}
+
 /// Handler for doctor command
 pub struct DoctorCommand;
 
@@ -52,6 +59,8 @@ impl DoctorCommand {
 
     /// Run environment health checks
     async fn execute_environment_check(args: &DoctorArgs) -> Result<()> {
+        use crate::config::Config;
+
         if args.check_files {
             println!(
                 "{}: --check-files requires a table path (-t or configured via 'icetable config use'). Ignoring.",
@@ -68,14 +77,37 @@ impl DoctorCommand {
 
         let mut checks = Vec::new();
 
-        // Run all diagnostic checks
+        // Run basic checks
         checks.push(DoctorService::check_version());
         checks.push(Self::check_config_file());
         checks.extend(Self::check_configuration(args).await);
-        checks.push(DoctorService::check_aws_credentials());
-        checks.push(DoctorService::check_aws_endpoint());
-        checks.push(DoctorService::check_gcs_credentials());
-        checks.push(DoctorService::check_azure_credentials());
+
+        // Determine which storage types are in use from config
+        let storage_types = Self::detect_configured_storage_types();
+
+        // Only check credentials for storage types actually in use
+        if storage_types.uses_s3 {
+            checks.push(DoctorService::check_aws_credentials());
+            checks.push(DoctorService::check_aws_endpoint());
+        }
+        if storage_types.uses_gcs {
+            checks.push(DoctorService::check_gcs_credentials());
+        }
+        if storage_types.uses_azure {
+            checks.push(DoctorService::check_azure_credentials());
+        }
+
+        // If no cloud storage configured, note that
+        if !storage_types.uses_s3 && !storage_types.uses_gcs && !storage_types.uses_azure {
+            if let Ok(config) = Config::load() {
+                if config.tables.is_empty() && config.catalogs.is_empty() {
+                    checks.push(CheckResult::ok(
+                        "Cloud credentials",
+                        "No cloud storage configured (local paths only)",
+                    ));
+                }
+            }
+        }
 
         if args.storage {
             checks.push(DoctorService::check_storage_connectivity().await);
@@ -83,6 +115,50 @@ impl DoctorCommand {
 
         Self::output_results(&checks, &args.output);
         Ok(())
+    }
+
+    /// Detect which storage types are configured in tables and catalogs
+    fn detect_configured_storage_types() -> ConfiguredStorageTypes {
+        use crate::config::Config;
+
+        let mut result = ConfiguredStorageTypes {
+            uses_s3: false,
+            uses_gcs: false,
+            uses_azure: false,
+        };
+
+        let config = match Config::load() {
+            Ok(c) => c,
+            Err(_) => return result,
+        };
+
+        // Check table aliases
+        for path in config.tables.values() {
+            Self::update_storage_types_from_path(path, &mut result);
+        }
+
+        // Check catalog warehouse locations
+        for catalog in config.catalogs.values() {
+            if let Some(ref warehouse) = catalog.warehouse {
+                Self::update_storage_types_from_path(warehouse, &mut result);
+            }
+        }
+
+        result
+    }
+
+    /// Update storage type flags based on a path
+    fn update_storage_types_from_path(path: &str, types: &mut ConfiguredStorageTypes) {
+        if path.starts_with("s3://") || path.starts_with("s3a://") {
+            types.uses_s3 = true;
+        } else if path.starts_with("gs://") {
+            types.uses_gcs = true;
+        } else if path.starts_with("az://")
+            || path.starts_with("abfs://")
+            || path.starts_with("abfss://")
+        {
+            types.uses_azure = true;
+        }
     }
 
     /// Run table integrity checks
@@ -168,32 +244,40 @@ impl DoctorCommand {
             Err(_) => return checks,
         };
 
-        // Check current context
-        if let Some(context) = config.get_current_context() {
-            match config.resolve_table(context) {
-                Ok(resolved) => {
-                    let msg = match resolved {
-                        crate::config::ResolvedTable::Path(path) => {
-                            format!("{} -> {}", context, path)
-                        }
-                        crate::config::ResolvedTable::Catalog {
-                            catalog_name,
-                            table_name,
-                            ..
-                        } => {
-                            format!("{} -> {}.{}", context, catalog_name, table_name)
-                        }
-                    };
-                    checks.push(CheckResult::ok("Current context", msg));
-                }
-                Err(e) => {
-                    checks.push(CheckResult::warning(
-                        "Current context",
-                        format!("Invalid: {}", e),
-                        "Run 'icetable config use <table>' to set a valid context",
-                    ));
-                }
+        // Check current context - validate each part individually
+        if let Some((catalog, warehouse, namespace, table)) = config.parse_current_context() {
+            // Build context description
+            let mut parts = vec![catalog.clone()];
+            if let Some(ref wh) = warehouse {
+                parts.push(format!("@{}", wh));
             }
+            if let Some(ref ns) = namespace {
+                parts.push(format!(".{}", ns));
+            }
+            if let Some(ref tbl) = table {
+                parts.push(format!(".{}", tbl));
+            }
+            let context_str = parts.join("");
+
+            // Check catalog exists
+            if config.catalogs.contains_key(&catalog) {
+                checks.push(CheckResult::ok(
+                    "Current context",
+                    format!("{} (catalog '{}' found)", context_str, catalog),
+                ));
+            } else {
+                checks.push(CheckResult::warning(
+                    "Current context",
+                    format!("{} (catalog '{}' not found in config)", context_str, catalog),
+                    "Run 'icetable config add-catalog' to add the catalog",
+                ));
+            }
+        } else if config.current_context.is_some() {
+            checks.push(CheckResult::warning(
+                "Current context",
+                "Invalid format",
+                "Run 'icetable config use <catalog[@warehouse][.namespace][.table]>' to set context",
+            ));
         }
 
         if !config.tables.is_empty() {

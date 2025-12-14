@@ -17,6 +17,10 @@ fn print_global_options() {
         "  -t, --table <TABLE>            Table name or path (e.g., \"namespace.table\" or \"s3://bucket/path\")"
     );
     println!("  -n, --namespace <NAMESPACE>    Namespace (e.g., \"db.schema\")");
+    println!(
+        "  -c, --catalog <CATALOG>        Catalog name (from config, e.g., \"polaris\", \"nessie\")"
+    );
+    println!("  -w, --warehouse <WAREHOUSE>    Warehouse within catalog (e.g., for Polaris)");
     println!("  -q, --quiet                    Suppress non-error output");
     println!(
         "      --log-level <LEVEL>        Log level: off, error, warn, info, debug, trace [default: off]"
@@ -24,7 +28,7 @@ fn print_global_options() {
     println!("      --log-file <PATH>          Log to file");
     println!();
 
-    println!("{}", "Catalog Override:".bold());
+    println!("{}", "Catalog Override (ad-hoc):".bold());
     println!("      --catalog-uri <URI>        REST Catalog URI [env: ICETABLE_CATALOG_URI]");
     println!(
         "      --catalog-warehouse <WH>   Catalog warehouse [env: ICETABLE_CATALOG_WAREHOUSE]"
@@ -142,6 +146,7 @@ async fn async_main(cli: Cli) -> i32 {
             Ok(())
         }
         Commands::Doctor(args) => DoctorCommand::execute(args).await,
+        Commands::Admin(args) => AdminCommand::execute(args, &ctx).await,
         Commands::Options => {
             print_global_options();
             Ok(())

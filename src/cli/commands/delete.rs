@@ -1,13 +1,15 @@
 //! Delete command implementation
 //!
-//! Deletes namespaces or tables from a catalog.
-//! - `delete -n <namespace>` deletes a namespace (must be empty or use --force)
-//! - `delete table1 table2 ...` deletes one or more tables
+//! Explicit subcommands:
+//! - `delete namespace <name>` - delete a namespace (must be empty or use --force)
+//! - `delete table <name> [<name>...]` - delete one or more tables
 
 use colored::Colorize;
 
-use super::common::{CatalogResolution, no_namespace_error, resolve_catalog};
-use crate::cli::parser::{CliTableContext, DeleteArgs};
+use super::common::resolve_catalog;
+use crate::cli::parser::{
+    CliTableContext, DeleteArgs, DeleteCommands, NamespaceDeleteArgs, TableDeleteArgs,
+};
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
@@ -22,30 +24,24 @@ impl DeleteCommand {
     }
 
     async fn execute_inner(args: DeleteArgs, ctx: &CliTableContext) -> Result<()> {
-        // Resolve catalog context (error propagates with full context)
-        let catalog = resolve_catalog(ctx, args.catalog.as_deref()).await?;
-
-        // Must have namespace
-        let namespace = catalog.namespace().ok_or_else(no_namespace_error)?;
-
-        // If tables provided, delete them
-        if !args.tables.is_empty() {
-            Self::delete_tables(&catalog, namespace, &args.tables, args.purge).await
-        } else {
-            // No tables - delete namespace
-            Self::delete_namespace(&catalog, namespace, args.force).await
+        match args.command {
+            DeleteCommands::Namespace(ns_args) => Self::delete_namespace(ns_args, ctx).await,
+            DeleteCommands::Table(tbl_args) => Self::delete_tables(tbl_args, ctx).await,
         }
     }
 
-    async fn delete_namespace(
-        catalog: &CatalogResolution,
-        namespace: &str,
-        force: bool,
-    ) -> Result<()> {
+    async fn delete_namespace(args: NamespaceDeleteArgs, ctx: &CliTableContext) -> Result<()> {
+        // Create a modified context with the namespace from args
+        let mut ctx = ctx.clone();
+        ctx.namespace = Some(args.name.clone());
+
+        let catalog = resolve_catalog(&ctx).await?;
+        let namespace = catalog.namespace().unwrap(); // Safe: we just set it
+
         // Check if namespace has tables
         let tables = catalog.list_tables().await?;
 
-        if !tables.is_empty() && !force {
+        if !tables.is_empty() && !args.force {
             return Err(Error::CatalogOperation {
                 message: format!(
                     "Namespace '{}' contains {} table(s). Use --force to delete anyway.",
@@ -62,18 +58,23 @@ impl DeleteCommand {
         Ok(())
     }
 
-    async fn delete_tables(
-        catalog: &CatalogResolution,
-        namespace: &str,
-        tables: &[String],
-        purge: bool,
-    ) -> Result<()> {
-        let purge_msg = if purge { " (data purged)" } else { "" };
+    async fn delete_tables(args: TableDeleteArgs, ctx: &CliTableContext) -> Result<()> {
+        let catalog = resolve_catalog(ctx).await?;
+
+        // Must have namespace
+        let namespace = catalog.namespace().ok_or_else(|| Error::MissingArgument {
+            argument: "-n/--namespace".to_string(),
+            description:
+                "Namespace required to delete tables. Use -n or set context with 'icetable config use'"
+                    .to_string(),
+        })?;
+
+        let purge_msg = if args.purge { " (data purged)" } else { "" };
 
         let mut errors = Vec::new();
 
-        for table_name in tables {
-            match catalog.delete_table(table_name, purge).await {
+        for table_name in &args.names {
+            match catalog.delete_table(table_name, args.purge).await {
                 Ok(()) => {
                     println!(
                         "{} Deleted: {}.{}{}",

@@ -18,6 +18,47 @@ use std::sync::Arc;
 fn clean_iceberg_error(error: &iceberg::Error) -> String {
     let msg = error.to_string();
 
+    // Try to extract the error message from JSON if present
+    // Pattern: "message":"<actual message>"
+    if let Some(json_msg) = extract_json_message(&msg) {
+        // Check if it's a warehouse not found error
+        if json_msg.contains("Unable to find warehouse") {
+            return format_warehouse_not_found_error(&json_msg);
+        }
+        return json_msg;
+    }
+
+    // Check for warehouse not found in raw message
+    if msg.contains("Unable to find warehouse") {
+        return format_warehouse_not_found_error(&msg);
+    }
+
+    // Check for HTTP status codes in the message and provide clearer messages
+    if msg.contains("status: 401") || msg.contains("Unauthorized") {
+        return "Authentication required - run 'icetable admin auth login'".to_string();
+    }
+    if msg.contains("status: 403") || msg.contains("Forbidden") {
+        return "Access denied - check your credentials and permissions".to_string();
+    }
+    if msg.contains("status: 404") {
+        return "Resource not found".to_string();
+    }
+    if msg.contains("status: 500") || msg.contains("Internal Server Error") {
+        return "Catalog server error - try again later".to_string();
+    }
+    if msg.contains("status: 502") || msg.contains("Bad Gateway") {
+        return "Catalog server unavailable (502)".to_string();
+    }
+    if msg.contains("status: 503") || msg.contains("Service Unavailable") {
+        return "Catalog server unavailable (503)".to_string();
+    }
+    if msg.contains("Connection refused")
+        || msg.contains("connection refused")
+        || msg.contains("error sending request")
+    {
+        return "Cannot connect to catalog - is the server running?".to_string();
+    }
+
     // Pattern: "Unexpected => <message>"
     if let Some(pos) = msg.find(" => ") {
         let clean_msg = &msg[pos + 4..];
@@ -26,6 +67,62 @@ fn clean_iceberg_error(error: &iceberg::Error) -> String {
     }
 
     msg
+}
+
+/// Format a user-friendly error message when warehouse is not found
+fn format_warehouse_not_found_error(msg: &str) -> String {
+    // Try to extract warehouse name from message like "Unable to find warehouse 'foo'"
+    let warehouse_name = if let Some(start) = msg.find("warehouse") {
+        let after = &msg[start + 9..];
+        // Look for quoted name or just take the next word
+        if let Some(quote_start) = after.find('\'') {
+            let after_quote = &after[quote_start + 1..];
+            if let Some(quote_end) = after_quote.find('\'') {
+                Some(&after_quote[..quote_end])
+            } else {
+                None
+            }
+        } else {
+            // Try unquoted - take first word
+            after.trim().split_whitespace().next()
+        }
+    } else {
+        None
+    };
+
+    let wh_display = warehouse_name.unwrap_or("(unknown)");
+
+    format!(
+        "Warehouse '{}' not found\n\n\
+         Hint:\n  \
+         - List warehouses: icetable admin warehouse ls\n  \
+         - Create warehouse: icetable admin warehouse create <name> --location s3://...\n  \
+         - Use different: icetable -w <warehouse> ls",
+        wh_display
+    )
+}
+
+/// Try to extract the "message" field from a JSON error response embedded in the error string
+fn extract_json_message(msg: &str) -> Option<String> {
+    // Look for pattern: "message":"<message>"
+    let pattern = "\"message\":\"";
+    let start = msg.find(pattern)? + pattern.len();
+    let end = msg[start..].find('"')? + start;
+    let message = &msg[start..end];
+
+    if message.is_empty() {
+        return None;
+    }
+
+    // Capitalize first letter
+    let mut chars = message.chars();
+    Some(
+        chars
+            .next()?
+            .to_uppercase()
+            .chain(chars)
+            .collect::<String>(),
+    )
 }
 
 /// Clean up catalog error messages to be more natural

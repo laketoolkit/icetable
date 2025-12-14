@@ -15,9 +15,14 @@
 //! ```
 
 mod committer;
+pub mod management;
 mod rest;
 
 pub use committer::TableCommitter;
+pub use management::{
+    create_management_client, create_management_client_with_name, CatalogManagement,
+    CreateWarehouseRequest, StorageType, Warehouse, WarehouseType,
+};
 pub use rest::RestCatalogClient;
 
 // Re-export from core::config for backward compatibility

@@ -13,20 +13,20 @@ pub struct BranchArgs {
 /// Branch subcommands
 #[derive(Subcommand, Debug)]
 pub enum BranchCommands {
-    /// List all branches
+    /// List branches
     #[command(name = "ls")]
     Ls(BranchListArgs),
 
-    /// Create a new branch
+    /// Create branch
     Create(BranchCreateArgs),
 
-    /// Delete a branch
+    /// Delete branch
     Delete(BranchDeleteArgs),
 
-    /// Fast-forward a branch to another ref
+    /// Fast-forward branch to ref
     FastForward(BranchFastForwardArgs),
 
-    /// Rename a branch
+    /// Rename branch
     Rename(BranchRenameArgs),
 }
 
@@ -41,22 +41,22 @@ pub struct BranchListArgs {
 /// Arguments for branch create
 #[derive(Parser, Debug)]
 pub struct BranchCreateArgs {
-    /// Name for the new branch
+    /// Branch name
     pub name: String,
 
-    /// Snapshot ID to branch from (defaults to current)
+    /// Source snapshot ID
     #[arg(long)]
     pub from_snapshot: Option<i64>,
 
-    /// Maximum reference age in milliseconds for the branch
+    /// Max reference age (ms)
     #[arg(long)]
     pub max_ref_age_ms: Option<i64>,
 
-    /// Minimum snapshots to keep on this branch
+    /// Min snapshots to keep
     #[arg(long)]
     pub min_snapshots_to_keep: Option<i32>,
 
-    /// Maximum snapshot age in milliseconds
+    /// Max snapshot age (ms)
     #[arg(long)]
     pub max_snapshot_age_ms: Option<i64>,
 
@@ -68,10 +68,10 @@ pub struct BranchCreateArgs {
 /// Arguments for branch delete
 #[derive(Parser, Debug)]
 pub struct BranchDeleteArgs {
-    /// Name of branch to delete
+    /// Branch name
     pub name: String,
 
-    /// Dry run - show what would be deleted without actually deleting
+    /// Preview without deleting
     #[arg(long)]
     pub dry_run: bool,
 
@@ -83,10 +83,10 @@ pub struct BranchDeleteArgs {
 /// Arguments for branch fast-forward
 #[derive(Parser, Debug)]
 pub struct BranchFastForwardArgs {
-    /// Name of branch to fast-forward
+    /// Branch name
     pub name: String,
 
-    /// Target snapshot ID or branch name
+    /// Target snapshot or branch
     #[arg(long)]
     pub to: String,
 
@@ -98,10 +98,10 @@ pub struct BranchFastForwardArgs {
 /// Arguments for branch rename
 #[derive(Parser, Debug)]
 pub struct BranchRenameArgs {
-    /// Current branch name
+    /// Current name
     pub old_name: String,
 
-    /// New branch name
+    /// New name
     pub new_name: String,
 
     /// Output format (text, json)
@@ -120,17 +120,17 @@ pub struct TagArgs {
 /// Tag subcommands
 #[derive(Subcommand, Debug)]
 pub enum TagCommands {
-    /// List all tags
+    /// List tags
     #[command(name = "ls")]
     Ls(TagListArgs),
 
-    /// Create a new tag
+    /// Create tag
     Create(TagCreateArgs),
 
-    /// Delete a tag
+    /// Delete tag
     Delete(TagDeleteArgs),
 
-    /// Rename a tag
+    /// Rename tag
     Rename(TagRenameArgs),
 }
 
@@ -145,14 +145,14 @@ pub struct TagListArgs {
 /// Arguments for tag create
 #[derive(Parser, Debug)]
 pub struct TagCreateArgs {
-    /// Name for the new tag
+    /// Tag name
     pub name: String,
 
-    /// Snapshot ID to tag (defaults to current)
+    /// Snapshot ID to tag
     #[arg(long)]
     pub snapshot_id: Option<i64>,
 
-    /// Maximum reference age in milliseconds
+    /// Max reference age (ms)
     #[arg(long)]
     pub max_ref_age_ms: Option<i64>,
 
@@ -164,10 +164,10 @@ pub struct TagCreateArgs {
 /// Arguments for tag delete
 #[derive(Parser, Debug)]
 pub struct TagDeleteArgs {
-    /// Name of tag to delete
+    /// Tag name
     pub name: String,
 
-    /// Dry run - show what would be deleted without actually deleting
+    /// Preview without deleting
     #[arg(long)]
     pub dry_run: bool,
 
@@ -179,10 +179,10 @@ pub struct TagDeleteArgs {
 /// Arguments for tag rename
 #[derive(Parser, Debug)]
 pub struct TagRenameArgs {
-    /// Current tag name
+    /// Current name
     pub old_name: String,
 
-    /// New tag name
+    /// New name
     pub new_name: String,
 
     /// Output format (text, json)

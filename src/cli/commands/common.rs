@@ -16,6 +16,8 @@ impl From<&CliTableContext> for CatalogContext {
         CatalogContext {
             table: ctx.table.clone(),
             namespace: ctx.namespace.clone(),
+            catalog: ctx.catalog.clone(),
+            warehouse: ctx.warehouse.clone(),
         }
     }
 }
@@ -24,11 +26,8 @@ impl From<&CliTableContext> for CatalogContext {
 ///
 /// Convenience wrapper that converts `CliTableContext` to `CatalogContext`
 /// and delegates to `resolve_catalog_from_context`.
-pub async fn resolve_catalog(
-    ctx: &CliTableContext,
-    catalog_arg: Option<&str>,
-) -> crate::error::Result<CatalogResolution> {
-    resolve_catalog_from_context(&CatalogContext::from(ctx), catalog_arg).await
+pub async fn resolve_catalog(ctx: &CliTableContext) -> crate::error::Result<CatalogResolution> {
+    resolve_catalog_from_context(&CatalogContext::from(ctx)).await
 }
 
 /// Resolve a table from global context

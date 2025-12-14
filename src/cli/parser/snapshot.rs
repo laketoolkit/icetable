@@ -13,11 +13,11 @@ pub struct SnapshotArgs {
 /// Snapshot subcommands
 #[derive(Subcommand, Debug)]
 pub enum SnapshotCommands {
-    /// List all snapshots
+    /// List snapshots
     #[command(name = "ls")]
     Ls(SnapshotListArgs),
 
-    /// Create a new snapshot/checkpoint
+    /// Create snapshot/checkpoint
     Create(SnapshotCreateArgs),
 
     /// Expire old snapshots
@@ -26,21 +26,21 @@ pub enum SnapshotCommands {
     /// Set current snapshot (time travel)
     Set(SnapshotSetArgs),
 
-    /// Cherry-pick changes from another snapshot
+    /// Cherry-pick from another snapshot
     Cherrypick(SnapshotCherrypickArgs),
 
-    /// Show snapshot lineage (parent chain)
+    /// Show snapshot lineage
     Lineage(SnapshotLineageArgs),
 }
 
 /// Arguments for snapshot list
 #[derive(Parser, Debug)]
 pub struct SnapshotListArgs {
-    /// Maximum number of snapshots to show
+    /// Max snapshots to show
     #[arg(long, default_value = "10")]
     pub limit: usize,
 
-    /// Show all snapshots (no limit)
+    /// Show all snapshots
     #[arg(long)]
     pub all: bool,
 
@@ -52,7 +52,7 @@ pub struct SnapshotListArgs {
 /// Arguments for snapshot create
 #[derive(Parser, Debug)]
 pub struct SnapshotCreateArgs {
-    /// Force checkpoint creation even if not needed
+    /// Force checkpoint even if not needed
     #[arg(long)]
     pub force: bool,
 
@@ -64,23 +64,23 @@ pub struct SnapshotCreateArgs {
 /// Arguments for snapshot expire
 #[derive(Parser, Debug)]
 pub struct SnapshotExpireArgs {
-    /// Branch to expire snapshots from (defaults to main/current)
+    /// Branch to expire from
     #[arg(short, long)]
     pub branch: Option<String>,
 
-    /// Expire snapshots older than this time (e.g., "7d", "24h", "2w", or "2024-01-15")
+    /// Expire older than (e.g., 7d, 24h, 2w)
     #[arg(long)]
     pub older_than: Option<String>,
 
-    /// Keep the last N snapshots (minimum 1)
+    /// Keep last N snapshots
     #[arg(long)]
     pub retain_last: Option<usize>,
 
-    /// Specific snapshot IDs to expire (comma-separated)
+    /// Snapshot IDs to expire (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub ids: Option<Vec<i64>>,
 
-    /// Dry run - show what would be expired without actually expiring
+    /// Preview without expiring
     #[arg(long)]
     pub dry_run: bool,
 
@@ -92,23 +92,23 @@ pub struct SnapshotExpireArgs {
 /// Arguments for snapshot set
 #[derive(Parser, Debug)]
 pub struct SnapshotSetArgs {
-    /// Snapshot ID to set as current
+    /// Snapshot ID to set
     #[arg(long, conflicts_with_all = ["as_of", "ref_branch", "tag"])]
     pub id: Option<i64>,
 
-    /// Set to snapshot as of time (e.g., "7d", "24h", or "2024-01-15")
+    /// Set by time (e.g., 7d, 24h, 2024-01-15)
     #[arg(long, conflicts_with_all = ["id", "ref_branch", "tag"])]
     pub as_of: Option<String>,
 
-    /// Set to snapshot referenced by branch name
+    /// Set by branch name
     #[arg(long = "branch", conflicts_with_all = ["id", "as_of", "tag"])]
     pub ref_branch: Option<String>,
 
-    /// Set to snapshot referenced by tag name
+    /// Set by tag name
     #[arg(long, conflicts_with_all = ["id", "as_of", "ref_branch"])]
     pub tag: Option<String>,
 
-    /// Dry run - show what would change without actually setting
+    /// Preview without setting
     #[arg(long)]
     pub dry_run: bool,
 
@@ -120,7 +120,7 @@ pub struct SnapshotSetArgs {
 /// Arguments for snapshot cherrypick
 #[derive(Parser, Debug)]
 pub struct SnapshotCherrypickArgs {
-    /// Source snapshot ID to cherry-pick from
+    /// Source snapshot ID
     #[arg(long)]
     pub snapshot_id: i64,
 
@@ -132,14 +132,14 @@ pub struct SnapshotCherrypickArgs {
 /// Arguments for snapshot lineage
 #[derive(Parser, Debug)]
 pub struct SnapshotLineageArgs {
-    /// Snapshot ID to show lineage for (defaults to current)
+    /// Snapshot ID (defaults to current)
     pub snapshot_id: Option<i64>,
 
-    /// Number of snapshots to show (default: 10)
+    /// Max snapshots to show
     #[arg(long, default_value = "10")]
     pub limit: usize,
 
-    /// Show all snapshots in lineage
+    /// Show all in lineage
     #[arg(short, long)]
     pub all: bool,
 
@@ -155,7 +155,7 @@ pub struct SnapshotDiffArgs {
     #[arg(long)]
     pub from: i64,
 
-    /// Second snapshot ID (newer, defaults to current)
+    /// Second snapshot ID (newer)
     #[arg(long)]
     pub to: Option<i64>,
 

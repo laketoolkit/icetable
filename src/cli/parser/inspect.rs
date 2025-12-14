@@ -5,7 +5,7 @@ use clap::Parser;
 /// Arguments for inspect command
 #[derive(Parser, Debug)]
 pub struct InspectArgs {
-    /// Verbose mode - show snapshot history and manifest details
+    /// Show snapshot history and manifests
     #[arg(short, long)]
     pub verbose: bool,
 
@@ -13,11 +13,11 @@ pub struct InspectArgs {
     #[arg(short, long, default_value = "table")]
     pub output: String,
 
-    /// Read table at specific snapshot ID
+    /// Specific snapshot ID
     #[arg(long)]
     pub snapshot: Option<i64>,
 
-    /// Read table as of a specific time (e.g., "7d", "24h", or "2024-01-15")
+    /// Time travel (e.g., 7d, 24h, 2024-01-15)
     #[arg(long)]
     pub as_of: Option<String>,
 }
@@ -25,11 +25,11 @@ pub struct InspectArgs {
 /// Arguments for validate command
 #[derive(Parser, Debug)]
 pub struct ValidateArgs {
-    /// Force specific format (arrow, parquet, csv, json)
+    /// Force format (arrow, parquet, csv, json)
     #[arg(short, long)]
     pub format: Option<String>,
 
-    /// Validate against schema file
+    /// Schema file to validate against
     #[arg(long)]
     pub schema: Option<std::path::PathBuf>,
 
@@ -41,15 +41,15 @@ pub struct ValidateArgs {
     #[arg(long)]
     pub quick: bool,
 
-    /// Strict mode (warnings as errors)
+    /// Warnings as errors
     #[arg(long, conflicts_with = "relax")]
     pub strict: bool,
 
-    /// Relax mode (never fail, always exit 0)
+    /// Never fail (exit 0)
     #[arg(long, conflicts_with = "strict")]
     pub relax: bool,
 
-    /// Quiet mode (no output, just exit code)
+    /// No output, just exit code
     #[arg(short = 'Q', long)]
     pub quiet: bool,
 
@@ -57,7 +57,7 @@ pub struct ValidateArgs {
     #[arg(short, long, default_value = "text")]
     pub output: String,
 
-    /// Attempt to fix issues automatically
+    /// Auto-fix issues
     #[arg(long)]
     pub fix: bool,
 }
@@ -65,10 +65,10 @@ pub struct ValidateArgs {
 /// Arguments for diff command
 #[derive(Parser, Debug)]
 pub struct DiffArgs {
-    /// Reference to compare (snapshot ID, branch name, or tag name). Defaults to current.
+    /// Reference to compare (snapshot, branch, tag)
     pub reference: Option<String>,
 
-    /// Base reference to compare against (snapshot ID, branch name, or tag name)
+    /// Base reference to compare against
     #[arg(long)]
     pub base: Option<String>,
 
@@ -84,7 +84,7 @@ pub struct StatsArgs {
     #[arg(short, long, default_value = "text")]
     pub output: String,
 
-    /// Filter by partition (e.g., "date=2024-01-15/*" or "region=us-west-2")
+    /// Filter by partition
     #[arg(short, long)]
     pub partition: Option<String>,
 }
@@ -92,19 +92,19 @@ pub struct StatsArgs {
 /// Arguments for analyze command
 #[derive(Parser, Debug)]
 pub struct AnalyzeArgs {
-    /// Minimum file size to consider "small" (default: 16MB)
+    /// Min size to consider "small" (bytes)
     #[arg(long, default_value = "16777216")]
     pub min_file_size: u64,
 
-    /// Skip orphan and missing files check (faster, skips storage scan)
+    /// Skip orphan/missing files check
     #[arg(long)]
     pub skip_orphans: bool,
 
-    /// Check all snapshots for orphans/missing (default: true for consistency with vacuum)
+    /// Check all snapshots for orphans
     #[arg(long, default_value_t = true)]
     pub all_snapshots: bool,
 
-    /// Show detailed partition-level information
+    /// Show partition-level details
     #[arg(short, long)]
     pub verbose: bool,
 
@@ -116,11 +116,11 @@ pub struct AnalyzeArgs {
 /// Arguments for history command
 #[derive(Parser, Debug)]
 pub struct HistoryArgs {
-    /// Maximum number of versions to show
+    /// Max versions to show
     #[arg(long, default_value = "10")]
     pub limit: usize,
 
-    /// Show all versions (no limit)
+    /// Show all versions
     #[arg(long)]
     pub all: bool,
 

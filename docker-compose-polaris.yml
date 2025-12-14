@@ -45,8 +45,6 @@ services:
       # Polaris configuration
       polaris.realm-context.realms: default
       polaris.features.DROP_WITH_PURGE_ENABLED: "true"
-      # Disable credential vending - client provides own credentials
-      polaris.features.VENDING_DISABLED: "true"
       # S3 FileIO configuration for MinIO
       polaris.catalog.io.s3.endpoint: http://minio:9000
       polaris.catalog.io.s3.path-style-access: "true"
@@ -65,6 +63,63 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Setup Polaris with warehouse configured for MinIO
+  polaris-setup:
+    image: curlimages/curl:latest
+    depends_on:
+      polaris:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Getting OAuth token...';
+      TOKEN=$$(curl -s -X POST http://polaris:8181/api/catalog/v1/oauth/tokens \
+        -d 'grant_type=client_credentials&client_id=admin&client_secret=admin&scope=PRINCIPAL_ROLE:ALL' \
+        | sed -n 's/.*\"access_token\":\"\([^\"]*\)\".*/\1/p');
+      echo \"Token: $${TOKEN:0:20}...\";
+
+      echo 'Creating warehouse dev...';
+      curl -s -X POST http://polaris:8181/api/management/v1/catalogs \
+        -H \"Authorization: Bearer $$TOKEN\" \
+        -H 'Content-Type: application/json' \
+        -d '{
+          \"catalog\": {
+            \"name\": \"dev\",
+            \"type\": \"INTERNAL\",
+            \"properties\": {
+              \"default-base-location\": \"s3://iceberg-warehouse/dev\"
+            },
+            \"storageConfigInfo\": {
+              \"storageType\": \"S3\",
+              \"allowedLocations\": [\"s3://iceberg-warehouse/dev\"],
+              \"s3.endpoint\": \"http://minio:9000\",
+              \"s3.path-style-access\": \"true\",
+              \"s3.access-key-id\": \"minioadmin\",
+              \"s3.secret-access-key\": \"minioadmin\"
+            }
+          }
+        }' || true;
+
+      echo 'Creating catalog role...';
+      curl -s -X POST http://polaris:8181/api/management/v1/catalogs/dev/catalog-roles \
+        -H \"Authorization: Bearer $$TOKEN\" \
+        -H 'Content-Type: application/json' \
+        -d '{\"catalogRole\": {\"name\": \"admin_role\"}}' || true;
+
+      echo 'Granting catalog privileges...';
+      curl -s -X PUT http://polaris:8181/api/management/v1/catalogs/dev/catalog-roles/admin_role/grants \
+        -H \"Authorization: Bearer $$TOKEN\" \
+        -H 'Content-Type: application/json' \
+        -d '{\"grant\": {\"type\": \"catalog\", \"privilege\": \"CATALOG_MANAGE_CONTENT\"}}' || true;
+
+      echo 'Assigning role to admin...';
+      curl -s -X PUT http://polaris:8181/api/management/v1/principal-roles/admin/catalog-roles/dev \
+        -H \"Authorization: Bearer $$TOKEN\" \
+        -H 'Content-Type: application/json' \
+        -d '{\"catalogRole\": {\"name\": \"admin_role\"}}' || true;
+
+      echo 'Setup complete!';
+      "
 
 networks:
   default:

@@ -10,7 +10,7 @@ use crate::cli::output::create_styled_table;
 use crate::cli::parser::{
     ConfigAddArgs, ConfigArgs, ConfigCommands, ConfigDeleteArgs, ConfigLsArgs, ConfigUseArgs,
 };
-use crate::config::{CatalogConfig, Config};
+use crate::config::{CatalogConfig, CatalogProvider, Config};
 use crate::core::config::{CatalogAuth, CredentialSource};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
@@ -34,7 +34,14 @@ impl ConfigCommand {
         }
     }
 
-    /// Set the current context (catalog or table, with optional namespace/table)
+    /// Set the current context (catalog or table, with optional warehouse/namespace/table)
+    ///
+    /// Context format: `catalog[@warehouse][.namespace][.table]`
+    /// Examples:
+    /// - `polaris` - just catalog
+    /// - `polaris@iceberg` - catalog with warehouse
+    /// - `polaris@iceberg.demo` - with namespace
+    /// - `polaris@iceberg.demo.events` - with table
     async fn use_context(args: ConfigUseArgs) -> Result<()> {
         let mut config = Config::load()?;
 
@@ -48,12 +55,16 @@ impl ConfigCommand {
                 "icetable config use <catalog>".dimmed()
             );
             println!(
+                "  {} With warehouse",
+                "icetable config use <catalog> -w <warehouse>".dimmed()
+            );
+            println!(
                 "  {} With namespace",
-                "icetable config use <catalog> -n <namespace>".dimmed()
+                "icetable config use <catalog> -w <warehouse> -n <namespace>".dimmed()
             );
             println!(
                 "  {} With table",
-                "icetable config use <catalog> -n <namespace> -t <table>".dimmed()
+                "icetable config use <catalog> -w <warehouse> -n <namespace> -t <table>".dimmed()
             );
             return Ok(());
         };
@@ -69,9 +80,12 @@ impl ConfigCommand {
         }
 
         if is_table {
-            // For tables, -n and -t don't make sense
-            if args.namespace.is_some() || args.table.is_some() {
-                println!("{} Options -n/-t are only valid for catalogs", "!".yellow());
+            // For tables, -w/-n/-t don't make sense
+            if args.warehouse.is_some() || args.namespace.is_some() || args.table.is_some() {
+                println!(
+                    "{} Options -w/-n/-t are only valid for catalogs",
+                    "!".yellow()
+                );
                 return Ok(());
             }
             config.set_current_context(name.clone());
@@ -83,53 +97,52 @@ impl ConfigCommand {
         // It's a catalog
         config.set_current_catalog(name.clone());
 
-        // Set namespace if provided
-        if let Some(ref namespace) = args.namespace {
-            config.set_catalog_namespace(name, namespace.clone());
+        // Build context string: catalog[@warehouse][.namespace][.table]
+        let mut context = name.clone();
+        let mut display_parts = vec![name.cyan().to_string()];
+
+        if let Some(ref warehouse) = args.warehouse {
+            context.push('@');
+            context.push_str(warehouse);
+            display_parts.push(format!("@{}", warehouse.cyan()));
         }
 
-        // Build context string based on provided options
-        if let Some(ref table) = args.table {
-            // Full context: catalog.namespace.table
-            let namespace = args.namespace.as_ref().or_else(|| {
-                config
-                    .catalogs
-                    .get(name)
-                    .and_then(|c| c.default_namespace.as_ref())
-            });
+        if let Some(ref namespace) = args.namespace {
+            context.push('.');
+            context.push_str(namespace);
+            display_parts.push(namespace.cyan().to_string());
+        }
 
-            let Some(namespace) = namespace else {
+        if let Some(ref table) = args.table {
+            // Table requires namespace
+            if args.namespace.is_none() {
                 println!("{} Table requires a namespace (-n)", "!".yellow());
                 return Ok(());
-            };
-
-            let context = format!("{}.{}.{}", name, namespace, table);
-            config.set_current_context(context);
-        } else if let Some(ref namespace) = args.namespace {
-            // Partial context: catalog.namespace
-            let context = format!("{}.{}", name, namespace);
-            config.set_current_context(context);
-        } else {
-            // Just catalog
-            config.set_current_context(name.clone());
+            }
+            context.push('.');
+            context.push_str(table);
+            display_parts.push(table.cyan().to_string());
         }
 
+        config.set_current_context(context);
         config.save()?;
 
-        // Build output message
-        let mut parts = vec![name.cyan().to_string()];
+        // Build display: catalog@warehouse.namespace.table
+        let display = if display_parts.len() > 1 && args.warehouse.is_some() {
+            // Format: catalog@warehouse.namespace.table
+            let catalog_part = display_parts[0].clone();
+            let warehouse_part = display_parts[1].clone();
+            let rest: Vec<_> = display_parts.iter().skip(2).cloned().collect();
+            if rest.is_empty() {
+                format!("{}{}", catalog_part, warehouse_part)
+            } else {
+                format!("{}{}.{}", catalog_part, warehouse_part, rest.join("."))
+            }
+        } else {
+            display_parts.join(".")
+        };
 
-        if let Some(cat_config) = config.catalogs.get(name)
-            && let Some(ref ns) = cat_config.default_namespace
-        {
-            parts.push(ns.cyan().to_string());
-        }
-
-        if let Some(ref table) = args.table {
-            parts.push(table.cyan().to_string());
-        }
-
-        println!("{} Using: {}", "✓".green(), parts.join("."));
+        println!("{} Using: {}", "✓".green(), display);
 
         Ok(())
     }
@@ -243,11 +256,16 @@ impl ConfigCommand {
             properties.insert("warehouse".to_string(), warehouse.clone());
         }
 
+        // Determine provider: use explicit arg or auto-detect from URI
+        let provider = args
+            .provider
+            .unwrap_or_else(|| CatalogProvider::detect_from_uri(uri));
+
         let catalog_config = CatalogConfig {
             catalog_type: crate::config::CatalogType::Rest,
+            provider: Some(provider),
             uri: uri.to_string(),
             warehouse: args.warehouse.clone(),
-            default_namespace: None,
             auth,
             credential: None,
             properties,
@@ -261,9 +279,10 @@ impl ConfigCommand {
         config.save()?;
 
         println!(
-            "{} Added catalog: {} → {}",
+            "{} Added catalog: {} ({}) → {}",
             "✓".green(),
             name.cyan(),
+            provider,
             uri.dimmed()
         );
         if auth_desc != "none" {
@@ -303,9 +322,18 @@ impl ConfigCommand {
     async fn ls(args: ConfigLsArgs) -> Result<()> {
         let config = Config::load()?;
 
+        // Parse current context to get warehouse, namespace, and table
+        let (current_warehouse, current_namespace, current_table) = config
+            .parse_current_context()
+            .map(|(_, wh, ns, tbl)| (wh, ns, tbl))
+            .unwrap_or((None, None, None));
+
         if args.output == "json" {
             let json = serde_json::json!({
                 "current_catalog": config.get_current_catalog(),
+                "current_warehouse": current_warehouse,
+                "current_namespace": current_namespace,
+                "current_table": current_table,
                 "tables": config.tables.iter().map(|(name, path)| {
                     serde_json::json!({
                         "name": name,
@@ -315,24 +343,15 @@ impl ConfigCommand {
                 "catalogs": config.catalogs.iter().map(|(name, cat)| {
                     serde_json::json!({
                         "name": name,
-                        "type": cat.catalog_type,
+                        "provider": cat.provider().to_string(),
                         "uri": cat.uri,
+                        "warehouse": cat.warehouse,
                     })
                 }).collect::<Vec<_>>(),
             });
             print_json(&json)?;
         } else {
-            // Show current context (full: catalog.namespace.table)
-            println!("{}", "Current context:".bold());
-            match config.get_current_context() {
-                Some(context) => {
-                    println!("  {}", context.cyan());
-                }
-                None => println!("  {}", "(none)".dimmed()),
-            }
-
-            // Show catalogs
-            println!();
+            // Show catalogs with current context inline
             println!("{}", "Catalogs:".bold());
             if config.catalogs.is_empty() {
                 println!("  {}", "(none)".dimmed());
@@ -342,8 +361,10 @@ impl ConfigCommand {
                 table.set_header(vec![
                     Cell::new("".to_string()).set_alignment(CellAlignment::Center),
                     Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Type".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Provider".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Warehouse".cyan().to_string()).set_alignment(CellAlignment::Left),
                     Cell::new("Namespace".cyan().to_string()).set_alignment(CellAlignment::Left),
+                    Cell::new("Table".cyan().to_string()).set_alignment(CellAlignment::Left),
                     Cell::new("URI".cyan().to_string()).set_alignment(CellAlignment::Left),
                 ]);
 
@@ -358,13 +379,25 @@ impl ConfigCommand {
                     } else {
                         "".to_string()
                     };
-                    let namespace = cat.default_namespace.as_deref().unwrap_or("-");
+
+                    // Show warehouse/namespace/table only for the current catalog
+                    let (wh_display, ns_display, tbl_display) = if is_current {
+                        (
+                            current_warehouse.as_deref().unwrap_or("-"),
+                            current_namespace.as_deref().unwrap_or("-"),
+                            current_table.as_deref().unwrap_or("-"),
+                        )
+                    } else {
+                        ("-", "-", "-")
+                    };
 
                     table.add_row(vec![
                         Cell::new(marker).set_alignment(CellAlignment::Center),
                         Cell::new(name).set_alignment(CellAlignment::Left),
-                        Cell::new(cat.catalog_type.to_string()).set_alignment(CellAlignment::Left),
-                        Cell::new(namespace).set_alignment(CellAlignment::Left),
+                        Cell::new(cat.provider().to_string()).set_alignment(CellAlignment::Left),
+                        Cell::new(wh_display).set_alignment(CellAlignment::Left),
+                        Cell::new(ns_display).set_alignment(CellAlignment::Left),
+                        Cell::new(tbl_display).set_alignment(CellAlignment::Left),
                         Cell::new(&cat.uri).set_alignment(CellAlignment::Left),
                     ]);
                 }

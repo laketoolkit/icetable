@@ -3,72 +3,70 @@
 use clap::Parser;
 
 /// Arguments for generate command
+///
+/// Note: --catalog and --warehouse are global options (use -c and -w)
 #[derive(Parser, Debug)]
 pub struct GenerateArgs {
-    /// Catalog name (uses current if not specified)
-    #[arg(short = 'c', long)]
-    pub catalog: Option<String>,
-
-    /// Schema definition as "col:type,col:type" (e.g., "id:int,name:string,ts:timestamp")
+    /// Schema definition (col:type,col:type)
     #[arg(long)]
     pub schema: Option<String>,
 
-    /// Use a predefined schema template
-    #[arg(long, value_enum)]
+    /// Predefined template (events, transactions, sensors, users, web-logs)
+    #[arg(long, value_enum, hide_possible_values = true)]
     pub template: Option<SchemaTemplate>,
 
-    /// Number of rows per file
-    #[arg(long, default_value = "10000")]
+    /// Rows per file [default: 10000]
+    #[arg(long, default_value = "10000", hide_default_value = true)]
     pub rows: u64,
 
-    /// Number of data files to create
-    #[arg(long, default_value = "1")]
+    /// Files to create [default: 1]
+    #[arg(long, default_value = "1", hide_default_value = true)]
     pub files: u32,
 
-    /// Partition columns (comma-separated, e.g., "year,month")
+    /// Partition columns (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 
-    /// Random seed for reproducible data generation
+    /// Random seed for reproducibility
     #[arg(long)]
     pub seed: Option<u64>,
 
-    /// Target file size in bytes (default: 64MB)
-    #[arg(long, default_value = "67108864")]
+    /// Target file size [default: 64MB]
+    #[arg(long, default_value = "67108864", hide_default_value = true)]
     pub target_file_size: u64,
 
-    /// Dry run - show what would be generated without creating data
+    /// Preview without creating data
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Skip confirmation when appending to existing table
+    /// Skip confirmation for existing table
     #[arg(short = 'f', long)]
     pub force: bool,
 
-    /// Output format (text, json)
-    #[arg(short, long, default_value = "text")]
+    /// Output format [default: text]
+    #[arg(short, long, default_value = "text", hide_default_value = true)]
     pub output: String,
 }
 
 /// Predefined schema templates for common use cases
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
 pub enum SchemaTemplate {
-    /// Simple events: id, timestamp, event_type, user_id, value
+    /// Event data
     Events,
-    /// Financial transactions: id, timestamp, amount, currency, account_from, account_to, status
+    /// Financial transactions
     Transactions,
-    /// IoT sensor data: sensor_id, timestamp, temperature, humidity, pressure, location
+    /// IoT sensor data
     Sensors,
-    /// User profiles: user_id, created_at, name, email, country, age, active
+    /// User profiles
     Users,
-    /// Web logs: request_id, timestamp, method, path, status_code, response_time_ms, user_agent
+    /// Web access logs
     WebLogs,
 }
 
 /// Arguments for completions command
 #[derive(Parser, Debug)]
 pub struct CompletionsArgs {
-    /// Shell to generate completions for
+    /// Target shell
     #[arg(value_enum)]
     pub shell: clap_complete::Shell,
 }
@@ -86,14 +84,14 @@ impl CompletionsArgs {
 #[cfg(feature = "tui")]
 #[derive(Parser, Debug)]
 pub struct TuiArgs {
-    /// Path to table file or directory
+    /// Table path
     pub path: String,
 
     /// Read-only mode
     #[arg(long)]
     pub readonly: bool,
 
-    /// Refresh interval in seconds
+    /// Refresh interval (seconds)
     #[arg(short, long, default_value = "5")]
     pub refresh: u64,
 }

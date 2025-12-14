@@ -5,53 +5,53 @@ use clap::{Parser, Subcommand};
 /// Optimize subcommands
 #[derive(Subcommand, Debug)]
 pub enum OptimizeCommands {
-    /// Compact small data files into larger ones
+    /// Compact small data files
     Data(OptimizeDataArgs),
 
-    /// Rewrite and compact manifest files
+    /// Rewrite manifest files
     Manifests(OptimizeManifestsArgs),
 }
 
 /// Arguments for optimize data command
 #[derive(Parser, Debug)]
 pub struct OptimizeDataArgs {
-    /// Branch to optimize (defaults to main/current)
+    /// Branch to optimize
     #[arg(short, long)]
     pub branch: Option<String>,
 
-    /// Target file size in bytes (default: 256MB)
+    /// Target file size in bytes
     #[arg(long, default_value = "268435456")]
     pub target_size: u64,
 
-    /// Maximum number of concurrent tasks
+    /// Max concurrent tasks
     #[arg(long, default_value = "4")]
     pub max_concurrent_tasks: usize,
 
-    /// Only optimize files smaller than this size (bytes)
+    /// Min file size to optimize (bytes)
     #[arg(long)]
     pub min_file_size: Option<u64>,
 
-    /// Optimize specific partition (e.g., "day=2024-01-01/currency=USD")
+    /// Specific partition to optimize
     #[arg(long)]
     pub partition: Option<String>,
 
-    /// Optimize all partitions (required if --partition not specified)
+    /// Optimize all partitions
     #[arg(long)]
     pub all_partitions: bool,
 
-    /// Enable Z-ordering on specified columns
+    /// Z-order columns (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub zorder: Option<Vec<String>>,
 
-    /// Maximum number of files to compact in this run (for incremental compaction)
+    /// Max files to compact
     #[arg(long)]
     pub max_files: Option<usize>,
 
-    /// Maximum bytes to process in this run (e.g., "10GB", "500MB")
+    /// Max bytes to process (e.g., 10GB)
     #[arg(long)]
     pub max_bytes: Option<String>,
 
-    /// Dry run mode - show what would be done without making changes
+    /// Preview without making changes
     #[arg(long)]
     pub dry_run: bool,
 
@@ -63,19 +63,19 @@ pub struct OptimizeDataArgs {
 /// Arguments for optimize manifests command
 #[derive(Parser, Debug)]
 pub struct OptimizeManifestsArgs {
-    /// Branch to optimize (defaults to main/current)
+    /// Branch to optimize
     #[arg(short, long)]
     pub branch: Option<String>,
 
-    /// Target manifest size in bytes (default: 8MB)
+    /// Target manifest size in bytes
     #[arg(long, default_value = "8388608")]
     pub target_size: u64,
 
-    /// Minimum number of manifests to trigger rewrite
+    /// Min manifests to trigger rewrite
     #[arg(long, default_value = "5")]
     pub min_manifests: usize,
 
-    /// Dry run mode - show what would be done without making changes
+    /// Preview without making changes
     #[arg(long)]
     pub dry_run: bool,
 

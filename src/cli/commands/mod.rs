@@ -1,5 +1,6 @@
 //! CLI command implementations
 
+pub mod admin;
 pub mod analyze;
 pub mod common;
 pub mod config;
@@ -25,6 +26,7 @@ pub mod validate;
 pub mod tui;
 
 // Re-export command handlers
+pub use admin::AdminCommand;
 pub use analyze::AnalyzeCommand;
 pub use config::ConfigCommand;
 pub use create::CreateCommand;

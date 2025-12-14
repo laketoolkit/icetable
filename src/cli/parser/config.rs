@@ -2,6 +2,8 @@
 
 use clap::{Parser, Subcommand};
 
+use crate::config::CatalogProvider;
+
 /// Arguments for config command
 #[derive(Parser, Debug)]
 pub struct ConfigArgs {
@@ -13,30 +15,34 @@ pub struct ConfigArgs {
 /// Config subcommands
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
-    /// Set the current context (catalog, namespace, table)
+    /// Set current context (catalog, namespace, table)
     Use(ConfigUseArgs),
 
-    /// Add a table alias or catalog (inferred from URI scheme)
+    /// Add table alias or catalog (inferred from URI)
     Add(Box<ConfigAddArgs>),
 
-    /// Delete a table alias or catalog
+    /// Delete table alias or catalog
     Delete(ConfigDeleteArgs),
 
-    /// List all configured tables and catalogs
+    /// List configured tables and catalogs
     Ls(ConfigLsArgs),
 }
 
 /// Arguments for config use
 #[derive(Parser, Debug)]
 pub struct ConfigUseArgs {
-    /// Catalog or table name to use
+    /// Catalog or table name
     pub name: Option<String>,
 
-    /// Namespace (only for catalogs)
+    /// Warehouse within catalog
+    #[arg(short, long)]
+    pub warehouse: Option<String>,
+
+    /// Namespace (catalogs only)
     #[arg(short, long)]
     pub namespace: Option<String>,
 
-    /// Table within namespace (only for catalogs)
+    /// Table within namespace (catalogs only)
     #[arg(short, long)]
     pub table: Option<String>,
 }
@@ -44,50 +50,54 @@ pub struct ConfigUseArgs {
 /// Arguments for config add (table alias or catalog, inferred from URI)
 #[derive(Parser, Debug)]
 pub struct ConfigAddArgs {
-    /// Name (alias for table, or catalog name)
+    /// Alias name (table) or catalog name
     pub name: String,
 
-    /// URI (http/https = catalog, s3/gs/az/file = table alias)
+    /// URI (http/https=catalog, s3/gs/az/file=table)
     pub uri: String,
 
     // --- Catalog options (only used if URI is http/https) ---
-    /// Warehouse location (catalog only)
+    /// Provider (polaris, nessie, tabular, unity, generic)
+    #[arg(short, long, value_enum, hide_possible_values = true)]
+    pub provider: Option<CatalogProvider>,
+
+    /// Warehouse location
     #[arg(short, long)]
     pub warehouse: Option<String>,
 
-    /// Bearer token (catalog auth)
+    /// Bearer token
     #[arg(long, conflicts_with_all = ["token_env", "client_id", "aws_region"])]
     pub token: Option<String>,
 
-    /// Bearer token from env var (catalog auth)
+    /// Bearer token from env var
     #[arg(long, conflicts_with_all = ["token", "client_id", "aws_region"])]
     pub token_env: Option<String>,
 
-    /// OAuth2 client ID (catalog auth)
+    /// OAuth2 client ID
     #[arg(long, conflicts_with_all = ["token", "token_env", "aws_region"])]
     pub client_id: Option<String>,
 
-    /// OAuth2 client secret (catalog auth)
+    /// OAuth2 client secret
     #[arg(long, requires = "client_id")]
     pub client_secret: Option<String>,
 
-    /// OAuth2 client secret from env var (catalog auth)
+    /// OAuth2 secret from env var
     #[arg(long, requires = "client_id")]
     pub client_secret_env: Option<String>,
 
-    /// OAuth2 token endpoint (catalog auth)
+    /// OAuth2 token endpoint
     #[arg(long, requires = "client_id")]
     pub oauth2_endpoint: Option<String>,
 
-    /// OAuth2 scope (catalog auth)
+    /// OAuth2 scope
     #[arg(long, requires = "client_id")]
     pub oauth2_scope: Option<String>,
 
-    /// AWS region for SigV4 auth (catalog auth)
+    /// AWS region for SigV4 auth
     #[arg(long, conflicts_with_all = ["token", "token_env", "client_id"])]
     pub aws_region: Option<String>,
 
-    /// AWS signing service name (catalog auth)
+    /// AWS signing service name
     #[arg(long, requires = "aws_region")]
     pub aws_signing_name: Option<String>,
 }
@@ -95,7 +105,7 @@ pub struct ConfigAddArgs {
 /// Arguments for config delete
 #[derive(Parser, Debug)]
 pub struct ConfigDeleteArgs {
-    /// Name to delete (searches tables first, then catalogs)
+    /// Name to delete (tables searched first)
     pub name: String,
 }
 

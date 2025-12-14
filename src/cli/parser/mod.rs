@@ -15,6 +15,7 @@
 //! - `maintenance` - Table maintenance (vacuum, repair, doctor, init)
 //! - `generate` - Test data generation and utilities
 
+pub mod admin;
 pub mod branch;
 pub mod catalog;
 pub mod config;
@@ -26,6 +27,7 @@ pub mod optimize;
 pub mod snapshot;
 
 // Re-export all argument types
+pub use admin::*;
 pub use branch::*;
 pub use catalog::*;
 pub use config::*;
@@ -46,8 +48,9 @@ use crate::core::config::CredentialSource;
 #[command(name = "icetable")]
 #[command(version, about, long_about = None)]
 #[command(disable_help_flag = true)]
+#[command(max_term_width = 100, next_line_help = false)]
 pub struct Cli {
-    /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
+    /// Table name or path
     #[arg(
         short = 't',
         long = "table",
@@ -56,7 +59,7 @@ pub struct Cli {
     )]
     pub table: Option<String>,
 
-    /// Namespace (e.g., "db.schema")
+    /// Namespace
     #[arg(
         short = 'n',
         long = "namespace",
@@ -65,11 +68,29 @@ pub struct Cli {
     )]
     pub namespace: Option<String>,
 
+    /// Catalog name (from config)
+    #[arg(
+        short = 'c',
+        long = "catalog",
+        global = true,
+        help_heading = "Global Options"
+    )]
+    pub catalog: Option<String>,
+
+    /// Warehouse within catalog
+    #[arg(
+        short = 'w',
+        long = "warehouse",
+        global = true,
+        help_heading = "Global Options"
+    )]
+    pub warehouse: Option<String>,
+
     /// Suppress non-error output
     #[arg(short = 'q', long, global = true, help_heading = "Global Options")]
     pub quiet: bool,
 
-    /// Log level [default: off]
+    /// Log level
     #[arg(long, global = true, default_value = "off", value_parser = parse_log_level, hide_default_value = true, help_heading = "Global Options")]
     pub log_level: crate::utils::LogLevel,
 
@@ -80,7 +101,7 @@ pub struct Cli {
     // ═══════════════════════════════════════════════════════════════════════════
     // Hidden global options - use `icetable options` to see all
     // ═══════════════════════════════════════════════════════════════════════════
-    /// REST Catalog URI for ad-hoc catalog access
+    /// REST Catalog URI
     #[arg(long, global = true, env = "ICETABLE_CATALOG_URI", hide = true)]
     pub catalog_uri: Option<String>,
 
@@ -88,11 +109,11 @@ pub struct Cli {
     #[arg(long, global = true, env = "ICETABLE_CATALOG_WAREHOUSE", hide = true)]
     pub catalog_warehouse: Option<String>,
 
-    /// Catalog credential (client_id:client_secret)
+    /// Catalog credential (id:secret)
     #[arg(long, global = true, env = "ICETABLE_CATALOG_CREDENTIAL", hide = true)]
     pub catalog_credential: Option<String>,
 
-    /// Catalog credential from environment variable
+    /// Credential from env var
     #[arg(
         long,
         global = true,
@@ -101,7 +122,7 @@ pub struct Cli {
     )]
     pub catalog_credential_env: Option<String>,
 
-    /// Catalog credential from file
+    /// Credential from file
     #[arg(
         long,
         global = true,
@@ -110,15 +131,15 @@ pub struct Cli {
     )]
     pub catalog_credential_file: Option<std::path::PathBuf>,
 
-    /// Use IAM role for authentication (AWS, GCP, Azure)
+    /// Use IAM role for auth
     #[arg(long, global = true, hide = true)]
     pub catalog_use_iam_role: bool,
 
-    /// Use OAuth2 for authentication
+    /// Use OAuth2 for auth
     #[arg(long, global = true, hide = true)]
     pub catalog_use_oauth2: bool,
 
-    /// Maximum memory usage (e.g., 2GB, 512MB). 0 = unlimited
+    /// Max memory (e.g., 2GB). 0=unlimited
     #[arg(
         long,
         global = true,
@@ -128,7 +149,7 @@ pub struct Cli {
     )]
     pub max_memory: String,
 
-    /// Operation timeout in seconds. 0 = no timeout
+    /// Timeout in seconds. 0=none
     #[arg(
         long,
         global = true,
@@ -138,7 +159,7 @@ pub struct Cli {
     )]
     pub timeout: u64,
 
-    /// Maximum concurrent operations
+    /// Max concurrent operations
     #[arg(
         long,
         global = true,
@@ -148,7 +169,7 @@ pub struct Cli {
     )]
     pub max_concurrency: u32,
 
-    /// Maximum worker threads for runtime. 0 = use system default
+    /// Max worker threads. 0=default
     #[arg(
         long,
         global = true,
@@ -170,72 +191,75 @@ pub struct Cli {
 /// Available commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// List namespaces or tables in a catalog
+    /// List namespaces or tables
     Ls(LsArgs),
 
-    /// Create a namespace or table in a catalog
+    /// Create namespace or table
     Create(CreateArgs),
 
-    /// Delete a namespace or table from a catalog
+    /// Delete namespace or table
     Delete(DeleteArgs),
 
-    /// Analyze table health and get optimization recommendations
+    /// Analyze table health
     Analyze(AnalyzeArgs),
 
-    /// Create a new empty table (local path)
+    /// Create empty table (local path)
     Init(InitArgs),
 
-    /// Inspect table contents and metadata
+    /// Inspect table metadata
     Inspect(InspectArgs),
 
-    /// Validate file integrity and quality
+    /// Validate file integrity
     Validate(ValidateArgs),
 
-    /// Compare snapshots, branches, or tags
+    /// Compare snapshots/branches/tags
     Diff(DiffArgs),
 
     /// Compute statistics
     Stats(StatsArgs),
 
-    /// View table version history
+    /// View version history
     History(HistoryArgs),
 
-    /// Clean up old files no longer referenced by the table
+    /// Clean up unreferenced files
     Vacuum(VacuumArgs),
 
-    /// Compact and optimize table data and metadata
+    /// Compact data and metadata
     #[command(subcommand)]
     Optimize(OptimizeCommands),
 
-    /// Manage table snapshots (list, create, expire, set)
+    /// Manage snapshots
     Snapshot(SnapshotArgs),
 
-    /// Repair table metadata and fix inconsistencies
+    /// Repair table metadata
     Repair(RepairArgs),
 
-    /// Import data into Iceberg from external sources
+    /// Import from external sources
     #[command(subcommand)]
     Import(ImportCommands),
 
-    /// Manage table branches
+    /// Manage branches
     Branch(BranchArgs),
 
-    /// Manage table tags
+    /// Manage tags
     Tag(TagArgs),
 
-    /// Manage configuration (aliases, catalogs)
+    /// Manage configuration
     Config(ConfigArgs),
 
-    /// Generate synthetic test data for benchmarking and testing
+    /// Generate synthetic test data
     Generate(GenerateArgs),
 
     /// Generate shell completions
     Completions(CompletionsArgs),
 
-    /// Diagnose environment health (credentials, connectivity)
+    /// Diagnose environment health
     Doctor(DoctorArgs),
 
-    /// Print all global options (kubectl style)
+    /// Administrative operations (warehouses, auth)
+    Admin(AdminArgs),
+
+    /// Print all global options
     Options,
 
     /// Interactive Terminal UI
@@ -253,7 +277,11 @@ pub struct CliTableContext {
     pub table: Option<String>,
     /// Namespace (e.g., "db.schema")
     pub namespace: Option<String>,
-    /// Catalog configuration from CLI
+    /// Catalog name (from -c/--catalog)
+    pub catalog: Option<String>,
+    /// Warehouse within catalog (from -w/--warehouse)
+    pub warehouse: Option<String>,
+    /// Catalog configuration from CLI (ad-hoc --catalog-uri)
     pub catalog_config: Option<crate::core::CatalogConfig>,
 }
 
@@ -317,6 +345,8 @@ impl Cli {
         CliTableContext {
             table: self.table.clone(),
             namespace: self.namespace.clone(),
+            catalog: self.catalog.clone(),
+            warehouse: self.warehouse.clone(),
             catalog_config: self.catalog_config(),
         }
     }

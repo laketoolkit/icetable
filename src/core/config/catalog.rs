@@ -29,6 +29,55 @@ impl fmt::Display for CatalogType {
     }
 }
 
+/// Catalog provider/vendor
+///
+/// Identifies the specific catalog implementation for provider-specific features
+/// like warehouse management, examples, and API quirks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogProvider {
+    /// Apache Polaris (incubating)
+    Polaris,
+    /// Project Nessie
+    Nessie,
+    /// Tabular (Iceberg SaaS)
+    Tabular,
+    /// Databricks Unity Catalog
+    Unity,
+    /// Generic REST catalog (unknown provider)
+    #[default]
+    Generic,
+}
+
+impl fmt::Display for CatalogProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CatalogProvider::Polaris => write!(f, "polaris"),
+            CatalogProvider::Nessie => write!(f, "nessie"),
+            CatalogProvider::Tabular => write!(f, "tabular"),
+            CatalogProvider::Unity => write!(f, "unity"),
+            CatalogProvider::Generic => write!(f, "generic"),
+        }
+    }
+}
+
+impl CatalogProvider {
+    /// Try to detect provider from catalog URI
+    pub fn detect_from_uri(uri: &str) -> Self {
+        if uri.contains("/api/catalog") {
+            CatalogProvider::Polaris
+        } else if uri.contains("/nessie/") || uri.contains("/api/v1") {
+            CatalogProvider::Nessie
+        } else if uri.contains("tabular.io") {
+            CatalogProvider::Tabular
+        } else if uri.contains("databricks") || uri.contains("/unity-catalog/") {
+            CatalogProvider::Unity
+        } else {
+            CatalogProvider::Generic
+        }
+    }
+}
+
 /// Authentication configuration for REST catalogs
 ///
 /// Supports multiple authentication methods:
@@ -171,14 +220,15 @@ pub struct CatalogConfig {
     /// Type of catalog
     #[serde(rename = "type")]
     pub catalog_type: CatalogType,
+    /// Catalog provider/vendor (polaris, nessie, tabular, unity, generic)
+    /// Auto-detected from URI if not specified
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<CatalogProvider>,
     /// URI of the catalog service
     pub uri: String,
     /// Warehouse location (optional, some catalogs provide this)
     #[serde(default)]
     pub warehouse: Option<String>,
-    /// Default namespace for this catalog (like kubectl namespace)
-    #[serde(default)]
-    pub default_namespace: Option<String>,
     /// Authentication configuration
     #[serde(default)]
     pub auth: CatalogAuth,
@@ -196,24 +246,30 @@ impl CatalogConfig {
     pub fn rest(uri: impl Into<String>) -> Self {
         Self {
             catalog_type: CatalogType::Rest,
+            provider: None,
             uri: uri.into(),
             warehouse: None,
-            default_namespace: None,
             auth: CatalogAuth::None,
             credential: None,
             properties: HashMap::new(),
         }
     }
 
-    /// Set warehouse location
-    pub fn with_warehouse(mut self, warehouse: impl Into<String>) -> Self {
-        self.warehouse = Some(warehouse.into());
+    /// Get the effective provider (explicit or auto-detected from URI)
+    pub fn provider(&self) -> CatalogProvider {
+        self.provider
+            .unwrap_or_else(|| CatalogProvider::detect_from_uri(&self.uri))
+    }
+
+    /// Set the provider explicitly
+    pub fn with_provider(mut self, provider: CatalogProvider) -> Self {
+        self.provider = Some(provider);
         self
     }
 
-    /// Set default namespace
-    pub fn with_default_namespace(mut self, namespace: impl Into<String>) -> Self {
-        self.default_namespace = Some(namespace.into());
+    /// Set warehouse location
+    pub fn with_warehouse(mut self, warehouse: impl Into<String>) -> Self {
+        self.warehouse = Some(warehouse.into());
         self
     }
 
@@ -263,6 +319,56 @@ impl CatalogConfig {
             Some(source) => source.resolve(),
             None => Ok(None),
         }
+    }
+
+    /// Create a copy of this config with auth overridden
+    ///
+    /// This is used to merge credentials from credentials.yaml
+    pub fn with_merged_auth(&self, auth: CatalogAuth) -> Self {
+        let mut config = self.clone();
+        config.auth = auth;
+        config
+    }
+
+    /// Get effective auth by checking credentials.yaml first
+    ///
+    /// Priority: credentials.yaml > config.yaml auth
+    pub fn effective_auth(&self, catalog_name: &str) -> Result<CatalogAuth> {
+        // Try to load from credentials.yaml
+        let credentials = super::CatalogCredentials::load()?;
+        if let Some(auth) = credentials.get(catalog_name) {
+            return Ok(auth.clone());
+        }
+
+        // Fall back to config.yaml auth
+        Ok(self.auth.clone())
+    }
+
+    /// Get all properties with effective auth (checking credentials.yaml first)
+    ///
+    /// This is the recommended method to use when building catalog clients.
+    pub fn to_catalog_properties_with_credentials(
+        &self,
+        catalog_name: &str,
+    ) -> Result<HashMap<String, String>> {
+        let mut props = HashMap::new();
+
+        // Get effective auth (credentials.yaml has priority)
+        let auth = self.effective_auth(catalog_name)?;
+        props.extend(auth.to_properties()?);
+
+        // Legacy credential support (only if auth is None and no credentials.yaml)
+        if matches!(auth, CatalogAuth::None)
+            && let Some(ref cred) = self.credential
+            && let Some(token) = cred.resolve()?
+        {
+            props.insert("credential".to_string(), token);
+        }
+
+        // Add custom properties
+        props.extend(self.properties.clone());
+
+        Ok(props)
     }
 }
 

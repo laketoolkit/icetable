@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 /// Import subcommands
 #[derive(Subcommand, Debug)]
 pub enum ImportCommands {
-    /// Import from a Delta Lake table
+    /// Import from Delta Lake
     Delta(ImportDeltaArgs),
 
     /// Import from Parquet files
@@ -15,21 +15,21 @@ pub enum ImportCommands {
 /// Arguments for import delta command
 #[derive(Parser, Debug)]
 pub struct ImportDeltaArgs {
-    /// Path to source Delta Lake table
+    /// Source Delta Lake table path
     pub source: String,
 
-    /// Path to target Iceberg table
+    /// Target Iceberg table path
     pub target: String,
 
-    /// Table name (for new tables)
+    /// Table name (new tables only)
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Partition columns (comma-separated, for new tables)
+    /// Partition columns (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 
-    /// Dry run - show what would be imported without making changes
+    /// Preview without importing
     #[arg(long)]
     pub dry_run: bool,
 
@@ -41,25 +41,25 @@ pub struct ImportDeltaArgs {
 /// Arguments for import parquet command
 #[derive(Parser, Debug)]
 pub struct ImportParquetArgs {
-    /// Path to Parquet file or directory of Parquet files
+    /// Source parquet file or directory
     pub source: String,
 
-    /// Path to target Iceberg table
+    /// Target Iceberg table path
     pub target: String,
 
-    /// Table name (for new tables)
+    /// Table name (new tables only)
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Partition columns (comma-separated, for new tables)
+    /// Partition columns (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 
-    /// Glob pattern for selecting files (e.g., "*.parquet", "**/*.parquet")
+    /// Glob pattern for files
     #[arg(long, default_value = "*.parquet")]
     pub pattern: String,
 
-    /// Dry run - show what would be imported without making changes
+    /// Preview without importing
     #[arg(long)]
     pub dry_run: bool,
 

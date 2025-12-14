@@ -24,6 +24,10 @@ pub struct CatalogContext {
     pub table: Option<String>,
     /// Namespace (from -n option)
     pub namespace: Option<String>,
+    /// Catalog name (from -c option)
+    pub catalog: Option<String>,
+    /// Warehouse within catalog (from -w option)
+    pub warehouse: Option<String>,
 }
 
 /// Resolved table that can be either a direct path or a catalog table
@@ -414,31 +418,29 @@ pub async fn resolve_table_path(
 ///
 /// This is the primary entry point for catalog-level commands (ls, create, delete, generate).
 /// Resolves catalog name, config, namespace, and table from:
-/// 1. Global CLI options (-n, -t)
-/// 2. Config context (current catalog/namespace/table)
-/// 3. Catalog defaults
+/// 1. Global CLI options (-c, -w, -n, -t)
+/// 2. Config context (current catalog/warehouse/namespace/table)
+///
+/// Priority for each field: CLI option > config context
 ///
 /// # Arguments
 /// * `ctx` - CatalogContext from global CLI options
-/// * `catalog_arg` - Optional catalog name from command args (-c)
 ///
 /// # Returns
 /// * `Ok(CatalogResolution)` with resolved context and ready-to-use client
 /// * `Err` if no catalog is configured or catalog not found
-pub async fn resolve_catalog_from_context(
-    ctx: &CatalogContext,
-    catalog_arg: Option<&str>,
-) -> Result<CatalogResolution> {
+pub async fn resolve_catalog_from_context(ctx: &CatalogContext) -> Result<CatalogResolution> {
     let config = Config::load()?;
 
-    // Resolve catalog name: arg > config context
-    let catalog_name = catalog_arg
-        .map(String::from)
+    // Resolve catalog name: -c > config context
+    let catalog_name = ctx
+        .catalog
+        .clone()
         .or_else(|| config.get_current_catalog().map(String::from))
         .ok_or(Error::NoCatalog)?;
 
     // Get catalog config
-    let catalog_config =
+    let mut catalog_config =
         config
             .catalogs
             .get(&catalog_name)
@@ -447,18 +449,38 @@ pub async fn resolve_catalog_from_context(
                 name: catalog_name.clone(),
             })?;
 
-    // Resolve namespace: global -n > config context > catalog default
+    // Resolve warehouse: -w > config context
+    let warehouse = ctx
+        .warehouse
+        .clone()
+        .or_else(|| config.get_current_warehouse());
+
+    if let Some(wh) = warehouse {
+        catalog_config.warehouse = Some(wh);
+    }
+
+    // Check if catalog requires warehouse (e.g., Polaris)
+    if catalog_config.warehouse.is_none() && is_polaris_catalog(&catalog_config) {
+        return Err(Error::Configuration {
+            message: format!(
+                "Catalog '{}' requires a warehouse\n\n\
+                 Hint:\n  \
+                 - List warehouses: icetable admin warehouse ls\n  \
+                 - Use flag: icetable -w <warehouse> ls\n  \
+                 - Set context: icetable config use {}@<warehouse>",
+                catalog_name, catalog_name
+            ),
+        });
+    }
+
+    // Resolve namespace: -n > config context
     let namespace = ctx
         .namespace
         .clone()
-        .or_else(|| config.get_current_namespace())
-        .or_else(|| catalog_config.default_namespace.clone());
+        .or_else(|| config.get_current_namespace());
 
-    // Resolve table: global -t > config context
-    let table = ctx
-        .table
-        .clone()
-        .or_else(|| config.get_current_table().map(String::from));
+    // Resolve table: -t > config context
+    let table = ctx.table.clone().or_else(|| config.get_current_table());
 
     // Create REST client with catalog name for better error messages
     let client = RestCatalogClient::with_name(&catalog_config, Some(&catalog_name)).await?;
@@ -470,6 +492,16 @@ pub async fn resolve_catalog_from_context(
         table,
         client,
     })
+}
+
+/// Check if a catalog is Polaris (requires warehouse)
+fn is_polaris_catalog(config: &CatalogConfig) -> bool {
+    // Heuristic: Polaris has /api/catalog in the URI
+    config.uri.contains("/api/catalog")
+        || config
+            .properties
+            .get("catalog-impl")
+            .is_some_and(|v| v.contains("polaris"))
 }
 
 // =============================================================================

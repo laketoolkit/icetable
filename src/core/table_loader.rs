@@ -113,13 +113,25 @@ impl TableLoader {
 
     /// Load table from catalog reference
     async fn load_from_catalog(table_ref: &str, config: &CatalogConfig) -> Result<Arc<Table>> {
+        Self::load_from_catalog_with_name(table_ref, config, None).await
+    }
+
+    /// Load table from catalog reference with explicit catalog name
+    ///
+    /// The catalog_name is used to look up credentials from credentials.yaml.
+    /// If not provided, credentials.yaml lookup is skipped.
+    pub async fn load_from_catalog_with_name(
+        table_ref: &str,
+        config: &CatalogConfig,
+        catalog_name: Option<&str>,
+    ) -> Result<Arc<Table>> {
         log::debug!("Loading Iceberg table from catalog: {}", table_ref);
 
         // Parse namespace and table name
         let (namespace, table_name) = Self::parse_catalog_ref(table_ref)?;
 
         // Build catalog
-        let catalog = Self::build_catalog(config).await?;
+        let catalog = Self::build_catalog(config, catalog_name).await?;
 
         // Load table
         let table_ident = TableIdent::new(namespace, table_name);
@@ -177,7 +189,12 @@ impl TableLoader {
     }
 
     /// Build iceberg catalog from configuration
-    async fn build_catalog(config: &CatalogConfig) -> Result<Arc<dyn Catalog>> {
+    ///
+    /// If catalog_name is provided, credentials from credentials.yaml will be used.
+    async fn build_catalog(
+        config: &CatalogConfig,
+        catalog_name: Option<&str>,
+    ) -> Result<Arc<dyn Catalog>> {
         // Currently only REST catalog is supported
         match config.catalog_type {
             crate::core::catalog::CatalogType::Rest => {
@@ -193,7 +210,13 @@ impl TableLoader {
                     }
 
                     // Add auth and custom properties
-                    props.extend(config.to_catalog_properties()?);
+                    // Use credentials.yaml if catalog_name is provided
+                    let auth_props = if let Some(name) = catalog_name {
+                        config.to_catalog_properties_with_credentials(name)?
+                    } else {
+                        config.to_catalog_properties()?
+                    };
+                    props.extend(auth_props);
 
                     let catalog = RestCatalogBuilder::default()
                         .load("rest", props)
@@ -204,6 +227,7 @@ impl TableLoader {
                 }
                 #[cfg(not(feature = "rest-catalog"))]
                 {
+                    let _ = catalog_name; // Suppress unused warning
                     Err(Error::UnsupportedCatalog {
                         catalog_type: "rest".to_string(),
                     })

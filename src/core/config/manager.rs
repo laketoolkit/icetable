@@ -132,67 +132,78 @@ impl Config {
             .and_then(|name| self.catalogs.get(name))
     }
 
-    /// Parse the current context into (catalog, namespace, table) parts
-    /// Context format: "catalog", "catalog.namespace", or "catalog.namespace.table"
-    pub fn parse_current_context(&self) -> Option<(String, Option<String>, Option<String>)> {
+    /// Parse the current context into (catalog, warehouse, namespace, table) parts
+    ///
+    /// Context format: `catalog[@warehouse][.namespace][.table]`
+    /// Examples:
+    /// - `polaris` → (polaris, None, None, None)
+    /// - `polaris@iceberg` → (polaris, Some(iceberg), None, None)
+    /// - `polaris@iceberg.demo` → (polaris, Some(iceberg), Some(demo), None)
+    /// - `polaris@iceberg.demo.events` → (polaris, Some(iceberg), Some(demo), Some(events))
+    /// - `polaris.demo.events` → (polaris, None, Some(demo), Some(events)) (legacy format)
+    pub fn parse_current_context(
+        &self,
+    ) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
         let context = self.current_context.as_ref()?;
-        let parts: Vec<&str> = context.splitn(3, '.').collect();
 
-        match parts.len() {
-            1 => Some((parts[0].to_string(), None, None)),
-            2 => Some((parts[0].to_string(), Some(parts[1].to_string()), None)),
-            3 => Some((
-                parts[0].to_string(),
-                Some(parts[1].to_string()),
-                Some(parts[2].to_string()),
-            )),
-            _ => None,
+        // Split on '@' first to extract warehouse
+        if let Some(at_pos) = context.find('@') {
+            let catalog = context[..at_pos].to_string();
+            let after_at = &context[at_pos + 1..];
+
+            // Split the rest on '.' to get warehouse and namespace.table
+            let parts: Vec<&str> = after_at.splitn(3, '.').collect();
+            match parts.len() {
+                1 => Some((catalog, Some(parts[0].to_string()), None, None)),
+                2 => Some((
+                    catalog,
+                    Some(parts[0].to_string()),
+                    Some(parts[1].to_string()),
+                    None,
+                )),
+                3 => Some((
+                    catalog,
+                    Some(parts[0].to_string()),
+                    Some(parts[1].to_string()),
+                    Some(parts[2].to_string()),
+                )),
+                _ => None,
+            }
+        } else {
+            // Legacy format without warehouse: catalog[.namespace][.table]
+            let parts: Vec<&str> = context.splitn(3, '.').collect();
+            match parts.len() {
+                1 => Some((parts[0].to_string(), None, None, None)),
+                2 => Some((
+                    parts[0].to_string(),
+                    None,
+                    Some(parts[1].to_string()),
+                    None,
+                )),
+                3 => Some((
+                    parts[0].to_string(),
+                    None,
+                    Some(parts[1].to_string()),
+                    Some(parts[2].to_string()),
+                )),
+                _ => None,
+            }
         }
+    }
+
+    /// Get the current warehouse from context (if any)
+    pub fn get_current_warehouse(&self) -> Option<String> {
+        self.parse_current_context().and_then(|(_, wh, _, _)| wh)
+    }
+
+    /// Get the current namespace from context (if any)
+    pub fn get_current_namespace(&self) -> Option<String> {
+        self.parse_current_context().and_then(|(_, _, ns, _)| ns)
     }
 
     /// Get the current table name from context (if any)
-    pub fn get_current_table(&self) -> Option<&str> {
-        let context = self.current_context.as_ref()?;
-        let parts: Vec<&str> = context.splitn(3, '.').collect();
-        if parts.len() == 3 {
-            Some(parts[2])
-        } else {
-            None
-        }
-    }
-
-    /// Get the current namespace from context or catalog config
-    pub fn get_current_namespace(&self) -> Option<String> {
-        // First try from context
-        if let Some(context) = &self.current_context {
-            let parts: Vec<&str> = context.splitn(3, '.').collect();
-            if parts.len() >= 2 {
-                return Some(parts[1].to_string());
-            }
-        }
-        // Fallback to catalog's default namespace
-        self.get_current_catalog_config()
-            .and_then(|c| c.default_namespace.clone())
-    }
-
-    /// Set the default namespace for a catalog
-    pub fn set_catalog_namespace(&mut self, catalog_name: &str, namespace: String) -> bool {
-        if let Some(catalog) = self.catalogs.get_mut(catalog_name) {
-            catalog.default_namespace = Some(namespace);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Unset the default namespace for a catalog
-    pub fn unset_catalog_namespace(&mut self, catalog_name: &str) -> bool {
-        if let Some(catalog) = self.catalogs.get_mut(catalog_name) {
-            catalog.default_namespace = None;
-            true
-        } else {
-            false
-        }
+    pub fn get_current_table(&self) -> Option<String> {
+        self.parse_current_context().and_then(|(_, _, _, tbl)| tbl)
     }
 
     /// Add a catalog configuration
@@ -243,25 +254,19 @@ impl Config {
             return Ok(ResolvedTable::Path(path.clone()));
         }
 
-        // 4. If we have a current catalog context, try to use it
+        // 4. If we have a current catalog context with namespace, try to use it
         //    e.g., context=polaris.demo + input=events → polaris catalog with demo.events
         if let Some(catalog_name) = self.get_current_catalog()
             && let Some(catalog) = self.catalogs.get(catalog_name)
+            && let Some(ns) = self.get_current_namespace()
         {
-            // Get namespace from context or catalog default
-            let namespace = self
-                .get_current_namespace()
-                .or_else(|| catalog.default_namespace.clone());
-
-            if let Some(ns) = namespace {
-                // Combine namespace.table
-                let table_name = format!("{}.{}", ns, name_or_path);
-                return Ok(ResolvedTable::Catalog {
-                    catalog_name: catalog_name.to_string(),
-                    catalog_config: Box::new(catalog.clone()),
-                    table_name,
-                });
-            }
+            // Combine namespace.table
+            let table_name = format!("{}.{}", ns, name_or_path);
+            return Ok(ResolvedTable::Catalog {
+                catalog_name: catalog_name.to_string(),
+                catalog_config: Box::new(catalog.clone()),
+                table_name,
+            });
         }
 
         // 5. Not found

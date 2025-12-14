@@ -22,7 +22,7 @@ impl GenerateCommand {
     /// Execute generate command
     pub async fn execute(args: GenerateArgs, ctx: &CliTableContext) -> Result<()> {
         // Resolve catalog context (error propagates with full context)
-        let catalog = resolve_catalog(ctx, args.catalog.as_deref()).await?;
+        let catalog = resolve_catalog(ctx).await?;
 
         // Must have namespace
         let namespace = catalog.namespace().ok_or_else(no_namespace_error)?;

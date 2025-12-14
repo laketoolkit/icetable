@@ -6,19 +6,19 @@ use std::path::PathBuf;
 /// Arguments for vacuum command
 #[derive(Parser, Debug)]
 pub struct VacuumArgs {
-    /// Branch to vacuum (defaults to scanning all branches)
+    /// Branch to vacuum
     #[arg(short, long)]
     pub branch: Option<String>,
 
-    /// Retention period (e.g., "7d", "168h", or hours as number)
+    /// Retention period (e.g., 7d, 168h)
     #[arg(short, long, default_value = "168")]
     pub retention_hours: u64,
 
-    /// Dry run - show what would be deleted without actually deleting
+    /// Preview without deleting
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Force vacuum even if retention is below safety threshold
+    /// Force even if below safety threshold
     #[arg(long)]
     pub force: bool,
 
@@ -30,19 +30,19 @@ pub struct VacuumArgs {
 /// Arguments for repair command
 #[derive(Parser, Debug)]
 pub struct RepairArgs {
-    /// Dry run - show what would be repaired without making changes
+    /// Preview without making changes
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Sync metadata with actual files on disk
+    /// Sync metadata with files on disk
     #[arg(long)]
     pub sync_metadata: bool,
 
-    /// Remove references to missing files
+    /// Remove refs to missing files
     #[arg(long)]
     pub remove_missing: bool,
 
-    /// Add untracked parquet files to the table
+    /// Add untracked parquet files
     #[arg(long)]
     pub add_orphans: bool,
 
@@ -54,19 +54,19 @@ pub struct RepairArgs {
 /// Arguments for doctor command
 #[derive(Parser, Debug)]
 pub struct DoctorArgs {
-    /// Also verify that all data files referenced in manifests exist (slow)
+    /// Verify all data files exist (slow)
     #[arg(long)]
     pub check_files: bool,
 
-    /// Validate specific catalog by name
+    /// Check specific catalog
     #[arg(long)]
     pub catalog: Option<String>,
 
-    /// Validate storage connectivity
+    /// Check storage connectivity
     #[arg(long)]
     pub storage: bool,
 
-    /// Output format: human or json
+    /// Output format (human, json)
     #[arg(short, long, default_value = "human")]
     pub output: String,
 }
@@ -74,10 +74,10 @@ pub struct DoctorArgs {
 /// Arguments for init command
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Path where the table will be created
+    /// Table location path
     pub path: String,
 
-    /// Schema definition file (JSON)
+    /// Schema file (JSON)
     #[arg(long)]
     pub schema: Option<PathBuf>,
 
@@ -93,7 +93,7 @@ pub struct InitArgs {
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 
-    /// Table properties (key=value, comma-separated)
+    /// Properties (key=value, comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub properties: Option<Vec<String>>,
 }
