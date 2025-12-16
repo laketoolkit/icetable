@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 
 /// Source of credentials with security considerations
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum CredentialSource {
     /// Inline credential (stored in plain text - NOT RECOMMENDED for production)
     Inline(String),

@@ -92,6 +92,45 @@ pub use core::metadata::{
     TableServiceReader, TableServiceWriter,
 };
 
+// Maintenance services
+// These provide high-level operations for table optimization, vacuum, snapshots, etc.
+pub mod maintenance {
+    //! Maintenance services for table operations
+    //!
+    //! Provides high-level services for optimizing, vacuuming, and managing
+    //! Apache Iceberg tables.
+    //!
+    //! # Available Services
+    //!
+    //! - [`VacuumService`] - Remove orphan files and expired snapshots
+    //! - [`OptimizeService`] - Compact small files into larger ones
+    //! - [`SnapshotService`] - Manage table snapshots (list, expire, restore)
+    //! - [`RefService`] - Manage branches and tags
+    //! - [`RepairService`] - Repair table metadata
+    //! - [`ManifestService`] - Rewrite manifest files
+    //! - [`DoctorService`] - Health checks for tables
+
+    pub use crate::core::maintenance::{
+        // Vacuum
+        OrphanFile, VacuumAnalysis, VacuumConfig, VacuumResult, VacuumService,
+        // Optimize
+        OptimizeService,
+        // Snapshots
+        CreateBackupResult, ExpireSnapshotsResult, LineageEntry, LineageResult,
+        ListSnapshotsResult, SetSnapshotResult, SnapshotConfig, SnapshotDetails, SnapshotService,
+        // Refs (branches/tags)
+        BranchRetention, RefConfig, RefResult, RefService,
+        // Repair
+        RepairAnalysis, RepairService,
+        // Manifest
+        ManifestAnalysis, ManifestConfig, ManifestRewriteResult, ManifestService,
+        // Doctor
+        CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
+        // Shared
+        MaintenanceConfig, FileGroup,
+    };
+}
+
 // Transformations
 pub mod transform {
     //! Data transformation pipeline

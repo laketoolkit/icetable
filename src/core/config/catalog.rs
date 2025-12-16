@@ -14,6 +14,7 @@ use crate::error::Result;
 /// Type of catalog backend
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum CatalogType {
     /// REST Catalog (Nessie, Polaris, Tabular, etc.)
     #[default]
@@ -35,6 +36,7 @@ impl fmt::Display for CatalogType {
 /// like warehouse management, examples, and API quirks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum CatalogProvider {
     /// Apache Polaris (incubating)
     Polaris,
@@ -87,6 +89,7 @@ impl CatalogProvider {
 /// - No authentication (for local development)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CatalogAuth {
     /// No authentication (default for local catalogs)
     #[default]

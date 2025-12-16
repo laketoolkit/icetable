@@ -68,6 +68,7 @@ impl DataFileChanges {
 
 /// Type of operation being performed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum OperationType {
     /// Append new data
     Append,

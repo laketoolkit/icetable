@@ -9,6 +9,7 @@ use thiserror::Error;
 
 /// The main error type for icetable operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// IO error from std
     #[error("{0}")]

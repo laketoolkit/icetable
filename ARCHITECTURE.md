@@ -102,9 +102,23 @@ pub trait TableServiceWriter: TableServiceReader {
     ) -> Result<SnapshotInfo>;
 }
 
-// Combined trait for backward compatibility
-pub trait MetadataService: TableServiceWriter {}
+// Full access - includes raw metadata and file I/O
+pub trait MetadataServiceReader: TableServiceReader {
+    async fn table_metadata(&self) -> &TableMetadata;
+    fn file_io(&self) -> &FileIO;
+}
+
+// Write operations via catalog commit
+pub trait MetadataServiceWriter: MetadataServiceReader {
+    async fn write_snapshot(...) -> Result<MaintenanceResult>;
+}
 ```
+
+The hierarchy ensures:
+- `TableServiceReader` - Safe for any read-only operation
+- `TableServiceWriter` - For operations that create new snapshots
+- `MetadataServiceReader` - When you need raw Iceberg metadata
+- `MetadataServiceWriter` - Only for catalog-coordinated writes
 
 This separation provides:
 - **Compile-time safety**: Code using `TableServiceReader` cannot accidentally write
@@ -467,3 +481,75 @@ Storage is handled by `object_store` crate. To add support:
 1. Update `create_object_store()` in `src/core/storage/mod.rs`
 2. Add URL scheme detection
 3. Update credential resolution in `src/utils/credentials.rs`
+
+## Extension Points
+
+icetable provides several registries for runtime extensibility:
+
+### FormatHandlerRegistry
+
+Register custom table format handlers:
+
+```rust
+use icetable::FormatHandlerRegistry;
+
+FormatHandlerRegistry::global().register("hudi", 70, |path, storage| {
+    Ok(Box::new(HudiHandler::new(path, storage)?))
+});
+```
+
+### PhysicalInspectorRegistry
+
+Register custom physical inspectors:
+
+```rust
+use icetable::core::inspection::{PhysicalInspectorRegistry, PhysicalInspectorFactory};
+
+let mut registry = PhysicalInspectorRegistry::new();
+registry.register(MyInspectorFactory);
+```
+
+### Future Plugin System
+
+The architecture is designed to support a future plugin system without breaking changes:
+- Registries use trait objects for dynamic dispatch
+- Public enums use `#[non_exhaustive]` for forward compatibility
+- New extension points can be added without modifying existing APIs
+
+## Public API Stability
+
+### #[non_exhaustive] Enums
+
+Key public enums are marked `#[non_exhaustive]` to allow adding variants without breaking downstream code:
+
+```rust
+#[non_exhaustive]
+pub enum CatalogType { Rest }      // Future: Glue, Hive
+
+#[non_exhaustive]
+pub enum CatalogProvider { ... }   // Future: more providers
+
+#[non_exhaustive]
+pub enum OperationType { ... }     // Future: new operations
+
+#[non_exhaustive]
+pub enum Error { ... }             // Always growing
+```
+
+Users must include a wildcard arm in match expressions:
+
+```rust
+match catalog_type {
+    CatalogType::Rest => { ... }
+    _ => { /* handle future variants */ }
+}
+```
+
+### Public Modules
+
+The library exposes these modules for external use:
+
+- `icetable::maintenance` - VacuumService, OptimizeService, SnapshotService, etc.
+- `icetable::transform` - TransformPipeline, FilterStep, CustomTransformStep
+- `icetable::config` - CatalogConfig, CatalogAuth, CredentialSource
+- Core traits: `TableServiceReader`, `TableServiceWriter`, `MetadataServiceReader`, `MetadataServiceWriter`
