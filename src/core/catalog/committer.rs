@@ -376,30 +376,16 @@ impl TableCommitter {
         }
     }
 
-    /// Write new metadata directly to storage (single-writer mode)
-    async fn write_metadata_direct(
-        &self,
-        table_path: &str,
-        current_metadata: &TableMetadata,
-        snapshot_ids: &[i64],
-        _current_version: i32,
-    ) -> Result<i64> {
+    /// Write updated metadata to storage and return new version number
+    ///
+    /// This is a shared helper for all direct-mode metadata writes.
+    /// It handles finding the current metadata, calculating the next version,
+    /// and writing the new metadata file.
+    async fn persist_metadata(&self, table_path: &str, new_metadata: &TableMetadata) -> Result<i64> {
         use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,
         };
-
-        // Build new metadata with snapshots removed
-        let build_result = current_metadata
-            .clone()
-            .into_builder(None)
-            .remove_snapshots(snapshot_ids)
-            .build()
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to build metadata: {}", e),
-            })?;
-
-        let new_metadata = build_result.metadata;
 
         let storage = create_object_store(table_path).await?;
         let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
@@ -419,7 +405,7 @@ impl TableCommitter {
         );
 
         let new_metadata_bytes =
-            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
+            serde_json::to_vec_pretty(new_metadata).map_err(|e| Error::Serialization {
                 message: format!("Failed to serialize metadata: {}", e),
             })?;
 
@@ -428,6 +414,28 @@ impl TableCommitter {
             .await?;
 
         Ok(new_version)
+    }
+
+    /// Write new metadata directly to storage (single-writer mode)
+    async fn write_metadata_direct(
+        &self,
+        table_path: &str,
+        current_metadata: &TableMetadata,
+        snapshot_ids: &[i64],
+        _current_version: i32,
+    ) -> Result<i64> {
+        // Build new metadata with snapshots removed
+        let build_result = current_metadata
+            .clone()
+            .into_builder(None)
+            .remove_snapshots(snapshot_ids)
+            .build()
+            .map_err(|e| Error::MetadataBuild {
+                message: e.to_string(),
+            })?;
+
+        self.persist_metadata(table_path, &build_result.metadata)
+            .await
     }
 
     /// Write new metadata with updated ref directly to storage
@@ -439,11 +447,6 @@ impl TableCommitter {
         snapshot_id: i64,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::utils::core::{
-            extract_version_from_path, find_latest_metadata, metadata_location_filename,
-            new_metadata_location, next_metadata_location,
-        };
-
         let branch_ref = SnapshotReference {
             snapshot_id,
             retention: SnapshotRetention::Branch {
@@ -457,41 +460,16 @@ impl TableCommitter {
             .clone()
             .into_builder(None)
             .set_ref(ref_name, branch_ref)
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to set ref: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: format!("set ref: {}", e),
             })?
             .build()
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to build metadata: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: e.to_string(),
             })?;
 
-        let new_metadata = build_result.metadata;
-
-        let storage = create_object_store(table_path).await?;
-        let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-
-        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
-
-        let next_location = next_metadata_location(&current_metadata_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-        let new_metadata_path = format!(
-            "{}/{}",
-            metadata_dir,
-            metadata_location_filename(&next_location)
-        );
-
-        let new_metadata_bytes =
-            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
-                message: format!("Failed to serialize metadata: {}", e),
-            })?;
-
-        storage
-            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
-            .await?;
-
-        Ok(new_version)
+        self.persist_metadata(table_path, &build_result.metadata)
+            .await
     }
 
     /// Commit a new branch or tag reference
@@ -575,50 +553,20 @@ impl TableCommitter {
         reference: SnapshotReference,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::utils::core::{
-            extract_version_from_path, find_latest_metadata, metadata_location_filename,
-            new_metadata_location, next_metadata_location,
-        };
-
         let build_result = current_metadata
             .clone()
             .into_builder(None)
             .set_ref(ref_name, reference)
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to set ref: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: format!("set ref: {}", e),
             })?
             .build()
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to build metadata: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: e.to_string(),
             })?;
 
-        let new_metadata = build_result.metadata;
-
-        let storage = create_object_store(table_path).await?;
-        let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-
-        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
-
-        let next_location = next_metadata_location(&current_metadata_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-        let new_metadata_path = format!(
-            "{}/{}",
-            metadata_dir,
-            metadata_location_filename(&next_location)
-        );
-
-        let new_metadata_bytes =
-            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
-                message: format!("Failed to serialize metadata: {}", e),
-            })?;
-
-        storage
-            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
-            .await?;
-
-        Ok(new_version)
+        self.persist_metadata(table_path, &build_result.metadata)
+            .await
     }
 
     /// Write new metadata with removed ref directly to storage
@@ -629,47 +577,17 @@ impl TableCommitter {
         ref_name: &str,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::utils::core::{
-            extract_version_from_path, find_latest_metadata, metadata_location_filename,
-            new_metadata_location, next_metadata_location,
-        };
-
         let build_result = current_metadata
             .clone()
             .into_builder(None)
             .remove_ref(ref_name)
             .build()
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to build metadata: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: e.to_string(),
             })?;
 
-        let new_metadata = build_result.metadata;
-
-        let storage = create_object_store(table_path).await?;
-        let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-
-        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
-
-        let next_location = next_metadata_location(&current_metadata_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-        let new_metadata_path = format!(
-            "{}/{}",
-            metadata_dir,
-            metadata_location_filename(&next_location)
-        );
-
-        let new_metadata_bytes =
-            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
-                message: format!("Failed to serialize metadata: {}", e),
-            })?;
-
-        storage
-            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
-            .await?;
-
-        Ok(new_version)
+        self.persist_metadata(table_path, &build_result.metadata)
+            .await
     }
 
     /// Commit renaming a reference (remove old + add new atomically)
@@ -729,51 +647,21 @@ impl TableCommitter {
         reference: SnapshotReference,
         _current_version: i32,
     ) -> Result<i64> {
-        use crate::utils::core::{
-            extract_version_from_path, find_latest_metadata, metadata_location_filename,
-            new_metadata_location, next_metadata_location,
-        };
-
         let build_result = current_metadata
             .clone()
             .into_builder(None)
             .remove_ref(old_name)
             .set_ref(new_name, reference)
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to set ref: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: format!("set ref: {}", e),
             })?
             .build()
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to build metadata: {}", e),
+            .map_err(|e| Error::MetadataBuild {
+                message: e.to_string(),
             })?;
 
-        let new_metadata = build_result.metadata;
-
-        let storage = create_object_store(table_path).await?;
-        let metadata_dir = format!("{}/metadata", table_path.trim_end_matches('/'));
-
-        let current_metadata_path = find_latest_metadata(table_path, &storage).await?;
-
-        let next_location = next_metadata_location(&current_metadata_path)
-            .unwrap_or_else(|_| new_metadata_location(table_path));
-
-        let new_version = extract_version_from_path(&next_location.to_string()).unwrap_or(0) as i64;
-        let new_metadata_path = format!(
-            "{}/{}",
-            metadata_dir,
-            metadata_location_filename(&next_location)
-        );
-
-        let new_metadata_bytes =
-            serde_json::to_vec_pretty(&new_metadata).map_err(|e| Error::Serialization {
-                message: format!("Failed to serialize metadata: {}", e),
-            })?;
-
-        storage
-            .put_bytes_str(&new_metadata_path, bytes::Bytes::from(new_metadata_bytes))
-            .await?;
-
-        Ok(new_version)
+        self.persist_metadata(table_path, &build_result.metadata)
+            .await
     }
 
     /// Commit a new snapshot with data file changes (used by optimize, repair, etc.)

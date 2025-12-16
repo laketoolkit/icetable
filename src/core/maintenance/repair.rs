@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use super::MaintenanceConfig;
 use crate::core::inspection::formatters::extract_filename;
 use crate::core::metadata::{
-    DataFileChanges, DataFileInfo, MaintenanceResult, OperationType, TableServiceWriter,
+    DataFileChanges, DataFileInfo, MaintenanceResult, OperationType, TableServiceReader,
+    TableServiceWriter,
 };
 use crate::error::Result;
 
@@ -34,7 +35,9 @@ impl RepairService {
     ///
     /// Uses `get_all_referenced_files()` to check ALL snapshots, not just current.
     /// A file is only truly orphaned if it's not referenced by ANY snapshot.
-    pub async fn analyze<M: TableServiceWriter>(
+    ///
+    /// Uses `TableServiceReader` trait - analyze is read-only.
+    pub async fn analyze<M: TableServiceReader>(
         &self,
         metadata_service: &M,
     ) -> Result<RepairAnalysis> {

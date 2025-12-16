@@ -183,6 +183,74 @@ pub trait TableServiceWriter: TableServiceReader {
     ) -> Result<SnapshotInfo>;
 }
 
+// =============================================================================
+// Extended Traits for Maintenance Operations
+// =============================================================================
+
+use iceberg::io::FileIO;
+use iceberg::spec::TableMetadata;
+
+use crate::core::catalog::TableCommitter;
+use crate::core::storage::Storage;
+
+/// Extended reader for maintenance operations that need raw metadata access
+///
+/// This trait extends `TableServiceReader` with methods needed by maintenance
+/// services like VacuumService, SnapshotService, ManifestService, etc.
+///
+/// # Design rationale
+///
+/// `TableServiceReader` provides high-level operations (list files, snapshots).
+/// `MetadataServiceReader` adds low-level access needed for:
+/// - Reading raw Iceberg metadata (for expiration, manifest rewrite)
+/// - Accessing FileIO for manifest operations
+/// - Getting table path for storage operations
+/// - Getting target branch for branch-aware operations
+#[async_trait]
+pub trait MetadataServiceReader: TableServiceReader {
+    /// Load the current table metadata with version number
+    ///
+    /// Returns the parsed metadata and current version number.
+    async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)>;
+
+    /// Get FileIO for manifest and low-level file operations
+    fn file_io(&self) -> &FileIO;
+
+    /// Get the table's base path
+    fn table_path(&self) -> &str;
+
+    /// Get the target branch for branch-aware operations
+    ///
+    /// Returns "main" if no specific branch is set.
+    fn target_branch(&self) -> &str;
+
+    /// Get current metadata file path
+    async fn current_metadata_path(&self) -> Result<String>;
+
+    /// Get the storage backend for file operations
+    fn storage(&self) -> &Storage;
+}
+
+/// Extended writer for maintenance operations that commit via catalog
+///
+/// This trait extends `MetadataServiceReader` (and transitively `TableServiceWriter`)
+/// with access to an optional catalog committer for transactional commits.
+///
+/// # When to use which trait
+///
+/// - `TableServiceReader`: Read-only analysis (optimize analyze, repair analyze)
+/// - `TableServiceWriter`: Write snapshots with file changes (optimize execute, repair execute)
+/// - `MetadataServiceReader`: Read raw metadata (vacuum, snapshot list, manifest analyze)
+/// - `MetadataServiceWriter`: Write metadata changes via catalog (expire, refs, manifest rewrite)
+#[async_trait]
+pub trait MetadataServiceWriter: MetadataServiceReader + TableServiceWriter {
+    /// Get the optional catalog committer for transactional commits
+    ///
+    /// Returns `Some(committer)` when operating through a catalog (REST, Hive, etc.)
+    /// Returns `None` for direct storage mode (single-writer only)
+    fn committer(&self) -> Option<TableCommitter>;
+}
+
 
 /// Result of a maintenance operation
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -140,11 +140,9 @@ impl RefCommands {
         retention: BranchRetention,
         output: &str,
     ) -> Result<()> {
-        let table_path = metadata_service.path();
-        let ref_service = Self::create_ref_service(metadata_service.committer());
-
+        let ref_service = RefService::new();
         let result = ref_service
-            .create_branch(metadata_service, table_path, name, from_snapshot, retention)
+            .create_branch(metadata_service, name, from_snapshot, retention)
             .await?;
 
         Self::print_create_result(
@@ -164,17 +162,9 @@ impl RefCommands {
         max_ref_age_ms: Option<i64>,
         output: &str,
     ) -> Result<()> {
-        let table_path = metadata_service.path();
-        let ref_service = Self::create_ref_service(metadata_service.committer());
-
+        let ref_service = RefService::new();
         let result = ref_service
-            .create_tag(
-                metadata_service,
-                table_path,
-                name,
-                snapshot_id,
-                max_ref_age_ms,
-            )
+            .create_tag(metadata_service, name, snapshot_id, max_ref_age_ms)
             .await?;
 
         Self::print_create_result(
@@ -194,14 +184,9 @@ impl RefCommands {
         dry_run: bool,
         output: &str,
     ) -> Result<()> {
-        let table_path = metadata_service.path();
         let config = RefConfig { dry_run };
-        let ref_service =
-            RefService::with_config_and_committer(config, metadata_service.committer());
-
-        let result = ref_service
-            .delete_ref(metadata_service, table_path, name)
-            .await?;
+        let ref_service = RefService::with_config(config);
+        let result = ref_service.delete_ref(metadata_service, name).await?;
 
         if output == "json" {
             let json = serde_json::json!({
@@ -233,11 +218,9 @@ impl RefCommands {
         new_name: &str,
         output: &str,
     ) -> Result<()> {
-        let table_path = metadata_service.path();
-        let ref_service = Self::create_ref_service(metadata_service.committer());
-
+        let ref_service = RefService::new();
         let result = ref_service
-            .rename_branch(metadata_service, table_path, old_name, new_name)
+            .rename_branch(metadata_service, old_name, new_name)
             .await?;
 
         Self::print_rename_result(
@@ -257,11 +240,9 @@ impl RefCommands {
         new_name: &str,
         output: &str,
     ) -> Result<()> {
-        let table_path = metadata_service.path();
-        let ref_service = Self::create_ref_service(metadata_service.committer());
-
+        let ref_service = RefService::new();
         let result = ref_service
-            .rename_tag(metadata_service, table_path, old_name, new_name)
+            .rename_tag(metadata_service, old_name, new_name)
             .await?;
 
         Self::print_rename_result(
@@ -281,11 +262,9 @@ impl RefCommands {
         to: &str,
         output: &str,
     ) -> Result<()> {
-        let table_path = metadata_service.path();
-        let ref_service = Self::create_ref_service(metadata_service.committer());
-
+        let ref_service = RefService::new();
         let result = ref_service
-            .fast_forward_branch(metadata_service, table_path, name, to)
+            .fast_forward_branch(metadata_service, name, to)
             .await?;
 
         if output == "json" {
@@ -306,14 +285,6 @@ impl RefCommands {
         }
 
         Ok(())
-    }
-
-    // Helper: create RefService with optional committer
-    fn create_ref_service(committer: Option<crate::core::TableCommitter>) -> RefService {
-        match committer {
-            Some(c) => RefService::with_committer(c),
-            None => RefService::new(),
-        }
     }
 
     // Helper: print create result

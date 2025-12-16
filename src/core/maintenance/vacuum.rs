@@ -9,9 +9,9 @@ use std::collections::{HashMap, HashSet};
 
 use iceberg::spec::ManifestStatus;
 
-use crate::core::metadata::{IcebergMetadataService, MaintenanceResult};
-use crate::core::storage::{ObjectStoreExt, create_object_store};
-use crate::error::{Error, Result};
+use crate::core::metadata::{MaintenanceResult, MetadataServiceReader};
+use crate::core::storage::ObjectStoreExt;
+use crate::error::Result;
 use crate::utils::core::{format_bytes, sizes};
 
 /// Service for vacuuming tables (removing unreferenced files)
@@ -54,29 +54,16 @@ impl VacuumService {
     }
 
     /// Analyze files that would be deleted (works with any storage backend)
-    /// If metadata_service is provided, uses it; otherwise creates one from table_path
-    pub async fn analyze_with_service(
+    ///
+    /// Uses `MetadataServiceReader` trait to access table metadata and storage.
+    pub async fn analyze<S: MetadataServiceReader>(
         &self,
-        table_path: &str,
-        metadata_service: Option<&IcebergMetadataService>,
+        service: &S,
     ) -> Result<VacuumAnalysis> {
-        // Use provided service or create one
-        let owned_service;
-        let service = match metadata_service {
-            Some(s) => s,
-            None => {
-                owned_service = IcebergMetadataService::new_async(table_path.to_string())
-                    .await
-                    .map_err(|_| Error::TableNotFound {
-                        path: table_path.to_string(),
-                    })?;
-                &owned_service
-            }
-        };
-
-        let table = service.table();
-        let metadata = table.metadata();
+        let (metadata, _) = service.load_metadata().await?;
         let file_io = service.file_io();
+        let table_path = service.table_path();
+        let storage = service.storage();
 
         // Step 1: Collect all referenced files from ALL snapshots
         // Use manifest-level caching to avoid re-reading shared manifests
@@ -129,7 +116,6 @@ impl VacuumService {
             .collect();
 
         // Step 3: List all files in data directory
-        let storage = create_object_store(table_path).await?;
         let base_path = table_path.trim_end_matches('/');
         let data_prefix = format!("{}/data/", base_path);
 
@@ -169,21 +155,15 @@ impl VacuumService {
         })
     }
 
-    /// Analyze files that would be deleted - convenience method using table path
-    pub async fn analyze(&self, table_path: &str) -> Result<VacuumAnalysis> {
-        self.analyze_with_service(table_path, None).await
-    }
-
     /// Execute vacuum operation - deletes orphan files
-    /// If metadata_service is provided, uses it; otherwise creates one from table_path
-    pub async fn execute_with_service(
+    ///
+    /// Uses `MetadataServiceReader` trait to access table metadata and storage.
+    /// Note: This only deletes orphan files, it does NOT modify Iceberg metadata.
+    pub async fn execute<S: MetadataServiceReader>(
         &self,
-        table_path: &str,
-        metadata_service: Option<&IcebergMetadataService>,
+        service: &S,
     ) -> Result<VacuumResult> {
-        let analysis = self
-            .analyze_with_service(table_path, metadata_service)
-            .await?;
+        let analysis = self.analyze(service).await?;
 
         if analysis.orphan_files.is_empty() {
             return Ok(VacuumResult {
@@ -206,7 +186,7 @@ impl VacuumService {
         }
 
         // Delete files using bulk delete API (much faster for cloud storage)
-        let storage = create_object_store(table_path).await?;
+        let storage = service.storage();
 
         let paths: Vec<String> = analysis.orphan_files.iter().map(|f| f.path.clone()).collect();
         let errors = storage.delete_bulk(&paths).await?;
@@ -227,11 +207,6 @@ impl VacuumService {
             dry_run: false,
             analysis,
         })
-    }
-
-    /// Execute vacuum operation - convenience method using table path
-    pub async fn execute(&self, table_path: &str) -> Result<VacuumResult> {
-        self.execute_with_service(table_path, None).await
     }
 
     /// Convert vacuum result to MaintenanceResult for consistent output

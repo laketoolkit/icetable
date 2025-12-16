@@ -39,7 +39,7 @@ impl CatalogCredentials {
                 message: format!("Failed to read credentials file: {}", e),
             })?;
 
-            return serde_yaml::from_str(&content).map_err(|e| Error::Parse {
+            return serde_yaml_ng::from_str(&content).map_err(|e| Error::Parse {
                 message: format!("Failed to parse credentials file: {}", e),
                 source: Some(Box::new(e)),
             });
@@ -58,7 +58,7 @@ impl CatalogCredentials {
             message: format!("Failed to create config directory: {}", e),
         })?;
 
-        let content = serde_yaml::to_string(self).map_err(|e| Error::Serialization {
+        let content = serde_yaml_ng::to_string(self).map_err(|e| Error::Serialization {
             message: format!("Failed to serialize credentials: {}", e),
         })?;
 
@@ -209,8 +209,8 @@ mod tests {
             },
         );
 
-        let yaml = serde_yaml::to_string(&creds).unwrap();
-        let parsed: CatalogCredentials = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&creds).unwrap();
+        let parsed: CatalogCredentials = serde_yaml_ng::from_str(&yaml).unwrap();
 
         assert!(parsed.has("polaris"));
         assert!(parsed.has("nessie"));

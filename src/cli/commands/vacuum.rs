@@ -50,7 +50,7 @@ impl VacuumCommand {
             dry_run: args.dry_run,
             parallelism: 32,
         };
-        let service = VacuumService::with_config(config);
+        let vacuum_service = VacuumService::with_config(config);
 
         // Show progress while analyzing
         let pb = create_spinner("Scanning manifests");
@@ -59,9 +59,7 @@ impl VacuumCommand {
         let metadata_service = resolution.to_readonly_service().await?;
 
         // Execute vacuum (analyze + optionally delete)
-        let result = service
-            .execute_with_service(table_path, Some(&metadata_service))
-            .await?;
+        let result = vacuum_service.execute(&metadata_service).await?;
 
         pb.finish_and_clear();
 

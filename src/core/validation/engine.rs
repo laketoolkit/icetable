@@ -104,7 +104,7 @@ impl ValidationEngine {
                 path: std::path::PathBuf::from(format!("{} ({})", path, e)),
             })?;
 
-        serde_yaml::from_str(&content).map_err(|e| Error::Parse {
+        serde_yaml_ng::from_str(&content).map_err(|e| Error::Parse {
             message: format!("Failed to parse rules file '{}': {}", path, e),
             source: None,
         })

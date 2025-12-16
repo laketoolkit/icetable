@@ -379,10 +379,10 @@ mod tests {
     #[test]
     fn test_catalog_type_yaml_serialization() {
         let catalog_type = CatalogType::Rest;
-        let yaml = serde_yaml::to_string(&catalog_type).unwrap();
+        let yaml = serde_yaml_ng::to_string(&catalog_type).unwrap();
         assert_eq!(yaml.trim(), "rest");
 
-        let deserialized: CatalogType = serde_yaml::from_str("rest").unwrap();
+        let deserialized: CatalogType = serde_yaml_ng::from_str("rest").unwrap();
         assert_eq!(deserialized, CatalogType::Rest);
     }
 
@@ -392,54 +392,47 @@ mod tests {
             .with_warehouse("s3://lakehouse/warehouse")
             .with_property("key", "value");
 
-        let yaml = serde_yaml::to_string(&config).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
 
         assert!(yaml.contains("type: rest"));
         assert!(yaml.contains("uri: http://nessie:19120/iceberg/"));
         assert!(yaml.contains("warehouse: s3://lakehouse/warehouse"));
 
-        let deserialized: CatalogConfig = serde_yaml::from_str(&yaml).unwrap();
+        let deserialized: CatalogConfig = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(deserialized.catalog_type, CatalogType::Rest);
         assert_eq!(deserialized.uri, "http://nessie:19120/iceberg/");
     }
 
     #[test]
     fn test_catalog_auth_bearer() {
-        unsafe {
-            std::env::set_var("TEST_BEARER_TOKEN", "my-token");
-        }
-        let auth = CatalogAuth::bearer(CredentialSource::EnvVar("TEST_BEARER_TOKEN".to_string()));
-        let props = auth.to_properties().unwrap();
-        assert_eq!(props.get("token"), Some(&"my-token".to_string()));
-        unsafe {
-            std::env::remove_var("TEST_BEARER_TOKEN");
-        }
+        temp_env::with_var("TEST_BEARER_TOKEN", Some("my-token"), || {
+            let auth =
+                CatalogAuth::bearer(CredentialSource::EnvVar("TEST_BEARER_TOKEN".to_string()));
+            let props = auth.to_properties().unwrap();
+            assert_eq!(props.get("token"), Some(&"my-token".to_string()));
+        });
     }
 
     #[test]
     fn test_catalog_auth_oauth2() {
-        unsafe {
-            std::env::set_var("TEST_CLIENT_SECRET", "secret123");
-        }
-        let auth = CatalogAuth::oauth2(
-            "client-id",
-            CredentialSource::EnvVar("TEST_CLIENT_SECRET".to_string()),
-            Some("https://auth.example.com/token".to_string()),
-            Some("catalog".to_string()),
-        );
-        let props = auth.to_properties().unwrap();
-        assert_eq!(
-            props.get("credential"),
-            Some(&"client-id:secret123".to_string())
-        );
-        assert_eq!(
-            props.get("oauth2-server-uri"),
-            Some(&"https://auth.example.com/token".to_string())
-        );
-        assert_eq!(props.get("scope"), Some(&"catalog".to_string()));
-        unsafe {
-            std::env::remove_var("TEST_CLIENT_SECRET");
-        }
+        temp_env::with_var("TEST_CLIENT_SECRET", Some("secret123"), || {
+            let auth = CatalogAuth::oauth2(
+                "client-id",
+                CredentialSource::EnvVar("TEST_CLIENT_SECRET".to_string()),
+                Some("https://auth.example.com/token".to_string()),
+                Some("catalog".to_string()),
+            );
+            let props = auth.to_properties().unwrap();
+            assert_eq!(
+                props.get("credential"),
+                Some(&"client-id:secret123".to_string())
+            );
+            assert_eq!(
+                props.get("oauth2-server-uri"),
+                Some(&"https://auth.example.com/token".to_string())
+            );
+            assert_eq!(props.get("scope"), Some(&"catalog".to_string()));
+        });
     }
 
     #[test]
@@ -460,7 +453,7 @@ type: rest
 uri: http://localhost:19120
 "#;
 
-        let config: CatalogConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: CatalogConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(config.catalog_type, CatalogType::Rest);
         assert_eq!(config.uri, "http://localhost:19120");
         assert!(config.warehouse.is_none());

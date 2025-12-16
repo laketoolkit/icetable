@@ -18,12 +18,11 @@ use iceberg::spec::{DataFile, Summary, TableMetadata};
 use iceberg::table::StaticTable;
 use object_store::ObjectStore;
 
-use super::traits::{DataFileChanges, DataFileInfo, TableServiceReader, TableServiceWriter, OperationType, SnapshotInfo};
+use super::traits::{DataFileChanges, DataFileInfo, MetadataServiceReader, MetadataServiceWriter, TableServiceReader, TableServiceWriter, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
 use crate::core::storage::{ObjectStoreExt, Storage, create_file_io, create_object_store};
 use crate::error::{Error, Result};
 use crate::utils::core::{extract_version_from_path, find_latest_metadata};
-use crate::utils::create_spinner;
 
 use super::iceberg_operations;
 use super::iceberg_partition;
@@ -63,8 +62,9 @@ impl IcebergMetadataService {
 
         StaticTable::from_metadata_file(&metadata_file, table_ident, file_io.clone())
             .await
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to load table: {}", e),
+            .map_err(|e| Error::MetadataLoad {
+                path: table_path.to_string(),
+                message: e.to_string(),
             })
     }
 
@@ -338,21 +338,21 @@ impl TableServiceReader for IcebergMetadataService {
             }
         }
 
-        let scan = scan_builder.build().map_err(|e| Error::Metadata {
-            message: format!("Failed to build scan: {}", e),
+        let scan = scan_builder.build().map_err(|e| Error::TableScan {
+            message: format!("failed to build scan: {}", e),
         })?;
 
         // Use plan_files() to get all data files
         let tasks: Vec<_> = scan
             .plan_files()
             .await
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to plan files: {}", e),
+            .map_err(|e| Error::TableScan {
+                message: format!("failed to plan files: {}", e),
             })?
             .try_collect()
             .await
-            .map_err(|e| Error::Metadata {
-                message: format!("Failed to collect file tasks: {}", e),
+            .map_err(|e| Error::TableScan {
+                message: format!("failed to collect file tasks: {}", e),
             })?;
 
         // Convert FileScanTasks to DataFileInfo
@@ -402,11 +402,7 @@ impl TableServiceReader for IcebergMetadataService {
     async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>> {
         let data_prefix = format!("{}/data/", self.table_path.trim_end_matches('/'));
 
-        let pb = create_spinner("Listing files on storage");
-
         let all_objects = self.storage.list_prefix(&data_prefix).await?;
-
-        pb.finish_and_clear();
 
         let all_files: Vec<DataFileInfo> = all_objects
             .iter()
@@ -592,6 +588,45 @@ impl TableServiceWriter for IcebergMetadataService {
             summary: full_summary,
             parent_id: parent_snapshot_id,
         })
+    }
+}
+
+// =============================================================================
+// Extended Traits Implementation
+// =============================================================================
+
+#[async_trait]
+impl MetadataServiceReader for IcebergMetadataService {
+    async fn load_metadata(&self) -> Result<(Arc<TableMetadata>, i32)> {
+        // Delegate to the existing method
+        IcebergMetadataService::load_metadata(self).await
+    }
+
+    fn file_io(&self) -> &FileIO {
+        &self.file_io
+    }
+
+    fn table_path(&self) -> &str {
+        &self.table_path
+    }
+
+    fn target_branch(&self) -> &str {
+        self.target_branch.as_deref().unwrap_or("main")
+    }
+
+    async fn current_metadata_path(&self) -> Result<String> {
+        find_latest_metadata(&self.table_path, &self.storage).await
+    }
+
+    fn storage(&self) -> &Storage {
+        &self.storage
+    }
+}
+
+#[async_trait]
+impl MetadataServiceWriter for IcebergMetadataService {
+    fn committer(&self) -> Option<TableCommitter> {
+        self.committer.clone()
     }
 }
 

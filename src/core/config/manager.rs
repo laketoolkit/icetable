@@ -104,7 +104,7 @@ impl Config {
                     message: format!("Failed to read config file: {}", e),
                 })?;
 
-            return serde_yaml::from_str(&content).map_err(|e| Error::Parse {
+            return serde_yaml_ng::from_str(&content).map_err(|e| Error::Parse {
                 message: format!("Failed to parse config file: {}", e),
                 source: Some(Box::new(e)),
             });
@@ -123,7 +123,7 @@ impl Config {
             message: format!("Failed to create config directory: {}", e),
         })?;
 
-        let content = serde_yaml::to_string(self).map_err(|e| Error::Serialization {
+        let content = serde_yaml_ng::to_string(self).map_err(|e| Error::Serialization {
             message: format!("Failed to serialize config: {}", e),
         })?;
 

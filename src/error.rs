@@ -151,9 +151,32 @@ pub enum Error {
         http_status: Option<u16>,
     },
 
-    /// Metadata error
+    /// Metadata error (generic - prefer specific variants below)
     #[error("{message}")]
     Metadata {
+        /// Error description
+        message: String,
+    },
+
+    /// Error loading table metadata from storage
+    #[error("failed to load metadata from {path}: {message}")]
+    MetadataLoad {
+        /// Path where metadata was being loaded from
+        path: String,
+        /// Error description
+        message: String,
+    },
+
+    /// Error building table metadata (builder pattern failures)
+    #[error("failed to build metadata: {message}")]
+    MetadataBuild {
+        /// Error description
+        message: String,
+    },
+
+    /// Error executing table scan
+    #[error("scan failed: {message}")]
+    TableScan {
         /// Error description
         message: String,
     },

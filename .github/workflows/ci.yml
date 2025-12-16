@@ -30,5 +30,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit
+
       - name: Test
         run: cargo test

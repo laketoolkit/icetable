@@ -366,7 +366,8 @@ impl OptimizeService {
             .to_string();
 
         // Parse partition from clean key (used for all output files)
-        let partition = self.parse_partition_key(&clean_partition_key);
+        // Wrap in Arc for cheap cloning in async tasks
+        let partition = Arc::new(self.parse_partition_key(&clean_partition_key));
 
         // P2: Optimized WriterProperties - ZSTD level 1 is ~3x faster with ~5% less compression
         let props = Arc::new(
@@ -577,7 +578,7 @@ impl OptimizeService {
                                             path: out_path.to_string_lossy().to_string(),
                                             size: meta.size,
                                             record_count: current_records,
-                                            partition: partition.clone(),
+                                            partition: (*partition).clone(),
                                         });
                                     }
                                     current_records = 0;
@@ -677,7 +678,7 @@ impl OptimizeService {
                             path: out_path.to_string_lossy().to_string(),
                             size: meta.size,
                             record_count: current_records,
-                            partition: partition.clone(),
+                            partition: (*partition).clone(),
                         });
                     }
 

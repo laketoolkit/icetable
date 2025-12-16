@@ -27,8 +27,63 @@ pub use vacuum::{OrphanFile, VacuumAnalysis, VacuumConfig, VacuumResult, VacuumS
 
 use std::collections::HashMap;
 
+use iceberg::spec::TableMetadata;
+
 use crate::core::metadata::DataFileInfo;
+use crate::core::storage::{Storage, create_object_store};
+use crate::error::Result;
 use crate::utils::core::sizes;
+
+// =============================================================================
+// Shared helpers for maintenance services
+// =============================================================================
+
+/// Result of writing metadata directly to storage
+#[derive(Debug, Clone)]
+pub struct DirectWriteResult {
+    /// New metadata version
+    pub version: i64,
+    /// Path where metadata was written
+    pub path: String,
+}
+
+/// Write metadata directly to storage (for single-writer/direct mode)
+///
+/// This is a shared helper for maintenance services that need to write
+/// metadata when not using a catalog committer. It uses standard Iceberg
+/// naming conventions for metadata files.
+///
+/// # Arguments
+/// * `table_path` - Base path of the table
+/// * `metadata` - The new table metadata to write
+///
+/// # Returns
+/// The new metadata version number
+///
+/// # Example
+/// ```ignore
+/// let new_version = write_metadata_direct(table_path, &new_metadata).await?;
+/// ```
+pub async fn write_metadata_direct(
+    table_path: &str,
+    metadata: &TableMetadata,
+) -> Result<i64> {
+    let storage = create_object_store(table_path).await?;
+    write_metadata_with_storage(table_path, metadata, &storage).await
+}
+
+/// Write metadata using an existing storage handle
+///
+/// This variant is useful when the caller already has a storage handle
+/// and wants to avoid creating a new one.
+pub async fn write_metadata_with_storage(
+    table_path: &str,
+    metadata: &TableMetadata,
+    storage: &Storage,
+) -> Result<i64> {
+    let result = crate::utils::core::write_metadata_file(table_path, metadata, storage).await?;
+    Ok(result.version)
+}
 
 /// Common configuration for maintenance operations
 #[derive(Debug, Clone)]
@@ -85,20 +140,16 @@ impl MaintenanceConfig {
             });
         }
 
-        if let Some(max_files) = self.max_files {
-            if max_files == 0 {
-                return Err(crate::error::Error::Configuration {
-                    message: "max_files must be greater than 0 if set".to_string(),
-                });
-            }
+        if let Some(0) = self.max_files {
+            return Err(crate::error::Error::Configuration {
+                message: "max_files must be greater than 0 if set".to_string(),
+            });
         }
 
-        if let Some(max_bytes) = self.max_bytes {
-            if max_bytes == 0 {
-                return Err(crate::error::Error::Configuration {
-                    message: "max_bytes must be greater than 0 if set".to_string(),
-                });
-            }
+        if let Some(0) = self.max_bytes {
+            return Err(crate::error::Error::Configuration {
+                message: "max_bytes must be greater than 0 if set".to_string(),
+            });
         }
 
         Ok(())

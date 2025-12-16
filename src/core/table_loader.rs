@@ -176,7 +176,13 @@ impl TableLoader {
             });
         }
 
-        let table_name = parts.last().unwrap().to_string();
+        let table_name = parts
+            .last()
+            .ok_or_else(|| Error::InvalidCatalogRef {
+                ref_str: table_ref.to_string(),
+                message: "Table reference cannot be empty".to_string(),
+            })?
+            .to_string();
         let namespace_parts: Vec<&str> = parts[..parts.len() - 1].to_vec();
         let namespace =
             NamespaceIdent::from_vec(namespace_parts.into_iter().map(String::from).collect())

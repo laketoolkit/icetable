@@ -4,14 +4,11 @@
 //! - Create/delete/rename branches
 //! - Create/delete/rename tags
 //!
-//! When a `TableCommitter` is provided, commits go through the REST catalog
-//! API for multi-writer safety. Otherwise, commits write directly to storage.
+//! Uses `MetadataServiceWriter` trait for catalog-aware commits.
 
 use iceberg::spec::{SnapshotReference, SnapshotRetention};
 
-use crate::core::catalog::TableCommitter;
-use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::create_object_store;
+use crate::core::metadata::MetadataServiceWriter;
 use crate::error::{Error, Result};
 
 /// Result of a reference operation
@@ -46,10 +43,11 @@ pub struct BranchRetention {
 }
 
 /// Service for managing branches and tags
+///
+/// This service uses `MetadataServiceWriter` trait for catalog-aware operations.
+/// The committer is obtained from the service, not stored in the struct.
 pub struct RefService {
     config: RefConfig,
-    /// Optional committer for catalog-aware commits
-    committer: Option<TableCommitter>,
 }
 
 impl RefService {
@@ -57,41 +55,26 @@ impl RefService {
     pub fn new() -> Self {
         Self {
             config: RefConfig::default(),
-            committer: None,
         }
     }
 
     /// Create with configuration
     pub fn with_config(config: RefConfig) -> Self {
-        Self {
-            config,
-            committer: None,
-        }
-    }
-
-    /// Create with committer for catalog-aware operations
-    pub fn with_committer(committer: TableCommitter) -> Self {
-        Self {
-            config: RefConfig::default(),
-            committer: Some(committer),
-        }
-    }
-
-    /// Create with both config and committer
-    pub fn with_config_and_committer(config: RefConfig, committer: Option<TableCommitter>) -> Self {
-        Self { config, committer }
+        Self { config }
     }
 
     /// Create a new branch
-    pub async fn create_branch(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn create_branch<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         name: &str,
         snapshot_id: Option<i64>,
         retention: BranchRetention,
     ) -> Result<RefResult> {
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         // Use specified snapshot or current
         let target_id = match snapshot_id {
@@ -138,7 +121,7 @@ impl RefService {
         };
 
         // Use committer if available (catalog mode)
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_add_ref(table_path, &metadata, name, branch_ref, current_version)
                 .await?
@@ -158,8 +141,7 @@ impl RefService {
                     message: format!("Failed to build metadata: {}", e),
                 })?;
 
-            self.write_metadata(table_path, &build_result.metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &build_result.metadata).await?
         };
 
         Ok(RefResult {
@@ -171,15 +153,17 @@ impl RefService {
     }
 
     /// Create a new tag
-    pub async fn create_tag(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn create_tag<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         name: &str,
         snapshot_id: Option<i64>,
         max_ref_age_ms: Option<i64>,
     ) -> Result<RefResult> {
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         // Use specified snapshot or current
         let target_id = match snapshot_id {
@@ -222,7 +206,7 @@ impl RefService {
         };
 
         // Use committer if available (catalog mode)
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_add_ref(table_path, &metadata, name, tag_ref, current_version)
                 .await?
@@ -242,8 +226,7 @@ impl RefService {
                     message: format!("Failed to build metadata: {}", e),
                 })?;
 
-            self.write_metadata(table_path, &build_result.metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &build_result.metadata).await?
         };
 
         Ok(RefResult {
@@ -255,10 +238,11 @@ impl RefService {
     }
 
     /// Delete a reference (branch or tag)
-    pub async fn delete_ref(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn delete_ref<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         name: &str,
     ) -> Result<RefResult> {
         if name == "main" {
@@ -268,6 +252,7 @@ impl RefService {
         }
 
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         // Verify ref exists and get its snapshot
         let snapshot = metadata
@@ -287,7 +272,7 @@ impl RefService {
         }
 
         // Use committer if available (catalog mode)
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_remove_ref(table_path, &metadata, name, current_version)
                 .await?
@@ -304,8 +289,7 @@ impl RefService {
                     message: format!("Failed to build metadata: {}", e),
                 })?;
 
-            self.write_metadata(table_path, &build_result.metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &build_result.metadata).await?
         };
 
         Ok(RefResult {
@@ -317,10 +301,11 @@ impl RefService {
     }
 
     /// Rename a branch
-    pub async fn rename_branch(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn rename_branch<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         old_name: &str,
         new_name: &str,
     ) -> Result<RefResult> {
@@ -336,6 +321,7 @@ impl RefService {
         }
 
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         // Verify old ref exists
         let snapshot = metadata
@@ -373,7 +359,7 @@ impl RefService {
         };
 
         // Use committer if available (catalog mode)
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_rename_ref(
                     table_path,
@@ -401,8 +387,7 @@ impl RefService {
                     message: format!("Failed to build metadata: {}", e),
                 })?;
 
-            self.write_metadata(table_path, &build_result.metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &build_result.metadata).await?
         };
 
         Ok(RefResult {
@@ -414,14 +399,16 @@ impl RefService {
     }
 
     /// Rename a tag
-    pub async fn rename_tag(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn rename_tag<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         old_name: &str,
         new_name: &str,
     ) -> Result<RefResult> {
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         // Verify old ref exists
         let snapshot = metadata
@@ -457,7 +444,7 @@ impl RefService {
         };
 
         // Use committer if available (catalog mode)
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_rename_ref(
                     table_path,
@@ -485,8 +472,7 @@ impl RefService {
                     message: format!("Failed to build metadata: {}", e),
                 })?;
 
-            self.write_metadata(table_path, &build_result.metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &build_result.metadata).await?
         };
 
         Ok(RefResult {
@@ -501,16 +487,18 @@ impl RefService {
     ///
     /// A fast-forward is only valid if the target snapshot is a descendant of the
     /// branch's current snapshot (i.e., the current snapshot is an ancestor of the target).
-    pub async fn fast_forward_branch(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn fast_forward_branch<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         name: &str,
         target: &str, // snapshot ID or ref name
     ) -> Result<RefResult> {
         use crate::utils::core::snapshot::is_ancestor;
 
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         // Verify branch exists and get its current snapshot
         let branch_snapshot = metadata
@@ -563,7 +551,7 @@ impl RefService {
         };
 
         // Use committer if available (catalog mode)
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_add_ref(table_path, &metadata, name, new_ref, current_version)
                 .await?
@@ -583,8 +571,7 @@ impl RefService {
                     message: format!("Failed to build metadata: {}", e),
                 })?;
 
-            self.write_metadata(table_path, &build_result.metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &build_result.metadata).await?
         };
 
         Ok(RefResult {
@@ -593,19 +580,6 @@ impl RefService {
             new_version: Some(new_version),
             dry_run: false,
         })
-    }
-
-    /// Write new metadata using standard Iceberg naming
-    async fn write_metadata(
-        &self,
-        table_path: &str,
-        metadata: &iceberg::spec::TableMetadata,
-        _current_version: i32, // Kept for API compatibility, version derived from metadata path
-    ) -> Result<i64> {
-        let storage = create_object_store(table_path).await?;
-        let result =
-            crate::utils::core::write_metadata_file(table_path, metadata, &storage).await?;
-        Ok(result.version)
     }
 }
 

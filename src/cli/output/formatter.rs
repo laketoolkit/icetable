@@ -85,7 +85,7 @@ pub fn output_result<T: CliOutput>(result: &T, format: &str) -> crate::error::Re
             println!("{}", json);
         }
         "yaml" => {
-            let yaml = serde_yaml::to_string(result)
+            let yaml = serde_yaml_ng::to_string(result)
                 .map_err(|e| crate::error::Error::Serialization {
                     message: format!("YAML serialization failed: {}", e),
                 })?;
@@ -124,7 +124,7 @@ impl OutputFormatter {
 
     /// Format output as YAML
     pub fn format_yaml<T: serde::Serialize>(data: &T) -> crate::error::Result<String> {
-        serde_yaml::to_string(data).map_err(|e| crate::error::Error::Serialization {
+        serde_yaml_ng::to_string(data).map_err(|e| crate::error::Error::Serialization {
             message: format!("YAML serialization failed: {}", e),
         })
     }

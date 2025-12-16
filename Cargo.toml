@@ -39,7 +39,7 @@ colored = "2.1"
 unicode-width = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 
 # Progress and UI
 indicatif = "0.18"
@@ -85,6 +85,7 @@ insta = { version = "1.40", features = ["yaml"] }
 tokio-test = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
 serial_test = "3.2"
+temp-env = "0.3"
 
 [features]
 default = ["rest-catalog"]

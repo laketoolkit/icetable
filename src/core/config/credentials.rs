@@ -211,29 +211,11 @@ impl CredentialSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use tempfile::NamedTempFile;
 
-    // Helper to safely set env var for tests (runs serially to avoid races)
-    fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        // SAFETY: This is safe because tests using this helper run serially
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        let result = f();
-        unsafe {
-            std::env::remove_var(key);
-        }
-        result
-    }
-
     #[test]
-    #[serial]
     fn test_inline_credential() {
-        with_env_var("ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS", "1", || {
+        temp_env::with_var("ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS", Some("1"), || {
             let cred = CredentialSource::Inline("token123".to_string());
             assert_eq!(cred.resolve().unwrap(), Some("token123".to_string()));
             assert_eq!(cred.describe(), "inline (plain text)");
@@ -241,9 +223,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_env_var_credential() {
-        with_env_var("TEST_CRED_TOKEN", "secret123", || {
+        temp_env::with_var("TEST_CRED_TOKEN", Some("secret123"), || {
             let cred = CredentialSource::EnvVar("TEST_CRED_TOKEN".to_string());
             assert_eq!(cred.resolve().unwrap(), Some("secret123".to_string()));
             assert_eq!(cred.describe(), "env:TEST_CRED_TOKEN");
@@ -300,12 +281,12 @@ mod tests {
     fn test_yaml_serialization() {
         // Inline serializes as plain string
         let cred = CredentialSource::Inline("secret".to_string());
-        let yaml = serde_yaml::to_string(&cred).unwrap();
+        let yaml = serde_yaml_ng::to_string(&cred).unwrap();
         assert_eq!(yaml.trim(), "secret");
 
         // EnvVar serializes as object
         let cred = CredentialSource::EnvVar("MY_TOKEN".to_string());
-        let yaml = serde_yaml::to_string(&cred).unwrap();
+        let yaml = serde_yaml_ng::to_string(&cred).unwrap();
         assert!(yaml.contains("type: env-var"));
         assert!(yaml.contains("value: MY_TOKEN"));
     }

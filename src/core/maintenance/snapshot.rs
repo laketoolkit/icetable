@@ -6,15 +6,16 @@
 //! - Time-travel (setting current snapshot)
 //! - Creating metadata backups
 //! - Cherry-pick (stub for future implementation)
+//!
+//! Uses `MetadataServiceReader` for read operations and `MetadataServiceWriter`
+//! for write operations that commit via catalog.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use iceberg::spec::{MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata};
 
-use crate::core::catalog::TableCommitter;
-use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::create_object_store;
+use crate::core::metadata::{MetadataServiceReader, MetadataServiceWriter};
 use crate::error::{Error, Result};
 use crate::utils::core::snapshot::{
     ExpirationConfig, SnapshotItem, determine_cutoff_timestamp, determine_snapshots_to_expire,
@@ -145,10 +146,11 @@ pub struct SnapshotConfig {
 }
 
 /// Service for managing Iceberg table snapshots
+///
+/// Uses `MetadataServiceReader` for read operations and `MetadataServiceWriter`
+/// for write operations. The committer comes from the service, not stored in the struct.
 pub struct SnapshotService {
     config: SnapshotConfig,
-    /// Optional committer for catalog-aware commits
-    committer: Option<TableCommitter>,
 }
 
 impl SnapshotService {
@@ -156,32 +158,22 @@ impl SnapshotService {
     pub fn new() -> Self {
         Self {
             config: SnapshotConfig::default(),
-            committer: None,
         }
     }
 
     /// Create a new snapshot service with custom configuration
     pub fn with_config(config: SnapshotConfig) -> Self {
-        Self {
-            config,
-            committer: None,
-        }
-    }
-
-    /// Create a snapshot service with a catalog committer for multi-writer safety
-    pub fn with_committer(config: SnapshotConfig, committer: TableCommitter) -> Self {
-        Self {
-            config,
-            committer: Some(committer),
-        }
+        Self { config }
     }
 
     /// List snapshots from an Iceberg table
     ///
     /// Returns snapshots sorted by timestamp descending (most recent first).
-    pub async fn list_snapshots(
+    ///
+    /// Uses `MetadataServiceReader` trait to access table metadata.
+    pub async fn list_snapshots<S: MetadataServiceReader>(
         &self,
-        service: &IcebergMetadataService,
+        service: &S,
         limit: Option<usize>,
     ) -> Result<ListSnapshotsResult> {
         let (metadata, _) = service.load_metadata().await?;
@@ -212,15 +204,17 @@ impl SnapshotService {
     ///
     /// This removes snapshots from metadata but does NOT delete data files.
     /// Use `icetable vacuum` to remove orphaned data files after expiring snapshots.
-    pub async fn expire_snapshots(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn expire_snapshots<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         older_than: Option<String>,
         retain_last: Option<usize>,
         ids: Option<Vec<i64>>,
     ) -> Result<ExpireSnapshotsResult> {
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         let snapshots: Vec<_> = metadata.snapshots().collect();
 
@@ -267,7 +261,7 @@ impl SnapshotService {
         }
 
         // Commit the snapshot removal
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             // Use catalog committer for multi-writer safety
             committer
                 .commit_remove_snapshots(table_path, &metadata, &to_expire, current_version)
@@ -286,8 +280,7 @@ impl SnapshotService {
 
             let new_metadata = build_result.metadata;
 
-            self.write_metadata(table_path, &new_metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &new_metadata).await?
         };
 
         Ok(ExpireSnapshotsResult {
@@ -303,16 +296,18 @@ impl SnapshotService {
     ///
     /// Changes the table's current snapshot to an existing snapshot,
     /// either by ID, timestamp (as-of), branch name, or tag name.
-    pub async fn set_current_snapshot(
+    ///
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn set_current_snapshot<S: MetadataServiceWriter>(
         &self,
-        service: &IcebergMetadataService,
-        table_path: &str,
+        service: &S,
         id: Option<i64>,
         as_of: Option<String>,
         branch: Option<String>,
         tag: Option<String>,
     ) -> Result<SetSnapshotResult> {
         let (metadata, current_version) = service.load_metadata().await?;
+        let table_path = service.table_path();
 
         let target_id = self.resolve_target_snapshot(&metadata, id, as_of, branch, tag)?;
 
@@ -335,7 +330,7 @@ impl SnapshotService {
         }
 
         // Commit the snapshot ref change
-        let new_version = if let Some(ref committer) = self.committer {
+        let new_version = if let Some(committer) = service.committer() {
             // Use catalog committer for multi-writer safety
             committer
                 .commit_set_snapshot_ref(
@@ -373,8 +368,7 @@ impl SnapshotService {
 
             let new_metadata = build_result.metadata;
 
-            self.write_metadata(table_path, &new_metadata, current_version)
-                .await?
+            super::write_metadata_direct(table_path, &new_metadata).await?
         };
 
         Ok(SetSnapshotResult {
@@ -467,9 +461,11 @@ impl SnapshotService {
     ///
     /// Returns the lineage from the specified snapshot (or current if none specified)
     /// back to the root snapshot.
-    pub async fn get_lineage(
+    ///
+    /// Uses `MetadataServiceReader` trait to access table metadata.
+    pub async fn get_lineage<S: MetadataServiceReader>(
         &self,
-        service: &IcebergMetadataService,
+        service: &S,
         snapshot_id: Option<i64>,
     ) -> Result<LineageResult> {
         use std::collections::HashMap;
@@ -634,19 +630,6 @@ impl SnapshotService {
                 description: "Must specify --id, --as-of, --branch, or --tag".to_string(),
             }),
         }
-    }
-
-    /// Write new metadata file using standard Iceberg naming
-    async fn write_metadata(
-        &self,
-        table_path: &str,
-        metadata: &TableMetadata,
-        _current_version: i32, // Kept for API compatibility, version derived from metadata path
-    ) -> Result<i64> {
-        let storage = create_object_store(table_path).await?;
-        let result =
-            crate::utils::core::write_metadata_file(table_path, metadata, &storage).await?;
-        Ok(result.version)
     }
 }
 

@@ -1,6 +1,9 @@
 //! Manifest rewrite service
 //!
 //! Provides functionality to rewrite and compact Iceberg manifest files.
+//!
+//! Uses `MetadataServiceReader` for analysis and `MetadataServiceWriter` for
+//! rewrite operations that commit via catalog.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,8 +15,7 @@ use iceberg::spec::{
 };
 
 use crate::core::catalog::TableCommitter;
-use crate::core::metadata::IcebergMetadataService;
-use crate::core::storage::create_object_store;
+use crate::core::metadata::{MetadataServiceReader, MetadataServiceWriter};
 use crate::error::{Error, Result};
 
 /// Configuration for manifest rewrite operations
@@ -81,7 +83,6 @@ pub struct ManifestRewriteResult {
 /// Context for committing a snapshot
 struct CommitContext<'a> {
     table_path: &'a str,
-    metadata_dir: &'a str,
     metadata_file_path: &'a str,
     metadata: &'a Arc<TableMetadata>,
     new_snapshot: Snapshot,
@@ -226,14 +227,13 @@ impl ManifestService {
 
     /// Analyze manifests for potential rewrite (dry-run mode)
     ///
-    /// The metadata_service should be pre-configured with the appropriate branch
-    /// for catalog-aware operations.
-    pub async fn analyze(
+    /// Uses `MetadataServiceReader` trait to access table metadata and FileIO.
+    pub async fn analyze<S: MetadataServiceReader>(
         &self,
-        metadata_service: &IcebergMetadataService,
+        service: &S,
     ) -> Result<ManifestAnalysis> {
-        let (metadata, _) = metadata_service.load_metadata().await?;
-        let file_io = metadata_service.file_io().clone();
+        let (metadata, _) = service.load_metadata().await?;
+        let file_io = service.file_io().clone();
 
         let target_branch = self.config.branch.as_deref().unwrap_or("main");
 
@@ -316,15 +316,14 @@ impl ManifestService {
 
     /// Rewrite manifests for the given table
     ///
-    /// The metadata_service should be pre-configured with the appropriate committer
-    /// for catalog-aware operations.
-    pub async fn rewrite(
+    /// Uses `MetadataServiceWriter` trait to access metadata and commit changes.
+    pub async fn rewrite<S: MetadataServiceWriter>(
         &self,
-        metadata_service: &IcebergMetadataService,
+        service: &S,
     ) -> Result<ManifestRewriteResult> {
-        let (metadata, _) = metadata_service.load_metadata().await?;
-        let file_io = metadata_service.file_io().clone();
-        let table_path = metadata_service.path();
+        let (metadata, _) = service.load_metadata().await?;
+        let file_io = service.file_io().clone();
+        let table_path = service.table_path();
 
         let target_branch = self.config.branch.as_deref().unwrap_or("main");
 
@@ -506,17 +505,16 @@ impl ManifestService {
             .build();
 
         // Commit the snapshot
-        let metadata_file_path = metadata_service.current_metadata_path().await?;
+        let metadata_file_path = service.current_metadata_path().await?;
 
         let ctx = CommitContext {
             table_path,
-            metadata_dir: &metadata_dir,
             metadata_file_path: &metadata_file_path,
             metadata: &metadata,
             new_snapshot,
             target_branch,
             new_snapshot_id,
-            committer: metadata_service.committer(),
+            committer: service.committer(),
         };
         let new_version = self.commit_snapshot(ctx).await?;
 
@@ -571,27 +569,8 @@ impl ManifestService {
             })?;
 
         let new_metadata = build_result.metadata;
-        self.write_metadata_direct(
-            ctx.table_path,
-            ctx.metadata_dir,
-            ctx.metadata_file_path,
-            &new_metadata,
-        )
-        .await
-    }
-
-    /// Write metadata directly to storage
-    async fn write_metadata_direct(
-        &self,
-        table_path: &str,
-        _metadata_dir: &str,       // Kept for API compatibility
-        _metadata_file_path: &str, // Kept for API compatibility
-        new_metadata: &TableMetadata,
-    ) -> Result<u32> {
-        let storage = create_object_store(table_path).await?;
-        let result =
-            crate::utils::core::write_metadata_file(table_path, new_metadata, &storage).await?;
-        Ok(result.version as u32)
+        let version = super::write_metadata_direct(ctx.table_path, &new_metadata).await?;
+        Ok(version as u32)
     }
 }
 

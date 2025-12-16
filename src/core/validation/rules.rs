@@ -1,6 +1,7 @@
 //! Validation rules definitions
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Collection of validation rules
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,8 +13,9 @@ pub struct ValidationRules {
 /// A single validation rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationRule {
-    /// Rule name/description
-    pub name: String,
+    /// Rule name/description (Arc for cheap cloning in hot paths)
+    #[serde(deserialize_with = "deserialize_arc_str", serialize_with = "serialize_arc_str")]
+    pub name: Arc<str>,
 
     /// Rule type
     #[serde(rename = "type")]
@@ -25,6 +27,21 @@ pub struct ValidationRule {
     /// Whether rule is enabled
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+}
+
+fn deserialize_arc_str<'de, D>(deserializer: D) -> Result<Arc<str>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(Arc::from(s))
+}
+
+fn serialize_arc_str<S>(value: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value)
 }
 
 fn default_enabled() -> bool {
@@ -119,8 +136,8 @@ pub enum Severity {
 /// Result of applying a validation rule
 #[derive(Debug, Clone)]
 pub struct RuleResult {
-    /// The rule that was applied
-    pub rule_name: String,
+    /// The rule that was applied (Arc for cheap cloning)
+    pub rule_name: Arc<str>,
 
     /// Whether the rule passed
     pub passed: bool,
@@ -137,7 +154,7 @@ pub struct RuleResult {
 
 impl RuleResult {
     /// Create a passing result
-    pub fn pass(rule_name: String, severity: Severity, message: String) -> Self {
+    pub fn pass(rule_name: Arc<str>, severity: Severity, message: String) -> Self {
         Self {
             rule_name,
             passed: true,
@@ -148,7 +165,7 @@ impl RuleResult {
     }
 
     /// Create a failing result
-    pub fn fail(rule_name: String, severity: Severity, message: String) -> Self {
+    pub fn fail(rule_name: Arc<str>, severity: Severity, message: String) -> Self {
         Self {
             rule_name,
             passed: false,

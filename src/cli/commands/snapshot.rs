@@ -18,7 +18,6 @@ use crate::utils::with_resource_limits;
 
 /// Configuration for expire snapshots operation
 struct ExpireConfig<'a> {
-    path: &'a str,
     older_than: Option<String>,
     retain_last: Option<usize>,
     ids: Option<Vec<i64>>,
@@ -31,7 +30,6 @@ struct ExpireConfig<'a> {
 
 /// Configuration for set snapshot operation
 struct SetSnapshotConfig<'a> {
-    path: &'a str,
     id: Option<i64>,
     as_of: Option<String>,
     branch: Option<String>,
@@ -83,7 +81,6 @@ impl SnapshotCommand {
             }
             SnapshotCommands::Expire(a) => {
                 let config = ExpireConfig {
-                    path: table_path,
                     older_than: a.older_than,
                     retain_last: a.retain_last,
                     ids: a.ids,
@@ -97,7 +94,6 @@ impl SnapshotCommand {
             }
             SnapshotCommands::Set(a) => {
                 let config = SetSnapshotConfig {
-                    path: table_path,
                     id: a.id,
                     as_of: a.as_of,
                     branch: a.ref_branch,
@@ -250,21 +246,10 @@ impl SnapshotCommand {
         let config = SnapshotConfig {
             dry_run: cfg.dry_run,
         };
-        // Use committer from metadata service for catalog-aware commits
-        let snapshot_service = if let Some(committer) = metadata_service.committer() {
-            SnapshotService::with_committer(config, committer)
-        } else {
-            SnapshotService::with_config(config)
-        };
+        let snapshot_service = SnapshotService::with_config(config);
 
         let result = snapshot_service
-            .expire_snapshots(
-                &metadata_service,
-                cfg.path,
-                cfg.older_than,
-                cfg.retain_last,
-                cfg.ids,
-            )
+            .expire_snapshots(&metadata_service, cfg.older_than, cfg.retain_last, cfg.ids)
             .await?;
 
         if result.expired_count == 0 {
@@ -339,22 +324,10 @@ impl SnapshotCommand {
         let config = SnapshotConfig {
             dry_run: cfg.dry_run,
         };
-        // Use committer from metadata service for catalog-aware commits
-        let snapshot_service = if let Some(committer) = metadata_service.committer() {
-            SnapshotService::with_committer(config, committer)
-        } else {
-            SnapshotService::with_config(config)
-        };
+        let snapshot_service = SnapshotService::with_config(config);
 
         let result = snapshot_service
-            .set_current_snapshot(
-                &metadata_service,
-                cfg.path,
-                cfg.id,
-                cfg.as_of,
-                cfg.branch,
-                cfg.tag,
-            )
+            .set_current_snapshot(&metadata_service, cfg.id, cfg.as_of, cfg.branch, cfg.tag)
             .await?;
 
         if cfg.output == "json" {

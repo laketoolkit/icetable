@@ -84,6 +84,14 @@ pub use core::formats::{
     ReadOptions, ReadOptionsBuilder, ValidationReport, WriteOptions, WriteOptionsBuilder,
 };
 
+// Metadata service traits and types
+// These allow implementing custom metadata backends or extending functionality
+pub use core::metadata::{
+    DataFileChanges, DataFileInfo, IcebergMetadataService, MaintenanceResult,
+    MetadataServiceReader, MetadataServiceWriter, OperationType, SnapshotInfo,
+    TableServiceReader, TableServiceWriter,
+};
+
 // Transformations
 pub mod transform {
     //! Data transformation pipeline

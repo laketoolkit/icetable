@@ -97,7 +97,7 @@ where
     match format {
         "json" => print_json(data),
         "yaml" => {
-            let yaml = serde_yaml::to_string(data).map_err(|e| Error::Serialization {
+            let yaml = serde_yaml_ng::to_string(data).map_err(|e| Error::Serialization {
                 message: format!("YAML serialization failed: {}", e),
             })?;
             print!("{}", yaml);
