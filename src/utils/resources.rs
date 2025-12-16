@@ -33,7 +33,7 @@ impl ResourceLimits {
         }
 
         // Use the shared parse_bytes function but convert error type
-        crate::utils::core::parse_bytes(s).map_err(|e| Error::Parse {
+        crate::core::utils::parse_bytes(s).map_err(|e| Error::Parse {
             message: format!("Invalid memory format: {}", e),
             source: None,
         })

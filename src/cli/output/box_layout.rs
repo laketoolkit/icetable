@@ -1,23 +1,27 @@
-/// Configuración de diseño para renderizado de cajas
+//! Box layout configuration for terminal rendering
+//!
+//! Defines the layout parameters (width, border style) for box rendering.
+
+/// Layout configuration for box rendering
 #[derive(Debug, Clone)]
 pub struct BoxLayout {
-    /// Ancho total de la caja (incluyendo bordes)
+    /// Total box width (including borders)
     total_width: usize,
-    /// Estilo de caracteres para bordes
+    /// Border character style
     style: BoxStyle,
 }
 
 /// Box border style options
 #[derive(Debug, Clone, Copy)]
 pub enum BoxStyle {
-    /// Bordes redondeados (╭─╮│╰╯)
+    /// Rounded borders (╭─╮│╰╯)
     Rounded,
-    /// Bordes rectos (┌─┐│└┘)
+    /// Square borders (┌─┐│└┘)
     Square,
 }
 
 impl BoxLayout {
-    /// Crea un nuevo layout con ancho especificado
+    /// Creates a new layout with specified width
     pub fn new(total_width: usize) -> Self {
         Self {
             total_width,
@@ -25,30 +29,30 @@ impl BoxLayout {
         }
     }
 
-    /// Establece el estilo de bordes
+    /// Sets the border style
     pub fn with_style(mut self, style: BoxStyle) -> Self {
         self.style = style;
         self
     }
 
-    /// Ancho total incluyendo bordes
+    /// Total width including borders
     pub fn total_width(&self) -> usize {
         self.total_width
     }
 
-    /// Ancho disponible para contenido (sin bordes)
+    /// Available width for content (without borders)
     /// total_width - 2 (border chars: │ left + │ right)
     pub fn content_width(&self) -> usize {
         self.total_width.saturating_sub(2)
     }
 
-    /// Ancho disponible para líneas con padding interno
+    /// Available width for lines with internal padding
     /// total_width - 3 (borders + leading space)
     pub fn line_width(&self) -> usize {
         self.total_width.saturating_sub(3)
     }
 
-    /// Obtiene caracteres de borde según el estilo
+    /// Gets border characters according to style
     pub(crate) fn chars(&self) -> BoxChars {
         match self.style {
             BoxStyle::Rounded => BoxChars {

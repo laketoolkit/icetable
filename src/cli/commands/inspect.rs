@@ -8,7 +8,7 @@ use colored::Colorize;
 use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::format_timestamp_ms;
 use crate::cli::output::{Box, BoxItem, BoxLayout, BoxRenderer, BoxSection};
-use crate::cli::parser::{CliTableContext, InspectArgs};
+use crate::cli::parser::{CatalogContext, InspectArgs};
 use crate::core::operations::inspect::{
     IcebergInspectOptions, IcebergInspectResult, IcebergTableInspector,
 };
@@ -21,13 +21,12 @@ pub struct InspectCommand;
 
 impl InspectCommand {
     /// Execute inspect command
-    pub async fn execute(args: InspectArgs, ctx: &CliTableContext) -> Result<()> {
-        // Apply resource limits (timeout, cancellation, memory tracking)
-        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for inspection
-        with_resource_limits(ESTIMATED_MEMORY, Self::inspect_inner(args, ctx)).await
+    pub async fn execute(args: InspectArgs, ctx: &CatalogContext) -> Result<()> {
+        use super::constants::MEMORY_HEAVY_OPS;
+        with_resource_limits(MEMORY_HEAVY_OPS, Self::inspect_inner(args, ctx)).await
     }
 
-    async fn inspect_inner(args: InspectArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn inspect_inner(args: InspectArgs, ctx: &CatalogContext) -> Result<()> {
         // Resolve table - get catalog table directly when using catalog
         let resolution = resolve_table_from_context(ctx).await?;
 

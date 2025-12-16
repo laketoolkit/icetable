@@ -21,8 +21,8 @@ pub struct ConfigCommand;
 impl ConfigCommand {
     /// Execute config command
     pub async fn execute(args: ConfigArgs) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 8 * 1024 * 1024; // 8MB for config ops
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+        use super::constants::MEMORY_CONFIG_OPS;
+        with_resource_limits(MEMORY_CONFIG_OPS, Self::execute_inner(args)).await
     }
 
     async fn execute_inner(args: ConfigArgs) -> Result<()> {
@@ -325,7 +325,7 @@ impl ConfigCommand {
         // Parse current context to get warehouse, namespace, and table
         let (current_warehouse, current_namespace, current_table) = config
             .parse_current_context()
-            .map(|(_, wh, ns, tbl)| (wh, ns, tbl))
+            .map(|ctx| (ctx.warehouse, ctx.namespace, ctx.table))
             .unwrap_or((None, None, None));
 
         if args.output == "json" {

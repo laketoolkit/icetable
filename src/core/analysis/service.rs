@@ -426,7 +426,7 @@ pub async fn get_partition_stats(
     table_path: &str,
     partition_filter: &PartitionFilter,
 ) -> Result<PartitionStats> {
-    use crate::core::metadata::MetadataService;
+    use crate::core::metadata::TableServiceReader;
 
     const SMALL_FILE_THRESHOLD: u64 = 128 * 1024 * 1024; // 128MB
 

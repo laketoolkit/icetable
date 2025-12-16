@@ -1,7 +1,7 @@
 //! Maintenance services module
 //!
 //! Provides high-level services for table maintenance operations.
-//! These services use the MetadataService trait to work with both
+//! These services use the `TableServiceWriter` trait to work with
 //! Iceberg tables through a unified interface.
 
 mod doctor;
@@ -49,6 +49,60 @@ pub struct MaintenanceConfig {
     pub max_files: Option<usize>,
     /// Maximum bytes to process (for incremental compaction)
     pub max_bytes: Option<u64>,
+}
+
+impl MaintenanceConfig {
+    /// Validate the configuration values
+    ///
+    /// Returns an error if any configuration values are invalid:
+    /// - `min_size` must be less than `target_size`
+    /// - `target_size` must be less than `max_size`
+    /// - `parallelism` must be greater than 0
+    /// - `max_files` must be greater than 0 if set
+    /// - `max_bytes` must be greater than 0 if set
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if self.min_size >= self.target_size {
+            return Err(crate::error::Error::Configuration {
+                message: format!(
+                    "min_size ({}) must be less than target_size ({})",
+                    self.min_size, self.target_size
+                ),
+            });
+        }
+
+        if self.target_size >= self.max_size {
+            return Err(crate::error::Error::Configuration {
+                message: format!(
+                    "target_size ({}) must be less than max_size ({})",
+                    self.target_size, self.max_size
+                ),
+            });
+        }
+
+        if self.parallelism == 0 {
+            return Err(crate::error::Error::Configuration {
+                message: "parallelism must be greater than 0".to_string(),
+            });
+        }
+
+        if let Some(max_files) = self.max_files {
+            if max_files == 0 {
+                return Err(crate::error::Error::Configuration {
+                    message: "max_files must be greater than 0 if set".to_string(),
+                });
+            }
+        }
+
+        if let Some(max_bytes) = self.max_bytes {
+            if max_bytes == 0 {
+                return Err(crate::error::Error::Configuration {
+                    message: "max_bytes must be greater than 0 if set".to_string(),
+                });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for MaintenanceConfig {

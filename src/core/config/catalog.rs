@@ -93,7 +93,7 @@ pub enum CatalogAuth {
     None,
 
     /// Bearer token authentication
-    /// Uses: Authorization: Bearer <token>
+    /// Uses: `Authorization: Bearer <token>`
     Bearer {
         /// Token source (inline, env var, or file)
         token: CredentialSource,

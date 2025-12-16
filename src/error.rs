@@ -7,405 +7,455 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-/// The main error type for TableTools operations
+/// The main error type for icetable operations
 #[derive(Error, Debug)]
 pub enum Error {
-    /// Errors related to I/O operations
-    #[error("IO error: {0}")]
+    /// IO error from std
+    #[error("{0}")]
     Io(#[from] std::io::Error),
 
-    /// File not found errors with context
-    #[error("File not found: {path}")]
+    /// File not found
+    #[error("file not found: {}", path.display())]
     FileNotFound {
-        /// The path to the file that was not found
+        /// Path to the missing file
         path: PathBuf,
     },
 
-    /// Permission denied errors
-    #[error("Permission denied accessing: {path}")]
+    /// Permission denied
+    #[error("permission denied: {}", path.display())]
     PermissionDenied {
-        /// The path that could not be accessed
+        /// Path that couldn't be accessed
         path: PathBuf,
     },
 
-    /// Errors parsing or reading table formats
-    #[error("Parse error: {message}")]
+    /// Parse/deserialization error
+    #[error("{message}")]
     Parse {
-        /// The error message describing what failed
+        /// Error description
         message: String,
-        /// The underlying error source, if available
+        /// Underlying error
+        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    /// Corrupted file errors
-    #[error("Corrupted file: {path} - {reason}")]
+    /// Corrupted file
+    #[error("corrupted: {} ({message})", path.display())]
     CorruptedFile {
-        /// The path to the corrupted file
+        /// Path to corrupted file
         path: PathBuf,
-        /// The reason the file is considered corrupted
-        reason: String,
+        /// Why it's corrupted
+        message: String,
     },
 
-    /// Invalid format errors
-    #[error("Invalid format: {message}")]
+    /// Invalid format
+    #[error("invalid format: {message}")]
     InvalidFormat {
-        /// The error message describing the format issue
+        /// Error description
         message: String,
     },
 
-    /// Schema validation errors
-    #[error("Schema validation failed: {message}")]
+    /// Schema validation failed
+    #[error("invalid schema: {message}")]
     SchemaValidation {
-        /// The error message describing the validation failure
+        /// Error description
         message: String,
     },
 
-    /// Data validation errors
-    #[error("Data validation failed: {message}")]
+    /// Data validation failed
+    #[error("invalid data: {message}")]
     DataValidation {
-        /// The error message describing the data validation failure
+        /// Error description
         message: String,
     },
 
-    /// Type conversion errors
-    #[error("Type conversion error: {message}")]
+    /// Type conversion error
+    #[error("type error: {message}")]
     TypeConversion {
-        /// The error message describing the conversion failure
+        /// Error description
         message: String,
     },
 
-    /// Unsupported feature errors
-    #[error("Unsupported feature: {feature}")]
+    /// Feature not supported
+    #[error("not supported: {feature}")]
     UnsupportedFeature {
-        /// The name of the unsupported feature
+        /// Unsupported feature name
         feature: String,
     },
 
-    /// Cloud storage authentication errors
-    #[error("Authentication failed for {provider}: {message}")]
+    /// Authentication failed
+    #[error("{provider} auth failed: {message}")]
     AuthenticationFailed {
-        /// The cloud storage provider (e.g., S3, GCS, Azure)
+        /// Provider name (Polaris, AWS, etc.)
         provider: String,
-        /// The error message describing the authentication failure
+        /// Error description
         message: String,
     },
 
-    /// Cloud storage network errors
-    #[error("Network error: {message}")]
+    /// Network error
+    #[error("network error: {message}")]
     Network {
-        /// The error message describing the network failure
+        /// Error description
         message: String,
-        /// The underlying error source, if available
+        /// Underlying error
+        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    /// Timeout errors
-    #[error("Operation timed out after {seconds}s: {operation}")]
+    /// Operation timed out
+    #[error("timeout after {seconds}s: {operation}")]
     Timeout {
-        /// The operation that timed out
+        /// Operation that timed out
         operation: String,
-        /// The timeout duration in seconds
+        /// Timeout duration
         seconds: u64,
     },
 
-    /// Cloud storage access denied
-    #[error("Access denied to {path}: {message}")]
+    /// Access denied
+    #[error("access denied: {message}")]
     AccessDenied {
-        /// The path or resource that was denied
+        /// Resource path
         path: String,
-        /// The error message describing the access denial
+        /// Error description
         message: String,
     },
 
-    /// Configuration errors
-    #[error("Configuration error: {message}")]
+    /// Configuration error
+    #[error("{message}")]
     Configuration {
-        /// The error message describing the configuration issue
+        /// Error description
         message: String,
     },
 
-    /// Arrow-specific errors
-    #[error("Arrow error: {0}")]
+    /// Arrow error
+    #[error("{0}")]
     Arrow(#[from] arrow::error::ArrowError),
 
-    /// Parquet-specific errors
-    #[error("Parquet error: {0}")]
+    /// Parquet error
+    #[error("{0}")]
     Parquet(#[from] parquet::errors::ParquetError),
 
-    /// Object store errors (S3, GCS, Azure)
-    #[error("Storage error: {0}")]
+    /// Object store error
+    #[error("{0}")]
     ObjectStore(#[from] object_store::Error),
 
-    /// Cloud storage provider-specific errors
-    #[error("{provider} error: {message}")]
+    /// Cloud storage error
+    #[error("{provider}: {message}")]
     CloudStorage {
-        /// The cloud storage provider (e.g., "S3", "GCS", "Azure")
+        /// Provider name
         provider: String,
-        /// The error message describing the failure
+        /// Error description
         message: String,
-        /// The underlying error code if available
+        /// Provider error code
         error_code: Option<String>,
-        /// The HTTP status code if available
+        /// HTTP status code
         http_status: Option<u16>,
     },
 
-    /// Metadata-related errors (loading, parsing, writing)
-    #[error("Metadata error: {message}")]
+    /// Metadata error
+    #[error("{message}")]
     Metadata {
-        /// The error message describing what failed
+        /// Error description
         message: String,
     },
 
-    /// Manifest-related errors (loading, parsing manifests)
-    #[error("Manifest error: {message}")]
+    /// Manifest error
+    #[error("{message}")]
     Manifest {
-        /// The error message describing what failed
+        /// Error description
         message: String,
     },
 
-    /// Serialization/deserialization errors
-    #[error("Serialization error: {message}")]
+    /// Serialization error
+    #[error("{message}")]
     Serialization {
-        /// The error message describing what failed
+        /// Error description
         message: String,
     },
 
-    /// Column not found in schema
-    #[error("Column not found: {column}")]
+    /// Storage error
+    #[error("{message}")]
+    Storage {
+        /// Error description
+        message: String,
+    },
+
+    /// Column not found
+    #[error("column '{column}' not found")]
     ColumnNotFound {
-        /// The column name that was not found
+        /// Column name
         column: String,
     },
 
     /// Snapshot not found
-    #[error("Snapshot not found: {snapshot_id}")]
+    #[error("snapshot {snapshot_id} not found")]
     SnapshotNotFound {
-        /// The snapshot ID that was not found
+        /// Snapshot ID
         snapshot_id: i64,
     },
 
-    /// Table not found or not valid
-    #[error("Table not found or invalid: {path}")]
+    /// Table not found
+    #[error("table not found: {path}")]
     TableNotFound {
-        /// The path to the table
+        /// Table path
         path: String,
-    },
-
-    /// Storage/filesystem operation errors
-    #[error("Storage error: {message}")]
-    Storage {
-        /// The error message describing what failed
-        message: String,
-    },
-
-    /// Concurrent modification conflict (optimistic concurrency)
-    #[error("Conflict: {0}")]
-    Conflict(String),
-
-    /// Operation was cancelled by user (Ctrl+C)
-    #[error("Operation cancelled by user")]
-    Cancelled,
-
-    /// Memory limit exceeded
-    #[error("Memory limit exceeded: {current} used, {limit} allowed")]
-    MemoryLimitExceeded {
-        /// Current memory usage
-        current: String,
-        /// Configured memory limit
-        limit: String,
-    },
-
-    /// Multiple errors accumulated during batch operations
-    #[error("Multiple errors occurred: {}", format_errors(.0))]
-    Multiple(Vec<Error>),
-
-    /// Catalog required but not provided
-    #[error("Catalog required for table reference: {table_ref}")]
-    CatalogRequired {
-        /// The table reference that requires a catalog
-        table_ref: String,
-    },
-
-    /// Write operations require a catalog
-    #[error(
-        "Write operations require a catalog.\n  → icetable config add-catalog <name> --uri <URL>"
-    )]
-    CatalogRequiredForWrite {
-        /// The write operation that was attempted
-        operation: String,
-    },
-
-    /// Failed to load Iceberg table
-    #[error("Failed to load Iceberg table at {path}: {source}")]
-    IcebergLoad {
-        /// The path to the Iceberg table
-        path: String,
-        /// The underlying error source
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Failed to load table from catalog
-    #[error("Failed to load table {table_ref} from catalog: {source}")]
-    CatalogLoad {
-        /// The table reference
-        table_ref: String,
-        /// The underlying error source
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Invalid catalog reference format
-    #[error("Invalid catalog reference '{ref_str}': {reason}")]
-    InvalidCatalogRef {
-        /// The invalid catalog reference string
-        ref_str: String,
-        /// The reason it's invalid
-        reason: String,
-    },
-
-    /// Catalog configuration error
-    #[error("Catalog configuration error: {source}")]
-    CatalogConfig {
-        /// The underlying error source
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Failed to build catalog
-    #[error("Failed to build catalog: {source}")]
-    CatalogBuild {
-        /// The underlying error source
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Unsupported catalog type
-    #[error("Unsupported catalog type: {catalog_type}")]
-    UnsupportedCatalog {
-        /// The unsupported catalog type
-        catalog_type: String,
-    },
-
-    /// Failed to create Iceberg table
-    #[error("Failed to create Iceberg table at {path}: {source}")]
-    IcebergCreate {
-        /// The path where table creation failed
-        path: String,
-        /// The underlying error source
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Iceberg scan operation failed
-    #[error("Iceberg scan operation failed: {source}")]
-    IcebergScan {
-        /// The underlying error source
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Missing required argument
-    #[error("Missing required argument '{argument}': {description}")]
-    MissingArgument {
-        /// The name of the missing argument
-        argument: String,
-        /// Description of why the argument is required
-        description: String,
-    },
-
-    // =========================================================================
-    // CLI-specific errors
-    // =========================================================================
-    /// No catalog configured or specified
-    #[error("No catalog specified. Use 'icetable config use <catalog>' or specify -c <catalog>")]
-    NoCatalog,
-
-    /// Catalog not found in configuration
-    #[error("Catalog '{name}' not found in configuration")]
-    CatalogNotFound {
-        /// The catalog name that was not found
-        name: String,
-    },
-
-    /// No namespace specified when required
-    #[error(
-        "No namespace specified. Use 'icetable config use <catalog> -n <namespace>' or specify -n <namespace>"
-    )]
-    NoNamespace,
-
-    /// Namespace not found in catalog
-    #[error("Namespace '{name}' not found in catalog")]
-    NamespaceNotFound {
-        /// The namespace name that was not found
-        name: String,
-    },
-
-    /// No table specified when required
-    #[error(
-        "No table specified. Use 'icetable config use <catalog> -n <namespace> -t <table>' or specify -t <table>"
-    )]
-    NoTable,
-
-    /// Invalid namespace format
-    #[error("Invalid namespace '{value}': {reason}")]
-    InvalidNamespace {
-        /// The invalid namespace value
-        value: String,
-        /// Why it's invalid
-        reason: String,
-    },
-
-    /// Catalog operation failed
-    #[error("Catalog operation failed: {message}")]
-    CatalogOperation {
-        /// Description of what failed
-        message: String,
-    },
-
-    /// Branch not found
-    #[error("Branch not found: {name}")]
-    BranchNotFound {
-        /// The branch name that was not found
-        name: String,
-    },
-
-    /// Tag not found
-    #[error("Tag not found: {name}")]
-    TagNotFound {
-        /// The tag name that was not found
-        name: String,
-    },
-
-    /// Invalid snapshot reference
-    #[error("Invalid snapshot reference '{reference}': {reason}")]
-    InvalidSnapshotRef {
-        /// The invalid reference string
-        reference: String,
-        /// Why it's invalid
-        reason: String,
     },
 
     /// Table already exists
-    #[error("Table already exists: {path}")]
+    #[error("table exists: {path}")]
     TableAlreadyExists {
-        /// The path to the existing table
+        /// Table path
         path: String,
     },
 
     /// Namespace already exists
-    #[error("Namespace already exists: {name}")]
+    #[error("namespace exists: {name}")]
     NamespaceAlreadyExists {
-        /// The namespace name
+        /// Namespace name
         name: String,
     },
 
-    /// Invalid filter expression (partition filter, predicate, etc.)
-    #[error("Invalid filter expression '{expression}': {reason}")]
+    /// Branch not found
+    #[error("branch '{name}' not found")]
+    BranchNotFound {
+        /// Branch name
+        name: String,
+    },
+
+    /// Tag not found
+    #[error("tag '{name}' not found")]
+    TagNotFound {
+        /// Tag name
+        name: String,
+    },
+
+    /// Concurrent modification conflict
+    #[error("{0}")]
+    Conflict(String),
+
+    /// Operation cancelled
+    #[error("cancelled")]
+    Cancelled,
+
+    /// Memory limit exceeded
+    #[error("memory limit: {current} used, {limit} allowed")]
+    MemoryLimitExceeded {
+        /// Current memory usage
+        current: String,
+        /// Configured limit
+        limit: String,
+    },
+
+    /// Multiple errors
+    #[error("{}", format_errors(.0))]
+    Multiple(Vec<Error>),
+
+    /// Catalog required for operation
+    #[error("catalog required for '{table_ref}'")]
+    CatalogRequired {
+        /// Table reference
+        table_ref: String,
+    },
+
+    /// Write requires catalog
+    #[error("write requires catalog\n  → icetable admin config add <name> --uri <URL>")]
+    CatalogRequiredForWrite {
+        /// Write operation
+        operation: String,
+    },
+
+    /// Failed to load Iceberg table
+    #[error("failed to load '{path}': {source}")]
+    IcebergLoad {
+        /// Table path
+        path: String,
+        /// Underlying error
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Failed to load from catalog
+    #[error("failed to load '{table_ref}': {source}")]
+    CatalogLoad {
+        /// Table reference
+        table_ref: String,
+        /// Underlying error
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Invalid catalog reference
+    #[error("invalid reference '{ref_str}': {message}")]
+    InvalidCatalogRef {
+        /// Reference string
+        ref_str: String,
+        /// Why it's invalid
+        message: String,
+    },
+
+    /// Catalog configuration error
+    #[error("{source}")]
+    CatalogConfig {
+        /// Underlying error
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Failed to build catalog
+    #[error("catalog build failed: {source}")]
+    CatalogBuild {
+        /// Underlying error
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Unsupported catalog type
+    #[error("unsupported catalog: {catalog_type}")]
+    UnsupportedCatalog {
+        /// Catalog type
+        catalog_type: String,
+    },
+
+    /// Failed to create Iceberg table
+    #[error("failed to create '{path}': {source}")]
+    IcebergCreate {
+        /// Table path
+        path: String,
+        /// Underlying error
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Scan failed
+    #[error("scan failed: {source}")]
+    IcebergScan {
+        /// Underlying error
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Missing required argument
+    #[error("missing {argument}: {description}")]
+    MissingArgument {
+        /// Argument name
+        argument: String,
+        /// Why it's required
+        description: String,
+    },
+
+    /// No catalog specified
+    #[error("no catalog\n  → icetable admin config use <catalog>")]
+    NoCatalog,
+
+    /// Catalog not found
+    #[error("catalog '{name}' not found")]
+    CatalogNotFound {
+        /// Catalog name
+        name: String,
+    },
+
+    /// No namespace specified
+    #[error("no namespace\n  → use -n <namespace>")]
+    NoNamespace,
+
+    /// Namespace not found
+    #[error("namespace '{name}' not found")]
+    NamespaceNotFound {
+        /// Namespace name
+        name: String,
+    },
+
+    /// No table specified
+    #[error("no table\n  → use -t <table>")]
+    NoTable,
+
+    /// Invalid namespace
+    #[error("invalid namespace '{value}': {message}")]
+    InvalidNamespace {
+        /// Namespace value
+        value: String,
+        /// Why it's invalid
+        message: String,
+    },
+
+    /// Catalog operation error
+    #[error("{message}")]
+    CatalogOperation {
+        /// Error description
+        message: String,
+    },
+
+    /// Invalid snapshot reference
+    #[error("invalid snapshot '{reference}': {message}")]
+    InvalidSnapshotRef {
+        /// Reference string
+        reference: String,
+        /// Why it's invalid
+        message: String,
+    },
+
+    /// Invalid filter expression
+    #[error("invalid filter '{expression}': {message}")]
     InvalidFilterExpression {
-        /// The invalid expression string
+        /// Expression string
         expression: String,
         /// Why it's invalid
-        reason: String,
+        message: String,
+    },
+
+    /// Async operation failed with context
+    #[error("{operation} failed: {message}")]
+    AsyncOperation {
+        /// Operation that failed (e.g., "loading table", "committing snapshot")
+        operation: String,
+        /// Error description
+        message: String,
+        /// Underlying error
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
+    /// Error with additional context
+    #[error("{context}: {source}")]
+    WithContext {
+        /// Additional context about the operation
+        context: String,
+        /// Underlying error
+        #[source]
+        source: Box<Error>,
     },
 }
 
 /// Result type alias for TableTools operations
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Extension trait for adding context to Results
+pub trait ResultExt<T> {
+    /// Add context to an error result
+    ///
+    /// # Example
+    /// ```ignore
+    /// use icetable::error::ResultExt;
+    ///
+    /// fn load_table(path: &str) -> Result<Table> {
+    ///     load_metadata(path).context("loading table metadata")?;
+    ///     // ...
+    /// }
+    /// ```
+    fn context<S: Into<String>>(self, context: S) -> Result<T>;
+
+    /// Add lazy context to an error result (context computed only on error)
+    fn with_context<S: Into<String>, F: FnOnce() -> S>(self, f: F) -> Result<T>;
+}
+
+impl<T> ResultExt<T> for Result<T> {
+    fn context<S: Into<String>>(self, context: S) -> Result<T> {
+        self.map_err(|e| e.with_context(context))
+    }
+
+    fn with_context<S: Into<String>, F: FnOnce() -> S>(self, f: F) -> Result<T> {
+        self.map_err(|e| e.with_context(f()))
+    }
+}
 
 /// Format multiple errors into a single string
 fn format_errors(errors: &[Error]) -> String {
@@ -426,6 +476,44 @@ impl Error {
         Error::Parse {
             message: message.into(),
             source: None,
+        }
+    }
+
+    /// Create a new async operation error
+    pub fn async_op<S: Into<String>, M: Into<String>>(operation: S, message: M) -> Self {
+        Error::AsyncOperation {
+            operation: operation.into(),
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    /// Create a new async operation error with a source
+    pub fn async_op_with_source<S, M, E>(operation: S, message: M, source: E) -> Self
+    where
+        S: Into<String>,
+        M: Into<String>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Error::AsyncOperation {
+            operation: operation.into(),
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    /// Wrap this error with additional context
+    ///
+    /// # Example
+    /// ```ignore
+    /// let err = Error::Metadata { message: "bad data".to_string() };
+    /// let contextual = err.with_context("loading snapshot 123");
+    /// assert!(contextual.to_string().contains("loading snapshot 123"));
+    /// ```
+    pub fn with_context<S: Into<String>>(self, context: S) -> Self {
+        Error::WithContext {
+            context: context.into(),
+            source: Box::new(self),
         }
     }
 
@@ -519,7 +607,7 @@ mod tests {
         let err = Error::FileNotFound {
             path: PathBuf::from("/tmp/test.parquet"),
         };
-        assert!(err.to_string().contains("File not found"));
+        assert!(err.to_string().contains("file not found"));
     }
 
     #[test]
@@ -534,7 +622,7 @@ mod tests {
     #[test]
     fn test_recoverable() {
         let err = Error::Timeout {
-            operation: "read file".to_string(),
+            operation: "read".to_string(),
             seconds: 30,
         };
         assert!(err.is_recoverable());
@@ -543,5 +631,65 @@ mod tests {
             path: PathBuf::from("/tmp/test.parquet"),
         };
         assert!(!err.is_recoverable());
+    }
+
+    #[test]
+    fn test_with_context() {
+        let err = Error::Metadata {
+            message: "bad data".to_string(),
+        };
+        let contextual = err.with_context("loading snapshot 123");
+        let msg = contextual.to_string();
+        assert!(msg.contains("loading snapshot 123"));
+        assert!(msg.contains("bad data"));
+    }
+
+    #[test]
+    fn test_async_op_error() {
+        let err = Error::async_op("loading table", "connection refused");
+        let msg = err.to_string();
+        assert!(msg.contains("loading table failed"));
+        assert!(msg.contains("connection refused"));
+    }
+
+    #[test]
+    fn test_async_op_with_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let err = Error::async_op_with_source("reading metadata", "failed to read", io_err);
+        let msg = err.to_string();
+        assert!(msg.contains("reading metadata failed"));
+        assert!(msg.contains("failed to read"));
+    }
+
+    #[test]
+    fn test_result_context_extension() {
+        fn failing_operation() -> Result<()> {
+            Err(Error::Metadata {
+                message: "invalid format".to_string(),
+            })
+        }
+
+        let result = failing_operation().context("processing table foo");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("processing table foo"));
+        assert!(err_msg.contains("invalid format"));
+    }
+
+    #[test]
+    fn test_result_with_context_lazy() {
+        fn failing_operation() -> Result<()> {
+            Err(Error::Metadata {
+                message: "invalid".to_string(),
+            })
+        }
+
+        let table_name = "my_table";
+        let result = failing_operation()
+            .with_context(|| format!("processing table {}", table_name));
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("processing table my_table"));
     }
 }

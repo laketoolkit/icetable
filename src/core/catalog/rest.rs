@@ -77,14 +77,10 @@ fn format_warehouse_not_found_error(msg: &str) -> String {
         // Look for quoted name or just take the next word
         if let Some(quote_start) = after.find('\'') {
             let after_quote = &after[quote_start + 1..];
-            if let Some(quote_end) = after_quote.find('\'') {
-                Some(&after_quote[..quote_end])
-            } else {
-                None
-            }
+            after_quote.find('\'').map(|quote_end| &after_quote[..quote_end])
         } else {
             // Try unquoted - take first word
-            after.trim().split_whitespace().next()
+            after.split_whitespace().next()
         }
     } else {
         None
@@ -191,7 +187,13 @@ impl RestCatalogClient {
         }
 
         // Add auth and custom properties
-        props.extend(config.to_catalog_properties()?);
+        // Use credentials.yaml if name is provided
+        let auth_props = if let Some(catalog_name) = name {
+            config.to_catalog_properties_with_credentials(catalog_name)?
+        } else {
+            config.to_catalog_properties()?
+        };
+        props.extend(auth_props);
 
         let catalog = RestCatalogBuilder::default()
             .load("rest", props)
@@ -234,7 +236,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         let tables =
@@ -258,7 +260,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         let table_ident = TableIdent::new(ns_ident, name.to_string());
@@ -282,7 +284,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         let table_ident = TableIdent::new(ns_ident, name.to_string());
@@ -320,7 +322,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         self.catalog
@@ -343,7 +345,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         self.catalog
@@ -371,7 +373,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         let creation = TableCreation::builder()
@@ -405,7 +407,7 @@ impl RestCatalogClient {
         let ns_ident =
             NamespaceIdent::from_vec(namespace.to_vec()).map_err(|e| Error::InvalidNamespace {
                 value: namespace.join("."),
-                reason: e.to_string(),
+                message: e.to_string(),
             })?;
 
         let table_ident = TableIdent::new(ns_ident, name.to_string());

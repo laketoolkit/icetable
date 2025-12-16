@@ -18,11 +18,12 @@ use iceberg::spec::{DataFile, Summary, TableMetadata};
 use iceberg::table::StaticTable;
 use object_store::ObjectStore;
 
-use super::traits::{DataFileChanges, DataFileInfo, MetadataService, OperationType, SnapshotInfo};
+use super::traits::{DataFileChanges, DataFileInfo, TableServiceReader, TableServiceWriter, OperationType, SnapshotInfo};
 use crate::core::catalog::TableCommitter;
 use crate::core::storage::{ObjectStoreExt, Storage, create_file_io, create_object_store};
 use crate::error::{Error, Result};
 use crate::utils::core::{extract_version_from_path, find_latest_metadata};
+use crate::utils::create_spinner;
 
 use super::iceberg_operations;
 use super::iceberg_partition;
@@ -310,7 +311,7 @@ impl IcebergMetadataService {
 }
 
 #[async_trait]
-impl MetadataService for IcebergMetadataService {
+impl TableServiceReader for IcebergMetadataService {
     async fn current_snapshot(&self) -> Result<Option<SnapshotInfo>> {
         let (metadata, _) = self.load_metadata().await?;
 
@@ -394,6 +395,63 @@ impl MetadataService for IcebergMetadataService {
         Ok(snapshots)
     }
 
+    fn data_directory(&self) -> PathBuf {
+        PathBuf::from(format!("{}/data", self.table_path.trim_end_matches('/')))
+    }
+
+    async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>> {
+        let data_prefix = format!("{}/data/", self.table_path.trim_end_matches('/'));
+
+        let pb = create_spinner("Listing files on storage");
+
+        let all_objects = self.storage.list_prefix(&data_prefix).await?;
+
+        pb.finish_and_clear();
+
+        let all_files: Vec<DataFileInfo> = all_objects
+            .iter()
+            .filter(|obj| obj.location.to_string().ends_with(".parquet"))
+            .map(|obj| {
+                let path_str = obj.location.to_string();
+                let partition = iceberg_partition::extract_partition_from_path_static(&path_str);
+                DataFileInfo {
+                    path: path_str,
+                    size: obj.size,
+                    record_count: 0,
+                    partition,
+                }
+            })
+            .collect();
+
+        Ok(all_files)
+    }
+
+    async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>> {
+        refs_scanner::scan_all_referenced_files(&self.table).await
+    }
+
+    async fn schema(&self) -> Result<Arc<arrow::datatypes::Schema>> {
+        let (metadata, _) = self.load_metadata().await?;
+        let iceberg_schema = metadata.current_schema();
+
+        // Use iceberg's native schema conversion
+        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema).map_err(|e| {
+            Error::Metadata {
+                message: format!("Failed to convert schema: {}", e),
+            }
+        })?;
+
+        Ok(Arc::new(arrow_schema))
+    }
+
+    fn object_store(&self) -> Arc<dyn ObjectStore> {
+        // storage is already an Arc<dyn ObjectStore>, just clone it
+        self.storage.clone()
+    }
+}
+
+#[async_trait]
+impl TableServiceWriter for IcebergMetadataService {
     async fn write_snapshot(
         &self,
         changes: DataFileChanges,
@@ -535,66 +593,5 @@ impl MetadataService for IcebergMetadataService {
             parent_id: parent_snapshot_id,
         })
     }
-
-    fn data_directory(&self) -> PathBuf {
-        PathBuf::from(format!("{}/data", self.table_path.trim_end_matches('/')))
-    }
-
-    async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>> {
-        use indicatif::{ProgressBar, ProgressStyle};
-
-        let data_prefix = format!("{}/data/", self.table_path.trim_end_matches('/'));
-
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} Listing files on storage...")
-                .expect("hardcoded progress template is valid"),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
-        let all_objects = self.storage.list_prefix(&data_prefix).await?;
-
-        pb.finish_and_clear();
-
-        let all_files: Vec<DataFileInfo> = all_objects
-            .iter()
-            .filter(|obj| obj.location.to_string().ends_with(".parquet"))
-            .map(|obj| {
-                let path_str = obj.location.to_string();
-                let partition = iceberg_partition::extract_partition_from_path_static(&path_str);
-                DataFileInfo {
-                    path: path_str,
-                    size: obj.size,
-                    record_count: 0,
-                    partition,
-                }
-            })
-            .collect();
-
-        Ok(all_files)
-    }
-
-    async fn get_all_referenced_files(&self) -> Result<std::collections::HashSet<String>> {
-        refs_scanner::scan_all_referenced_files(&self.table).await
-    }
-
-    async fn schema(&self) -> Result<Arc<arrow::datatypes::Schema>> {
-        let (metadata, _) = self.load_metadata().await?;
-        let iceberg_schema = metadata.current_schema();
-
-        // Use iceberg's native schema conversion
-        let arrow_schema = iceberg::arrow::schema_to_arrow_schema(iceberg_schema).map_err(|e| {
-            Error::Metadata {
-                message: format!("Failed to convert schema: {}", e),
-            }
-        })?;
-
-        Ok(Arc::new(arrow_schema))
-    }
-
-    fn object_store(&self) -> Arc<dyn ObjectStore> {
-        // storage is already an Arc<dyn ObjectStore>, just clone it
-        self.storage.clone()
-    }
 }
+

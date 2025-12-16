@@ -16,8 +16,8 @@ pub struct InitCommand;
 impl InitCommand {
     /// Execute init command
     pub async fn execute(args: InitArgs) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 16 * 1024 * 1024; // 16MB for init ops
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+        use super::constants::MEMORY_INIT_OPS;
+        with_resource_limits(MEMORY_INIT_OPS, Self::execute_inner(args)).await
     }
 
     async fn execute_inner(args: InitArgs) -> Result<()> {

@@ -1,6 +1,10 @@
 //! Parser definitions for admin commands
 //!
 //! Commands:
+//! - `icetable admin config ls`
+//! - `icetable admin config use <catalog>`
+//! - `icetable admin config add <name> <uri>`
+//! - `icetable admin config delete <name>`
 //! - `icetable admin warehouse ls`
 //! - `icetable admin warehouse create <name> --location <loc>`
 //! - `icetable admin warehouse delete <name>`
@@ -25,6 +29,9 @@ pub struct AdminArgs {
 /// Admin subcommands
 #[derive(Subcommand, Debug)]
 pub enum AdminCommands {
+    /// Manage local configuration (catalogs, tables, context)
+    Config(super::ConfigArgs),
+
     /// Manage warehouses
     Warehouse(WarehouseArgs),
 
@@ -90,6 +97,10 @@ pub struct WarehouseCreateArgs {
 pub struct WarehouseDeleteArgs {
     /// Warehouse name
     pub name: String,
+
+    /// Force delete (removes all namespaces and tables first)
+    #[arg(short, long)]
+    pub force: bool,
 }
 
 // =============================================================================

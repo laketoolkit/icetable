@@ -122,14 +122,13 @@ async fn async_main(cli: Cli) -> i32 {
         Commands::Ls(args) => LsCommand::execute(args, &ctx).await,
         Commands::Create(args) => CreateCommand::execute(args, &ctx).await,
         Commands::Delete(args) => DeleteCommand::execute(args, &ctx).await,
+        Commands::Describe(args) => DescribeCommand::execute(args, &ctx).await,
         Commands::Analyze(args) => AnalyzeCommand::execute(args, &ctx).await,
-        Commands::Init(args) => InitCommand::execute(args).await,
         Commands::Inspect(args) => InspectCommand::execute(args, &ctx).await,
         Commands::Validate(args) => ValidateCommand::execute(args, &ctx).await,
         Commands::Diff(args) => DiffCommand::execute(args, &ctx).await,
         Commands::Stats(args) => StatsCommand::execute(args, &ctx).await,
         Commands::History(args) => HistoryCommand::execute(args, &ctx).await,
-        Commands::Vacuum(args) => VacuumCommand::execute(args, &ctx).await,
         Commands::Optimize(args) => OptimizeCommand::execute(args, &ctx).await,
         Commands::Snapshot(args) => SnapshotCommand::execute(args, &ctx).await,
         Commands::Repair(args) => RepairCommand::execute(args, &ctx).await,
@@ -139,7 +138,6 @@ async fn async_main(cli: Cli) -> i32 {
         },
         Commands::Branch(args) => BranchCommand::execute(args, &ctx).await,
         Commands::Tag(args) => TagCommand::execute(args, &ctx).await,
-        Commands::Config(args) => ConfigCommand::execute(args).await,
         Commands::Generate(args) => GenerateCommand::execute(args, &ctx).await,
         Commands::Completions(args) => {
             args.generate();

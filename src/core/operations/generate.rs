@@ -7,6 +7,7 @@
 //! Supports both creating new tables and appending data to existing tables.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{
@@ -35,7 +36,7 @@ use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
 use crate::core::metadata::{
-    DataFileChanges, DataFileInfo, IcebergMetadataService, MetadataService, OperationType,
+    DataFileChanges, DataFileInfo, IcebergMetadataService, TableServiceReader, TableServiceWriter, OperationType,
 };
 use crate::core::storage::{ObjectStoreExt, create_object_store, to_path};
 use crate::error::{Error, Result};
@@ -106,6 +107,10 @@ pub struct ExistingTableInfo {
     pub total_records: u64,
 }
 
+/// Progress callback for file generation
+/// Called with (completed_files, total_files)
+pub type ProgressCallback = Arc<dyn Fn(u32, u32) + Send + Sync>;
+
 /// Operation for generating synthetic Iceberg tables
 pub struct GenerateOperation;
 
@@ -153,6 +158,9 @@ impl GenerateOperation {
     /// with the catalog for atomic commits.
     ///
     /// File generation is parallelized for better performance.
+    ///
+    /// The optional `progress` callback is called after each file is written,
+    /// with (completed_files, total_files) as arguments.
     pub async fn execute_with_catalog(
         table: Table,
         catalog: &dyn Catalog,
@@ -160,6 +168,7 @@ impl GenerateOperation {
         rows: u64,
         files: u32,
         seed: u64,
+        progress: Option<ProgressCallback>,
     ) -> Result<GenerateResult> {
         use iceberg::transaction::ApplyTransactionAction;
 
@@ -232,10 +241,24 @@ impl GenerateOperation {
         let write_concurrency = (files as usize / 4).clamp(8, 256);
         let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
 
+        // Progress counter
+        let completed = Arc::new(AtomicU32::new(0));
+
         let results: Vec<Result<(DataFileInfo, iceberg::spec::DataFile)>> = rx_stream
             .map(|(file_idx, batch)| {
                 let ctx = ctx.clone();
-                async move { Self::write_batch_to_file(&ctx, file_idx, batch).await }
+                let completed = completed.clone();
+                let progress = progress.clone();
+                let total_files = files;
+                async move {
+                    let result = Self::write_batch_to_file(&ctx, file_idx, batch).await;
+                    // Report progress after each file is written
+                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(ref cb) = progress {
+                        cb(done, total_files);
+                    }
+                    result
+                }
             })
             .buffer_unordered(write_concurrency)
             .collect()

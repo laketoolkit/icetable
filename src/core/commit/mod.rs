@@ -13,7 +13,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use icetable::core::commit::{SnapshotCommitter, DirectCommitter};
 //!
 //! // Create committer

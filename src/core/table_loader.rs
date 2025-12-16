@@ -172,7 +172,7 @@ impl TableLoader {
         if parts.len() < 2 {
             return Err(Error::InvalidCatalogRef {
                 ref_str: table_ref.to_string(),
-                reason: "Expected format: catalog.namespace.table or catalog.db.table".to_string(),
+                message: "Expected format: catalog.namespace.table or catalog.db.table".to_string(),
             });
         }
 
@@ -182,7 +182,7 @@ impl TableLoader {
             NamespaceIdent::from_vec(namespace_parts.into_iter().map(String::from).collect())
                 .map_err(|e| Error::InvalidCatalogRef {
                     ref_str: table_ref.to_string(),
-                    reason: format!("Failed to parse namespace: {}", e),
+                    message: format!("Failed to parse namespace: {}", e),
                 })?;
 
         Ok((namespace, table_name))
@@ -278,11 +278,6 @@ pub trait TableExt {
 
     /// List all snapshots
     fn snapshots(&self) -> Vec<Arc<iceberg::spec::Snapshot>>;
-
-    /// Get data files for current snapshot
-    fn current_data_files(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Vec<iceberg::spec::DataFile>>> + Send;
 }
 
 impl TableExt for Table {
@@ -299,17 +294,5 @@ impl TableExt for Table {
 
     fn snapshots(&self) -> Vec<Arc<iceberg::spec::Snapshot>> {
         self.metadata().snapshots().cloned().collect()
-    }
-
-    async fn current_data_files(&self) -> Result<Vec<iceberg::spec::DataFile>> {
-        // Use iceberg's scan API to get data files
-        let scan_builder = self.scan();
-        let _scan = scan_builder
-            .build()
-            .map_err(|e| Error::IcebergScan { source: e.into() })?;
-
-        // The scan API might have changed - for now return empty vector
-        // TODO: Fix this when we understand the new scan API
-        Ok(Vec::new())
     }
 }

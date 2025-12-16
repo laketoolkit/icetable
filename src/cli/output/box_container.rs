@@ -1,17 +1,21 @@
+//! Box container that holds sections for rendering
+//!
+//! A box is a visual container with an optional title and multiple sections.
+
 use super::box_section::BoxSection;
 
-/// Una caja completa con título y secciones
+/// A complete box with title and sections
 #[derive(Debug)]
 pub struct Box {
-    /// Título principal de la caja (centrado en borde superior)
+    /// Main box title (centered in top border)
     title: Option<String>,
 
-    /// Secciones dentro de la caja
+    /// Sections within the box
     sections: Vec<BoxSection>,
 }
 
 impl Box {
-    /// Crea una caja nueva con título
+    /// Creates a new box with title
     pub fn titled(title: impl Into<String>) -> Self {
         Self {
             title: Some(title.into()),
@@ -19,7 +23,7 @@ impl Box {
         }
     }
 
-    /// Crea una caja sin título
+    /// Creates a box without title
     pub fn new() -> Self {
         Self {
             title: None,
@@ -27,24 +31,24 @@ impl Box {
         }
     }
 
-    /// Agrega una sección
+    /// Adds a section
     pub fn section(mut self, section: BoxSection) -> Self {
         self.sections.push(section);
         self
     }
 
-    /// Agrega múltiples secciones
+    /// Adds multiple sections
     pub fn sections(mut self, new_sections: impl IntoIterator<Item = BoxSection>) -> Self {
         self.sections.extend(new_sections);
         self
     }
 
-    /// Obtiene el título de la caja
+    /// Gets the box title
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
 
-    /// Consume y retorna las secciones
+    /// Consumes and returns the sections
     pub(crate) fn into_sections(self) -> Vec<BoxSection> {
         self.sections
     }

@@ -4,7 +4,9 @@
 //! Supports Apache Iceberg tables.
 
 use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
+
+use parking_lot::RwLock;
 
 use crate::core::storage::Storage;
 use crate::error::Result;
@@ -50,10 +52,7 @@ impl FormatHandlerRegistry {
     where
         F: Fn(&Path, Storage) -> Result<Box<dyn FormatHandler>> + Send + Sync + 'static,
     {
-        let mut handlers = self
-            .handlers
-            .write()
-            .expect("handler registry lock poisoned");
+        let mut handlers = self.handlers.write();
         handlers.push((name.to_string(), priority, Arc::new(factory)));
         // Sort by priority (descending)
         handlers.sort_by(|a, b| b.1.cmp(&a.1));
@@ -86,10 +85,7 @@ impl FormatHandlerRegistry {
         // Otherwise, use the standard factory-based approach
         // Collect handlers first to avoid holding MutexGuard across await
         let candidate_handlers: Vec<_> = {
-            let handlers = self
-                .handlers
-                .read()
-                .expect("handler registry lock poisoned");
+            let handlers = self.handlers.read();
             handlers
                 .iter()
                 .filter_map(|(_name, _priority, factory)| factory(path, storage.clone()).ok())
@@ -135,10 +131,7 @@ impl FormatHandlerRegistry {
 
     /// Get list of registered format names (for debugging)
     pub fn registered_formats(&self) -> Vec<String> {
-        let handlers = self
-            .handlers
-            .read()
-            .expect("handler registry lock poisoned");
+        let handlers = self.handlers.read();
         handlers.iter().map(|(name, _, _)| name.clone()).collect()
     }
 }

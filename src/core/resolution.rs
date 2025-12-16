@@ -2,6 +2,62 @@
 //!
 //! This module provides the core logic for resolving table references
 //! from various sources (paths, catalogs, config context).
+//!
+//! # Resolution Flow
+//!
+//! ```text
+//!                          CLI Options
+//!                              │
+//!                              ▼
+//!     ┌────────────────────────────────────────────────┐
+//!     │               CatalogContext                    │
+//!     │  (table, namespace, catalog, warehouse options) │
+//!     └────────────────────────────────────────────────┘
+//!                              │
+//!           ┌──────────────────┼──────────────────┐
+//!           │                  │                  │
+//!           ▼                  ▼                  ▼
+//!   resolve_table_     resolve_catalog    (direct path)
+//!   from_context()                          s3://...
+//!           │                  │                  │
+//!           ▼                  ▼                  ▼
+//!     ┌──────────┐      ┌──────────────┐    ┌──────────┐
+//!     │ Table    │      │   Catalog    │    │   Path   │
+//!     │Resolution│      │  Resolution  │    │          │
+//!     └──────────┘      └──────────────┘    └──────────┘
+//!           │                  │
+//!           │    ┌─────────────┘
+//!           │    │
+//!           ▼    ▼
+//!     ┌─────────────────────────────────────┐
+//!     │         Factory Methods             │
+//!     ├─────────────────────────────────────┤
+//!     │ to_table()         → IcebergTable   │
+//!     │ to_readonly_service() → Reader      │
+//!     │ to_writable_service() → Writer      │
+//!     └─────────────────────────────────────┘
+//! ```
+//!
+//! # Key Types
+//!
+//! - [`CatalogContext`] - Input from CLI options, holds unresolved references
+//! - [`TableResolution`] - Result of resolving a table (Path or CatalogTable)
+//! - [`CatalogResolution`] - Resolved catalog client with namespace context
+//!
+//! # Usage Example
+//!
+//! ```ignore
+//! // From CLI command handler:
+//! let resolution = resolve_table_from_context(&ctx).await?;
+//!
+//! // For read-only operations:
+//! let service = resolution.to_readonly_service().await?;
+//! let snapshots = service.list_snapshots(None).await?;
+//!
+//! // For write operations (requires catalog):
+//! let service = resolution.to_writable_service(catalog_config, branch).await?;
+//! service.write_snapshot(changes, operation, summary).await?;
+//! ```
 
 use std::sync::Arc;
 
@@ -13,14 +69,18 @@ use crate::core::{
 };
 use crate::error::{Error, Result};
 
-/// Context for catalog resolution operations
+/// Context for catalog and table resolution operations
 ///
 /// This struct holds the necessary context from CLI options for resolving
-/// catalog references. It abstracts the CLI-specific `CliTableContext` to
-/// allow core resolution logic to remain independent of CLI parsing.
+/// catalog and table references. Used by all commands that need to resolve
+/// tables or interact with catalogs.
+///
+/// # See Also
+///
+/// - [`TableResolution`] - The result of resolving a `CatalogContext`
 #[derive(Debug, Clone, Default)]
 pub struct CatalogContext {
-    /// Table name (from -t option)
+    /// Table name or path (from -t option)
     pub table: Option<String>,
     /// Namespace (from -n option)
     pub namespace: Option<String>,
@@ -28,6 +88,36 @@ pub struct CatalogContext {
     pub catalog: Option<String>,
     /// Warehouse within catalog (from -w option)
     pub warehouse: Option<String>,
+    /// Ad-hoc catalog configuration (from --catalog-uri CLI options)
+    pub catalog_config: Option<CatalogConfig>,
+}
+
+impl CatalogContext {
+    /// Get the full table reference, combining namespace and table if both are present
+    ///
+    /// If both namespace and table are specified, returns "namespace.table".
+    /// If only table is specified, returns the table as-is.
+    /// If neither is specified, returns None.
+    pub fn table_ref(&self) -> Option<String> {
+        match (&self.namespace, &self.table) {
+            (Some(ns), Some(t)) => {
+                // If table already contains namespace (has '.'), use it as-is
+                if t.contains('.')
+                    || t.starts_with("s3://")
+                    || t.starts_with("gs://")
+                    || t.starts_with("az://")
+                    || t.starts_with("file://")
+                    || t.starts_with("/")
+                {
+                    Some(t.clone())
+                } else {
+                    Some(format!("{}.{}", ns, t))
+                }
+            }
+            (None, Some(t)) => Some(t.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// Resolved table that can be either a direct path or a catalog table
@@ -81,7 +171,7 @@ impl TableResolution {
     // Factory methods for IcebergMetadataService and Table
     // =========================================================================
 
-    /// Get an Arc<IcebergTable> from this resolution
+    /// Get an `Arc<IcebergTable>` from this resolution
     ///
     /// Use this when you need direct access to the iceberg Table object.
     /// For catalog tables, returns the already-loaded table.
@@ -242,7 +332,7 @@ impl CatalogResolution {
         }
     }
 
-    /// Get namespace as Vec<String> parts for API calls
+    /// Get namespace as `Vec<String>` parts for API calls
     ///
     /// Returns None if no namespace is set.
     pub fn namespace_parts(&self) -> Option<Vec<String>> {
@@ -388,7 +478,7 @@ async fn resolve_from_catalog(
         TableRef::Path(_) => {
             return Err(Error::InvalidCatalogRef {
                 ref_str: table_input.to_string(),
-                reason: "Expected catalog table reference (namespace.table), got path".to_string(),
+                message: "Expected catalog table reference (namespace.table), got path".to_string(),
             });
         }
     };

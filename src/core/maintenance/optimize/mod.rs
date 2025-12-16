@@ -15,13 +15,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_cast::cast;
 use futures::{StreamExt, TryStreamExt, stream};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use object_store::ObjectStore;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::AsyncArrowWriter;
@@ -31,8 +29,9 @@ use parquet::file::properties::{WriterProperties, WriterVersion};
 
 use super::{FileGroup, MaintenanceConfig, group_files_by_partition};
 use crate::core::metadata::{
-    DataFileChanges, DataFileInfo, MaintenanceResult, MetadataService, OperationType,
+    DataFileChanges, DataFileInfo, MaintenanceResult, OperationType, TableServiceWriter,
 };
+use crate::core::progress::{OptionalProgress, ProgressReporter};
 use crate::error::{Error, Result};
 use crate::utils::core::{format_bytes, generate_unique_id, normalize_relative_path};
 use crate::utils::resources::get_resource_limits;
@@ -86,6 +85,7 @@ fn calculate_optimal_subgroup_size(
 /// Service for optimizing tables by compacting small files
 pub struct OptimizeService {
     config: MaintenanceConfig,
+    progress: OptionalProgress,
 }
 
 impl OptimizeService {
@@ -93,12 +93,19 @@ impl OptimizeService {
     pub fn new() -> Self {
         Self {
             config: MaintenanceConfig::default(),
+            progress: None,
         }
     }
 
     /// Create with custom configuration
     pub fn with_config(config: MaintenanceConfig) -> Self {
-        Self { config }
+        Self { config, progress: None }
+    }
+
+    /// Set the progress reporter for this service
+    pub fn with_progress(mut self, progress: Arc<dyn ProgressReporter>) -> Self {
+        self.progress = Some(progress);
+        self
     }
 
     /// Analyze files and identify groups that need compaction
@@ -121,7 +128,7 @@ impl OptimizeService {
     }
 
     /// Run the optimize operation with parallel partition processing
-    pub async fn execute<M: MetadataService>(
+    pub async fn execute<M: TableServiceWriter>(
         &self,
         metadata_service: &M,
     ) -> Result<MaintenanceResult> {
@@ -233,40 +240,38 @@ impl OptimizeService {
         // Calculate total files for progress bar (per-file progress, not per-group)
         let total_input_files: usize = groups_to_compact.iter().map(|g| g.files.len()).sum();
 
-        // Setup progress tracking - now tracks individual files, not groups
-        let multi_progress = MultiProgress::new();
-        let overall_pb = multi_progress.add(ProgressBar::new(total_input_files as u64));
-        overall_pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} Compacting {bar:30.cyan/blue} {percent}% {msg}")
-                .expect("hardcoded progress template is valid")
-                .progress_chars("━━╺"),
-        );
-        overall_pb.enable_steady_tick(Duration::from_millis(100));
+        // Setup progress tracking using the abstract reporter
+        if let Some(ref progress) = self.progress {
+            progress.set_total(total_input_files as u64);
+            progress.set_message("Compacting");
+        }
 
         // Counters for progress
         let bytes_written = Arc::new(AtomicU64::new(0));
 
         // Process partition groups concurrently using async streams
         let concurrency = self.config.parallelism;
+        let progress_for_tasks = self.progress.clone();
         let results: Vec<Result<CompactionResult>> = stream::iter(groups_to_compact.iter())
             .map(|group| {
                 let schema = schema.clone();
                 let data_dir = data_dir.clone();
                 let object_store = object_store.clone();
                 let bytes_written = bytes_written.clone();
-                let overall_pb = overall_pb.clone();
+                let progress = progress_for_tasks.clone();
                 let group = group.clone();
 
                 async move {
                     let result = self
-                        .compact_group_pipeline(&group, &schema, &data_dir, &object_store, &overall_pb)
+                        .compact_group_pipeline(&group, &schema, &data_dir, &object_store, &progress)
                         .await;
 
                     if let Ok(ref r) = result {
                         let added_bytes: u64 = r.added.iter().map(|f| f.size).sum();
                         bytes_written.fetch_add(added_bytes, Ordering::Relaxed);
-                        overall_pb.set_message(format_bytes(bytes_written.load(Ordering::Relaxed)));
+                        if let Some(ref p) = progress {
+                            p.set_message(&format_bytes(bytes_written.load(Ordering::Relaxed)));
+                        }
                     }
 
                     result
@@ -276,7 +281,9 @@ impl OptimizeService {
             .collect()
             .await;
 
-        overall_pb.finish_with_message("done");
+        if let Some(ref progress) = self.progress {
+            progress.finish_with_message("done");
+        }
 
         // Aggregate results
         let mut changes = DataFileChanges::new();
@@ -336,7 +343,7 @@ impl OptimizeService {
         table_schema: &Arc<arrow::datatypes::Schema>,
         data_dir: &std::path::Path,
         object_store: &Arc<dyn ObjectStore>,
-        progress: &ProgressBar,
+        progress: &OptionalProgress,
     ) -> Result<CompactionResult> {
         if group.files.is_empty() {
             return Ok(CompactionResult {
@@ -390,8 +397,7 @@ impl OptimizeService {
         let expected_output_files = (group.total_size / self.config.target_size).max(1) as usize;
         let num_writers = available_cores
             .min(expected_output_files)
-            .min(8) // Cap at 8 writers per group to avoid too much contention
-            .max(1);
+            .clamp(1, 8); // Cap at 1-8 writers per group to avoid too much contention
 
         // Channel size: respect --max-memory if set, otherwise use default
         // Each batch in channel is ~5MB average, so limit channel to use at most 50% of memory limit
@@ -480,7 +486,9 @@ impl OptimizeService {
                         }
 
                         // Signal file complete (for progress tracking)
-                        progress.inc(1);
+                        if let Some(ref p) = progress {
+                            p.inc(1);
+                        }
                     }
                 })
                 .buffer_unordered(read_concurrency)
@@ -703,29 +711,26 @@ impl OptimizeService {
     /// Static version of path_to_object_path for use in closures
     fn path_to_object_path_static(path: &str, table_base: &str) -> std::result::Result<ObjectPath, String> {
         // For S3 URLs, extract the path within the bucket
-        if let Some(s3_path) = path.strip_prefix("s3://") {
-            if let Some(slash_pos) = s3_path.find('/') {
+        if let Some(s3_path) = path.strip_prefix("s3://")
+            && let Some(slash_pos) = s3_path.find('/') {
                 let object_path = &s3_path[slash_pos + 1..];
                 return Ok(ObjectPath::from(object_path));
             }
-        }
 
         // For gs:// (GCS) URLs
-        if let Some(gcs_path) = path.strip_prefix("gs://") {
-            if let Some(slash_pos) = gcs_path.find('/') {
+        if let Some(gcs_path) = path.strip_prefix("gs://")
+            && let Some(slash_pos) = gcs_path.find('/') {
                 let object_path = &gcs_path[slash_pos + 1..];
                 return Ok(ObjectPath::from(object_path));
             }
-        }
 
         // For az:// or azure:// URLs
         for prefix in ["az://", "azure://"] {
-            if let Some(az_path) = path.strip_prefix(prefix) {
-                if let Some(slash_pos) = az_path.find('/') {
+            if let Some(az_path) = path.strip_prefix(prefix)
+                && let Some(slash_pos) = az_path.find('/') {
                     let object_path = &az_path[slash_pos + 1..];
                     return Ok(ObjectPath::from(object_path));
                 }
-            }
         }
 
         // For local paths, use relative path from table base
@@ -851,3 +856,6 @@ fn subdivide_groups(groups: Vec<FileGroup>, max_files_per_subgroup: usize) -> Ve
 
     result
 }
+
+#[cfg(test)]
+mod tests;

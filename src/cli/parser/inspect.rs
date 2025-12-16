@@ -2,7 +2,35 @@
 
 use clap::Parser;
 
-/// Arguments for inspect command
+/// Arguments for describe command (unified table info)
+#[derive(Parser, Debug)]
+pub struct DescribeArgs {
+    /// Show detailed schema info
+    #[arg(long)]
+    pub schema: bool,
+
+    /// Show detailed statistics
+    #[arg(long)]
+    pub stats: bool,
+
+    /// Show health analysis
+    #[arg(long)]
+    pub health: bool,
+
+    /// Show partition info
+    #[arg(short, long)]
+    pub partitions: bool,
+
+    /// Output format (text, json)
+    #[arg(short, long, default_value = "text")]
+    pub output: String,
+
+    /// Specific snapshot ID
+    #[arg(long)]
+    pub snapshot: Option<i64>,
+}
+
+/// Arguments for inspect command (deprecated, use describe)
 #[derive(Parser, Debug)]
 pub struct InspectArgs {
     /// Show snapshot history and manifests

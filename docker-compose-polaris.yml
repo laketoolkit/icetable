@@ -1,14 +1,11 @@
 services:
   minio:
     image: minio/minio:latest
-    hostname: minio
+    network_mode: host
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -17,12 +14,13 @@ services:
 
   minio-setup:
     image: minio/mc:latest
+    network_mode: host
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc alias set myminio http://localhost:9000 minioadmin minioadmin;
       mc mb myminio/iceberg-warehouse --ignore-existing;
       exit 0;
       "
@@ -31,10 +29,7 @@ services:
   polaris:
     image: apache/polaris:latest
     platform: linux/amd64
-    hostname: polaris
-    ports:
-      - "8181:8181"
-      - "8182:8182"
+    network_mode: host
     environment:
       # AWS/S3 credentials for MinIO access
       AWS_ACCESS_KEY_ID: minioadmin
@@ -46,7 +41,7 @@ services:
       polaris.realm-context.realms: default
       polaris.features.DROP_WITH_PURGE_ENABLED: "true"
       # S3 FileIO configuration for MinIO
-      polaris.catalog.io.s3.endpoint: http://minio:9000
+      polaris.catalog.io.s3.endpoint: http://localhost:9000
       polaris.catalog.io.s3.path-style-access: "true"
       polaris.catalog.io.s3.access-key-id: minioadmin
       polaris.catalog.io.s3.secret-access-key: minioadmin
@@ -67,19 +62,20 @@ services:
   # Setup Polaris with warehouse configured for MinIO
   polaris-setup:
     image: curlimages/curl:latest
+    network_mode: host
     depends_on:
       polaris:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
       echo 'Getting OAuth token...';
-      TOKEN=$$(curl -s -X POST http://polaris:8181/api/catalog/v1/oauth/tokens \
+      TOKEN=$$(curl -s -X POST http://localhost:8181/api/catalog/v1/oauth/tokens \
         -d 'grant_type=client_credentials&client_id=admin&client_secret=admin&scope=PRINCIPAL_ROLE:ALL' \
         | sed -n 's/.*\"access_token\":\"\([^\"]*\)\".*/\1/p');
       echo \"Token: $${TOKEN:0:20}...\";
 
       echo 'Creating warehouse dev...';
-      curl -s -X POST http://polaris:8181/api/management/v1/catalogs \
+      curl -s -X POST http://localhost:8181/api/management/v1/catalogs \
         -H \"Authorization: Bearer $$TOKEN\" \
         -H 'Content-Type: application/json' \
         -d '{
@@ -92,7 +88,7 @@ services:
             \"storageConfigInfo\": {
               \"storageType\": \"S3\",
               \"allowedLocations\": [\"s3://iceberg-warehouse/dev\"],
-              \"s3.endpoint\": \"http://minio:9000\",
+              \"s3.endpoint\": \"http://localhost:9000\",
               \"s3.path-style-access\": \"true\",
               \"s3.access-key-id\": \"minioadmin\",
               \"s3.secret-access-key\": \"minioadmin\"
@@ -101,26 +97,22 @@ services:
         }' || true;
 
       echo 'Creating catalog role...';
-      curl -s -X POST http://polaris:8181/api/management/v1/catalogs/dev/catalog-roles \
+      curl -s -X POST http://localhost:8181/api/management/v1/catalogs/dev/catalog-roles \
         -H \"Authorization: Bearer $$TOKEN\" \
         -H 'Content-Type: application/json' \
         -d '{\"catalogRole\": {\"name\": \"admin_role\"}}' || true;
 
       echo 'Granting catalog privileges...';
-      curl -s -X PUT http://polaris:8181/api/management/v1/catalogs/dev/catalog-roles/admin_role/grants \
+      curl -s -X PUT http://localhost:8181/api/management/v1/catalogs/dev/catalog-roles/admin_role/grants \
         -H \"Authorization: Bearer $$TOKEN\" \
         -H 'Content-Type: application/json' \
         -d '{\"grant\": {\"type\": \"catalog\", \"privilege\": \"CATALOG_MANAGE_CONTENT\"}}' || true;
 
       echo 'Assigning role to admin...';
-      curl -s -X PUT http://polaris:8181/api/management/v1/principal-roles/admin/catalog-roles/dev \
+      curl -s -X PUT http://localhost:8181/api/management/v1/principal-roles/admin/catalog-roles/dev \
         -H \"Authorization: Bearer $$TOKEN\" \
         -H 'Content-Type: application/json' \
         -d '{\"catalogRole\": {\"name\": \"admin_role\"}}' || true;
 
       echo 'Setup complete!';
       "
-
-networks:
-  default:
-    name: icetable_default

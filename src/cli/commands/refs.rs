@@ -9,7 +9,7 @@ use super::common::{
     print_json, print_ref_delete_dry_run, print_version_if_present, resolve_table_from_context,
 };
 use crate::cli::output::create_styled_table;
-use crate::cli::parser::CliTableContext;
+use crate::cli::parser::CatalogContext;
 use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
 use crate::core::metadata::IcebergMetadataService;
 use crate::error::Result;
@@ -387,12 +387,12 @@ pub struct BranchCommand;
 
 impl BranchCommand {
     /// Execute the branch command with the given arguments
-    pub async fn execute(args: BranchArgs, ctx: &CliTableContext) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
+    pub async fn execute(args: BranchArgs, ctx: &CatalogContext) -> Result<()> {
+        use super::constants::MEMORY_LIGHT_OPS;
+        with_resource_limits(MEMORY_LIGHT_OPS, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: BranchArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_inner(args: BranchArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
 
         match args.command {
@@ -459,12 +459,12 @@ pub struct TagCommand;
 
 impl TagCommand {
     /// Execute the tag command with the given arguments
-    pub async fn execute(args: TagArgs, ctx: &CliTableContext) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
+    pub async fn execute(args: TagArgs, ctx: &CatalogContext) -> Result<()> {
+        use super::constants::MEMORY_LIGHT_OPS;
+        with_resource_limits(MEMORY_LIGHT_OPS, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: TagArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_inner(args: TagArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
 
         match args.command {

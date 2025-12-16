@@ -3,7 +3,7 @@ name = "icetable"
 version = "0.1.0"
 edition = "2024"
 authors = ["Juan José de las Heras Herrera"]
-description = "CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and more"
+description = "CLI for managing Apache Iceberg tables - inspect, optimize, and more"
 license = "Apache-2.0"
 repository = "https://github.com/datatools-hub/icetable"
 keywords = ["iceberg", "parquet", "arrow", "lakehouse", "cli"]
@@ -84,6 +84,7 @@ proptest = "1.5"
 insta = { version = "1.40", features = ["yaml"] }
 tokio-test = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
+serial_test = "3.2"
 
 [features]
 default = ["rest-catalog"]

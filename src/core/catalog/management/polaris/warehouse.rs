@@ -64,8 +64,9 @@ struct StorageConfigInfoRequest {
     storage_type: String,
     allowed_locations: Vec<String>,
     /// Additional storage config (flattened into the JSON)
+    /// Uses Value to preserve boolean/number types from JSON input
     #[serde(flatten)]
-    config: HashMap<String, String>,
+    config: HashMap<String, serde_json::Value>,
 }
 
 // =============================================================================
@@ -168,8 +169,32 @@ pub async fn create_warehouse(
 ) -> Result<Warehouse> {
     let url = format!("{}/catalogs", client.base_url);
 
-    // Use inferred storage type if not explicitly set (before moving fields)
-    let storage_type = request.inferred_storage_type();
+    // Check if user specified storageType in config
+    // If so, use that; otherwise infer from location
+    let mut storage_config = request.storage_config.clone();
+    let mut storage_type = storage_config
+        .remove("storageType")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| request.inferred_storage_type().to_string());
+
+    // Normalize storage type: S3_COMPATIBLE -> S3 (Polaris only supports S3, GCS, AZURE, FILE)
+    if storage_type == "S3_COMPATIBLE" {
+        storage_type = "S3".to_string();
+    }
+
+    // Normalize field names: s3.endpoint -> endpoint, s3.pathStyleAccess -> pathStyleAccess
+    // Polaris expects direct field names in storageConfigInfo, not s3. prefixed
+    let field_mappings = [
+        ("s3.endpoint", "endpoint"),
+        ("s3.pathStyleAccess", "pathStyleAccess"),
+        ("s3.region", "region"),
+        ("s3.roleArn", "roleArn"),
+    ];
+    for (old_key, new_key) in field_mappings {
+        if let Some(value) = storage_config.remove(old_key) {
+            storage_config.insert(new_key.to_string(), value);
+        }
+    }
 
     // Build the Polaris-specific request body
     let mut properties = request.properties;
@@ -184,13 +209,13 @@ pub async fn create_warehouse(
             catalog_type: request.warehouse_type.to_string(),
             properties,
             storage_config_info: StorageConfigInfoRequest {
-                storage_type: storage_type.to_string(),
+                storage_type,
                 allowed_locations: if request.allowed_locations.is_empty() {
                     vec![request.default_base_location]
                 } else {
                     request.allowed_locations
                 },
-                config: request.storage_config,
+                config: storage_config,
             },
         },
     };
@@ -254,31 +279,120 @@ async fn parse_error_response(response: reqwest::Response, operation: &str) -> E
     let body = response.text().await.unwrap_or_default();
 
     // Try to extract message from JSON error response
+    // Polaris uses different formats: {"error": {"message": "..."}} or {"message": "..."}
     let message = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+        // Try nested error.message first
         json.get("error")
             .and_then(|e| e.get("message"))
             .and_then(|m| m.as_str())
             .map(|s| s.to_string())
-            .unwrap_or(body)
+            // Then try direct message field
+            .or_else(|| {
+                json.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+            })
+            // Fall back to raw body if we can't parse
+            .unwrap_or_else(|| {
+                if body.is_empty() {
+                    "unknown error".to_string()
+                } else {
+                    body
+                }
+            })
+    } else if body.is_empty() {
+        "unknown error".to_string()
     } else {
         body
     };
 
+    // Clean up common verbose patterns from Polaris
+    let clean_message = clean_polaris_message(&message);
+
     match status.as_u16() {
         401 => Error::AuthenticationFailed {
             provider: "Polaris".to_string(),
-            message: format!("Authentication required to {}", operation),
+            message: format!("run 'icetable admin auth login' to {}", operation),
         },
         403 => Error::AccessDenied {
             path: operation.to_string(),
-            message: format!("Permission denied: {}", message),
+            message: clean_message,
         },
-        404 => Error::CatalogOperation {
-            message: format!("Not found: {}", message),
-        },
-        409 => Error::Conflict(format!("Conflict while trying to {}: {}", operation, message)),
-        _ => Error::CatalogOperation {
-            message: format!("Failed to {} ({}): {}", operation, status, message),
-        },
+        404 => {
+            // If clean_message already contains "not found", don't double prefix
+            if clean_message.contains("not found") {
+                Error::CatalogOperation { message: clean_message }
+            } else {
+                Error::CatalogOperation {
+                    message: format!("not found: {}", clean_message),
+                }
+            }
+        }
+        409 => Error::Conflict(clean_message),
+        _ => Error::CatalogOperation { message: clean_message },
     }
+}
+
+/// Clean up verbose Polaris error messages
+fn clean_polaris_message(msg: &str) -> String {
+    let msg = msg.trim();
+    let msg_lower = msg.to_lowercase();
+
+    // Pattern: "Catalog 'X' cannot be dropped, it is not empty"
+    if msg_lower.contains("cannot be dropped") && msg_lower.contains("not empty")
+        && let Some(name) = extract_quoted_name(msg) {
+            return format!("warehouse '{}' is not empty", name);
+        }
+
+    // Pattern: "Cannot create Catalog X. Catalog already exists"
+    if msg_lower.contains("already exists")
+        && let Some(name) = extract_catalog_name(msg) {
+            return format!("warehouse '{}' already exists", name);
+        }
+
+    // Pattern: "TopLevelEntity of type CATALOG does not exist: X"
+    // Must come BEFORE generic "does not exist" check
+    if msg_lower.contains("toplevelentity") && msg_lower.contains("does not exist")
+        && let Some(pos) = msg.rfind(": ") {
+            let name = msg[pos + 2..].trim();
+            if !name.is_empty() {
+                return format!("warehouse '{}' not found", name);
+            }
+        }
+
+    // Pattern: "Unable to find warehouse 'X'" or "does not exist"
+    if (msg_lower.contains("unable to find") || msg_lower.contains("does not exist"))
+        && let Some(name) = extract_catalog_name(msg) {
+            return format!("warehouse '{}' not found", name);
+        }
+
+    // Default: just lowercase first letter for consistency
+    let mut chars = msg.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+    }
+}
+
+/// Extract a quoted name like 'foo' from a string
+fn extract_quoted_name(msg: &str) -> Option<&str> {
+    let start = msg.find('\'')?;
+    let rest = &msg[start + 1..];
+    let end = rest.find('\'')?;
+    Some(&rest[..end])
+}
+
+/// Extract catalog name from messages like "Cannot create Catalog foo. Catalog already exists"
+fn extract_catalog_name(msg: &str) -> Option<&str> {
+    // Try quoted first
+    if let Some(name) = extract_quoted_name(msg) {
+        return Some(name);
+    }
+    // Try "Catalog X." pattern
+    if let Some(start) = msg.find("Catalog ") {
+        let rest = &msg[start + 8..];
+        let end = rest.find(['.', ' '])?;
+        return Some(&rest[..end]);
+    }
+    None
 }

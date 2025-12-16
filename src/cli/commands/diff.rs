@@ -7,7 +7,7 @@ use colored::Colorize;
 
 use super::common::{print_json, resolve_table_from_context};
 use crate::cli::output::format_timestamp_ms;
-use crate::cli::parser::{CliTableContext, DiffArgs};
+use crate::cli::parser::{CatalogContext, DiffArgs};
 use crate::core::extract_filename;
 use crate::core::operations::{DiffConfig, DiffService, SnapshotDiffResult};
 use crate::error::Result;
@@ -18,12 +18,12 @@ pub struct DiffCommand;
 
 impl DiffCommand {
     /// Execute diff command
-    pub async fn execute(args: DiffArgs, ctx: &CliTableContext) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for diff operations
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
+    pub async fn execute(args: DiffArgs, ctx: &CatalogContext) -> Result<()> {
+        use super::constants::MEMORY_HEAVY_OPS;
+        with_resource_limits(MEMORY_HEAVY_OPS, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: DiffArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_inner(args: DiffArgs, ctx: &CatalogContext) -> Result<()> {
         // 1. Resolve table (supports catalog resolution) and create metadata service
         let resolution = resolve_table_from_context(ctx).await?;
         let service = resolution.to_readonly_service().await?;

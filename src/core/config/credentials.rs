@@ -211,29 +211,43 @@ impl CredentialSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_inline_credential() {
+    // Helper to safely set env var for tests (runs serially to avoid races)
+    fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        // SAFETY: This is safe because tests using this helper run serially
         unsafe {
-            std::env::set_var("ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS", "1");
+            std::env::set_var(key, value);
         }
-        let cred = CredentialSource::Inline("token123".to_string());
-        assert_eq!(cred.resolve().unwrap(), Some("token123".to_string()));
-        assert_eq!(cred.describe(), "inline (plain text)");
+        let result = f();
+        unsafe {
+            std::env::remove_var(key);
+        }
+        result
     }
 
     #[test]
+    #[serial]
+    fn test_inline_credential() {
+        with_env_var("ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS", "1", || {
+            let cred = CredentialSource::Inline("token123".to_string());
+            assert_eq!(cred.resolve().unwrap(), Some("token123".to_string()));
+            assert_eq!(cred.describe(), "inline (plain text)");
+        });
+    }
+
+    #[test]
+    #[serial]
     fn test_env_var_credential() {
-        unsafe {
-            std::env::set_var("TEST_CRED_TOKEN", "secret123");
-        }
-        let cred = CredentialSource::EnvVar("TEST_CRED_TOKEN".to_string());
-        assert_eq!(cred.resolve().unwrap(), Some("secret123".to_string()));
-        assert_eq!(cred.describe(), "env:TEST_CRED_TOKEN");
-        unsafe {
-            std::env::remove_var("TEST_CRED_TOKEN");
-        }
+        with_env_var("TEST_CRED_TOKEN", "secret123", || {
+            let cred = CredentialSource::EnvVar("TEST_CRED_TOKEN".to_string());
+            assert_eq!(cred.resolve().unwrap(), Some("secret123".to_string()));
+            assert_eq!(cred.describe(), "env:TEST_CRED_TOKEN");
+        });
     }
 
     #[test]

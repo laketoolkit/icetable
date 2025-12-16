@@ -10,7 +10,7 @@ use super::common::{
 };
 use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
 use crate::cli::output::{create_header_cells, create_styled_table, format_timestamp_ms};
-use crate::cli::parser::{CliTableContext, SnapshotArgs, SnapshotCommands};
+use crate::cli::parser::{CatalogContext, SnapshotArgs, SnapshotCommands};
 use crate::core::CatalogConfig;
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
 use crate::error::{Error, Result};
@@ -47,12 +47,12 @@ pub struct SnapshotCommand;
 
 impl SnapshotCommand {
     /// Execute snapshot command
-    pub async fn execute(args: SnapshotArgs, ctx: &CliTableContext) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for snapshot ops
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
+    pub async fn execute(args: SnapshotArgs, ctx: &CatalogContext) -> Result<()> {
+        use super::constants::MEMORY_MEDIUM_OPS;
+        with_resource_limits(MEMORY_MEDIUM_OPS, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: SnapshotArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_inner(args: SnapshotArgs, ctx: &CatalogContext) -> Result<()> {
         // Resolve table to get path and catalog info (namespace/name if from catalog)
         let resolution = resolve_table_from_context(ctx).await?;
         let path = resolution.location();

@@ -29,7 +29,11 @@ mod iceberg_validator;
 mod refs;
 mod refs_scanner;
 
-pub use traits::*;
+// Export types from traits (but not the reader::MetadataReader to avoid collision)
+pub use traits::{
+    DataFileChanges, DataFileInfo, MaintenanceResult, OperationType,
+    SnapshotInfo, TableServiceReader, TableServiceWriter,
+};
 
 // Primary exports
 #[cfg(feature = "rest-catalog")]

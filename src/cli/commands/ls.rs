@@ -8,8 +8,8 @@
 use colored::Colorize;
 
 use super::common::{print_json, resolve_catalog, CatalogResolution};
-use crate::cli::parser::{CliTableContext, LsArgs, LsCommands};
-use crate::core::metadata::{IcebergMetadataService, MetadataService};
+use crate::cli::parser::{CatalogContext, LsArgs, LsCommands};
+use crate::core::metadata::{IcebergMetadataService, TableServiceReader};
 use crate::error::Result;
 
 /// Tree drawing characters
@@ -22,7 +22,7 @@ pub struct LsCommand;
 
 impl LsCommand {
     /// Execute ls command
-    pub async fn execute(args: LsArgs, ctx: &CliTableContext) -> Result<()> {
+    pub async fn execute(args: LsArgs, ctx: &CatalogContext) -> Result<()> {
         // Resolve catalog context
         let catalog = resolve_catalog(ctx).await?;
 

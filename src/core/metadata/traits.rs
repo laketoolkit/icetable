@@ -111,14 +111,15 @@ pub struct SnapshotInfo {
     pub parent_id: Option<i64>,
 }
 
-/// Trait for reading and writing table metadata transactionally
+/// Trait for read-only table service operations
 ///
-/// This trait abstracts the common operations needed for table maintenance:
-/// - Reading current state (data files, snapshots)
-/// - Writing new snapshots with file changes
-/// - Listing historical snapshots
+/// This trait provides read-only access to table data (files, snapshots, schema).
+/// Use this when you only need to inspect or analyze a table.
+///
+/// Note: This is different from `reader::MetadataReader` which only loads raw metadata.
+/// This trait provides higher-level operations on the table data.
 #[async_trait]
-pub trait MetadataService: Send + Sync {
+pub trait TableServiceReader: Send + Sync {
     /// Get information about the current snapshot
     async fn current_snapshot(&self) -> Result<Option<SnapshotInfo>>;
 
@@ -129,19 +130,6 @@ pub trait MetadataService: Send + Sync {
     ///
     /// Returns snapshots ordered by timestamp (newest first)
     async fn list_snapshots(&self, limit: Option<usize>) -> Result<Vec<SnapshotInfo>>;
-
-    /// Write a new snapshot with the given file changes
-    ///
-    /// This is the main transactional operation that:
-    /// - Creates necessary metadata structures (manifests, etc.)
-    /// - Records the file changes
-    /// - Commits the new snapshot
-    async fn write_snapshot(
-        &self,
-        changes: DataFileChanges,
-        operation: OperationType,
-        summary: HashMap<String, String>,
-    ) -> Result<SnapshotInfo>;
 
     /// Get the table's data directory path
     fn data_directory(&self) -> std::path::PathBuf;
@@ -171,9 +159,30 @@ pub trait MetadataService: Send + Sync {
 
     /// Get an ObjectStore implementation for async I/O operations
     ///
-    /// This is used for async parquet reading/writing during compaction.
+    /// This is used for async parquet reading during analysis.
     fn object_store(&self) -> Arc<dyn ObjectStore>;
 }
+
+/// Trait for writing table data (snapshots)
+///
+/// This trait provides write access to table metadata.
+/// Requires a catalog committer for proper transactional semantics.
+#[async_trait]
+pub trait TableServiceWriter: TableServiceReader {
+    /// Write a new snapshot with the given file changes
+    ///
+    /// This is the main transactional operation that:
+    /// - Creates necessary metadata structures (manifests, etc.)
+    /// - Records the file changes
+    /// - Commits the new snapshot via catalog
+    async fn write_snapshot(
+        &self,
+        changes: DataFileChanges,
+        operation: OperationType,
+        summary: HashMap<String, String>,
+    ) -> Result<SnapshotInfo>;
+}
+
 
 /// Result of a maintenance operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,9 +223,4 @@ impl MaintenanceResult {
     pub fn bytes_delta(&self) -> i64 {
         self.bytes_added as i64 - self.bytes_removed as i64
     }
-}
-
-/// Re-export utility functions from the shared utils module for backward compatibility
-pub mod utils {
-    pub use crate::utils::core::{format_bytes, generate_unique_id};
 }

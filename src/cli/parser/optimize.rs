@@ -2,6 +2,8 @@
 
 use clap::{Parser, Subcommand};
 
+use super::VacuumArgs;
+
 /// Optimize subcommands
 #[derive(Subcommand, Debug)]
 pub enum OptimizeCommands {
@@ -10,6 +12,9 @@ pub enum OptimizeCommands {
 
     /// Rewrite manifest files
     Manifests(OptimizeManifestsArgs),
+
+    /// Clean up unreferenced files
+    Vacuum(VacuumArgs),
 }
 
 /// Arguments for optimize data command

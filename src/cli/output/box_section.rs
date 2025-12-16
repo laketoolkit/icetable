@@ -1,10 +1,14 @@
+//! Box sections for grouping related content
+//!
+//! Sections organize items within a box and can have their own title and style.
+
 use super::box_item::BoxItem;
 
-/// Fuente de items para una sección
+/// Item source for a section
 enum ItemSource {
-    /// Items evaluados eagerly (en memoria)
+    /// Items evaluated eagerly (in memory)
     Eager(Vec<BoxItem>),
-    /// Items lazy (via iterador)
+    /// Lazy items (via iterator)
     Lazy(Box<dyn Iterator<Item = BoxItem>>),
 }
 
@@ -17,43 +21,43 @@ impl std::fmt::Debug for ItemSource {
     }
 }
 
-/// Estilo de color para secciones
+/// Color style for sections
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionStyle {
-    /// Sin estilo especial
+    /// No special style
     Default,
-    /// Título en negrita
+    /// Bold title
     Bold,
-    /// Título en dimmed/gris
+    /// Dimmed/gray title
     Dimmed,
-    /// Color personalizado
-    Info, // Cyan
-    /// Success state (rendered in green)
-    Success, // Green
-    /// Warning state (rendered in yellow)
-    Warning, // Yellow
-    /// Error state (rendered in red)
-    Error, // Red
+    /// Info style (cyan)
+    Info,
+    /// Success state (green)
+    Success,
+    /// Warning state (yellow)
+    Warning,
+    /// Error state (red)
+    Error,
 }
 
-/// Una sección dentro de una caja con header opcional
+/// A section within a box with optional header
 #[derive(Debug)]
 pub struct BoxSection {
-    /// Título de la sección (None = sin título)
+    /// Section title (None = no title)
     title: Option<String>,
 
-    /// Items en esta sección
+    /// Items in this section
     source: ItemSource,
 
-    /// Si debe incluir separador después del título
+    /// Whether to include separator after title
     separator_after_title: bool,
 
-    /// Estilo del título de la sección
+    /// Section title style
     title_style: SectionStyle,
 }
 
 impl BoxSection {
-    /// Crea una sección con título
+    /// Creates a section with title
     pub fn titled(title: impl Into<String>) -> Self {
         Self {
             title: Some(title.into()),
@@ -63,7 +67,7 @@ impl BoxSection {
         }
     }
 
-    /// Crea una sección sin título
+    /// Creates a section without title
     pub fn untitled() -> Self {
         Self {
             title: None,
@@ -73,9 +77,9 @@ impl BoxSection {
         }
     }
 
-    /// Agrega un item a la sección (solo para modo eager)
+    /// Adds an item to the section (eager mode only)
     ///
-    /// Si la sección es lazy, se convierte a eager primero.
+    /// If the section is lazy, converts to eager first.
     pub fn item(mut self, item: BoxItem) -> Self {
         // Convert lazy to eager if needed
         if let ItemSource::Lazy(iter) =
@@ -89,9 +93,9 @@ impl BoxSection {
         self
     }
 
-    /// Agrega múltiples items eagerly
+    /// Adds multiple items eagerly
     ///
-    /// Si la sección es lazy, se convierte a eager primero.
+    /// If the section is lazy, converts to eager first.
     pub fn items(mut self, new_items: impl IntoIterator<Item = BoxItem>) -> Self {
         // Convert lazy to eager if needed
         if let ItemSource::Lazy(iter) =
@@ -105,7 +109,7 @@ impl BoxSection {
         self
     }
 
-    /// Establece los items usando un iterador lazy
+    /// Sets items using a lazy iterator
     pub fn items_iter<I>(mut self, iter: I) -> Self
     where
         I: Iterator<Item = BoxItem> + 'static,
@@ -114,34 +118,34 @@ impl BoxSection {
         self
     }
 
-    /// Establece si debe haber separador después del título
+    /// Sets whether to show separator after title
     pub fn separator_after_title(mut self, value: bool) -> Self {
         self.separator_after_title = value;
         self
     }
 
-    /// Establece el estilo del título
+    /// Sets the title style
     pub fn style(mut self, style: SectionStyle) -> Self {
         self.title_style = style;
         self
     }
 
-    /// Obtiene el título de la sección
+    /// Gets the section title
     pub(crate) fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
 
-    /// Obtiene el estilo del título
+    /// Gets the title style
     pub(crate) fn title_style(&self) -> SectionStyle {
         self.title_style
     }
 
-    /// Verifica si debe mostrar separador después del título
+    /// Checks if separator should be shown after title
     pub(crate) fn has_separator_after_title(&self) -> bool {
         self.separator_after_title
     }
 
-    /// Convierte a iterador de items (consume la sección)
+    /// Converts to item iterator (consumes section)
     pub(crate) fn into_items(self) -> Box<dyn Iterator<Item = BoxItem>> {
         match self.source {
             ItemSource::Eager(items) => Box::new(items.into_iter()),

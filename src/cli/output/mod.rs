@@ -5,6 +5,7 @@ mod box_item;
 mod box_layout;
 mod box_renderer;
 mod box_section;
+mod cli_output_impls;
 pub mod formatter;
 mod icons;
 mod inspect_formatter;
@@ -16,9 +17,10 @@ pub use box_item::BoxItem;
 pub use box_layout::{BoxLayout, BoxStyle};
 pub use box_renderer::BoxRenderer;
 pub use box_section::{BoxSection, SectionStyle};
+pub use cli_output_impls::ListOutput;
 pub use formatter::{
-    OutputFormatter, create_header_cell, create_header_cells, create_styled_table,
-    format_datetime_utc, format_timestamp_ms,
+    CliOutput, OutputFormatter, create_header_cell, create_header_cells, create_styled_table,
+    format_datetime_utc, format_timestamp_ms, output_result,
 };
 pub use icons::{SeverityIcon, StatusIcon};
 pub use inspect_formatter::InspectionFormatter;

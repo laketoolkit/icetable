@@ -80,22 +80,51 @@ All business logic lives in `src/core/`. This enables:
 Key abstractions use traits for extensibility:
 
 ```rust
-// Metadata service abstraction
-pub trait MetadataService: Send + Sync {
-    fn table(&self) -> &Table;
-    fn file_io(&self) -> &FileIO;
-    async fn commit_changes(&self, changes: DataFileChanges, op: OperationType) -> Result<i64>;
-    async fn list_snapshots(&self) -> Result<Vec<SnapshotInfo>>;
-    async fn list_data_files(&self, snapshot_id: Option<i64>) -> Result<Vec<DataFileInfo>>;
+// Read-only table service operations (src/core/metadata/traits.rs)
+pub trait TableServiceReader: Send + Sync {
+    async fn current_snapshot(&self) -> Result<Option<SnapshotInfo>>;
+    async fn list_data_files(&self) -> Result<Vec<DataFileInfo>>;
+    async fn list_snapshots(&self, limit: Option<usize>) -> Result<Vec<SnapshotInfo>>;
+    fn data_directory(&self) -> PathBuf;
+    async fn scan_data_files_on_storage(&self) -> Result<Vec<DataFileInfo>>;
+    async fn get_all_referenced_files(&self) -> Result<HashSet<String>>;
+    async fn schema(&self) -> Result<Arc<arrow::datatypes::Schema>>;
+    fn object_store(&self) -> Arc<dyn ObjectStore>;
 }
 
-// Catalog context for REST catalog operations
-pub trait CatalogContext: Send + Sync {
-    fn catalog(&self) -> &Arc<dyn Catalog>;
-    fn namespace(&self) -> Option<&str>;
-    fn table(&self) -> Option<&str>;
-    async fn load_table(&self, name: &str) -> Result<Table>;
-    async fn table_exists(&self, name: &str) -> Result<bool>;
+// Write operations - requires catalog for atomic commits
+pub trait TableServiceWriter: TableServiceReader {
+    async fn write_snapshot(
+        &self,
+        changes: DataFileChanges,
+        operation: OperationType,
+        summary: HashMap<String, String>,
+    ) -> Result<SnapshotInfo>;
+}
+
+// Combined trait for backward compatibility
+pub trait MetadataService: TableServiceWriter {}
+```
+
+This separation provides:
+- **Compile-time safety**: Code using `TableServiceReader` cannot accidentally write
+- **Clear intent**: Function signatures indicate read vs write capabilities
+- **Backward compatibility**: `MetadataService` still works for existing code
+
+Resolution context for CLI operations:
+
+```rust
+// Context for table/catalog resolution (src/core/resolution.rs)
+pub struct CatalogContext {
+    pub table: Option<String>,
+    pub namespace: Option<String>,
+    pub catalog: Option<String>,
+    pub warehouse: Option<String>,
+    pub catalog_config: Option<CatalogConfig>,
+}
+
+impl CatalogContext {
+    pub fn table_ref(&self) -> Option<String> { ... }
 }
 ```
 

@@ -5,7 +5,7 @@
 use colored::Colorize;
 
 use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
-use crate::cli::parser::{CliTableContext, RepairArgs};
+use crate::cli::parser::{CatalogContext, RepairArgs};
 use crate::core::extract_filename;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
 use crate::core::metadata::MaintenanceResult;
@@ -27,14 +27,13 @@ pub struct RepairCommand;
 
 impl RepairCommand {
     /// Execute repair command
-    pub async fn execute(args: RepairArgs, ctx: &CliTableContext) -> Result<()> {
+    pub async fn execute(args: RepairArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 
-        // Apply resource limits (timeout, cancellation, memory tracking)
-        const ESTIMATED_MEMORY: u64 = 256 * 1024 * 1024; // 256MB for repair operations
+        use super::constants::MEMORY_INTENSIVE_OPS;
         with_resource_limits(
-            ESTIMATED_MEMORY,
+            MEMORY_INTENSIVE_OPS,
             Self::repair_inner(table_path, args, &resolution, ctx.catalog_config.as_ref()),
         )
         .await

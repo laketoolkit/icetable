@@ -337,3 +337,145 @@ pub struct VacuumResult {
     /// The analysis that was performed
     pub analysis: VacuumAnalysis,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vacuum_config_default() {
+        let config = VacuumConfig::default();
+        assert_eq!(config.retention_hours, sizes::DEFAULT_RETENTION_HOURS);
+        assert!(!config.dry_run);
+        assert_eq!(config.parallelism, 256);
+    }
+
+    #[test]
+    fn test_vacuum_service_creation() {
+        let service = VacuumService::new();
+        assert_eq!(service.config.retention_hours, sizes::DEFAULT_RETENTION_HOURS);
+        assert!(!service.config.dry_run);
+    }
+
+    #[test]
+    fn test_vacuum_service_with_config() {
+        let config = VacuumConfig {
+            retention_hours: 24,
+            dry_run: true,
+            parallelism: 64,
+        };
+        let service = VacuumService::with_config(config);
+        assert_eq!(service.config.retention_hours, 24);
+        assert!(service.config.dry_run);
+        assert_eq!(service.config.parallelism, 64);
+    }
+
+    #[test]
+    fn test_vacuum_analysis_has_files_to_delete_empty() {
+        let analysis = VacuumAnalysis {
+            orphan_files: vec![],
+            orphan_bytes: 0,
+            referenced_count: 100,
+            retention_hours: 168,
+        };
+        assert!(!analysis.has_files_to_delete());
+    }
+
+    #[test]
+    fn test_vacuum_analysis_has_files_to_delete() {
+        let analysis = VacuumAnalysis {
+            orphan_files: vec![OrphanFile {
+                path: "test.parquet".to_string(),
+                size: 1000,
+                mtime_ms: 0,
+            }],
+            orphan_bytes: 1000,
+            referenced_count: 100,
+            retention_hours: 168,
+        };
+        assert!(analysis.has_files_to_delete());
+    }
+
+    #[test]
+    fn test_to_maintenance_result_dry_run() {
+        let service = VacuumService::with_config(VacuumConfig {
+            dry_run: true,
+            ..Default::default()
+        });
+
+        let result = VacuumResult {
+            deleted_count: 0,
+            deleted_bytes: 0,
+            errors: vec![],
+            dry_run: true,
+            analysis: VacuumAnalysis {
+                orphan_files: vec![
+                    OrphanFile {
+                        path: "f1.parquet".to_string(),
+                        size: 1000,
+                        mtime_ms: 0,
+                    },
+                    OrphanFile {
+                        path: "f2.parquet".to_string(),
+                        size: 2000,
+                        mtime_ms: 0,
+                    },
+                ],
+                orphan_bytes: 3000,
+                referenced_count: 10,
+                retention_hours: 168,
+            },
+        };
+
+        let maintenance_result = service.to_maintenance_result(&result);
+        assert_eq!(maintenance_result.operation, "vacuum (dry-run)");
+        assert_eq!(maintenance_result.files_removed, 2);
+        assert_eq!(maintenance_result.bytes_removed, 3000);
+        assert_eq!(maintenance_result.details.get("mode"), Some(&"dry-run".to_string()));
+    }
+
+    #[test]
+    fn test_to_maintenance_result_actual_run() {
+        let service = VacuumService::new();
+
+        let result = VacuumResult {
+            deleted_count: 5,
+            deleted_bytes: 50000,
+            errors: vec![],
+            dry_run: false,
+            analysis: VacuumAnalysis {
+                orphan_files: vec![],
+                orphan_bytes: 0,
+                referenced_count: 10,
+                retention_hours: 168,
+            },
+        };
+
+        let maintenance_result = service.to_maintenance_result(&result);
+        assert_eq!(maintenance_result.operation, "vacuum");
+        assert_eq!(maintenance_result.files_removed, 5);
+        assert_eq!(maintenance_result.bytes_removed, 50000);
+        assert!(!maintenance_result.details.contains_key("mode"));
+    }
+
+    #[test]
+    fn test_to_maintenance_result_with_errors() {
+        let service = VacuumService::new();
+
+        let result = VacuumResult {
+            deleted_count: 3,
+            deleted_bytes: 30000,
+            errors: vec!["Failed to delete file1".to_string()],
+            dry_run: false,
+            analysis: VacuumAnalysis {
+                orphan_files: vec![],
+                orphan_bytes: 0,
+                referenced_count: 10,
+                retention_hours: 168,
+            },
+        };
+
+        let maintenance_result = service.to_maintenance_result(&result);
+        assert_eq!(maintenance_result.details.get("errors"), Some(&"1".to_string()));
+    }
+}

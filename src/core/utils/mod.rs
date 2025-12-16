@@ -1,6 +1,20 @@
-//! Core utility modules
+//! Core/Shared utility modules
 //!
-//! Domain-specific utilities for table operations.
+//! This module contains **shared utilities** that can be used by both core library code
+//! and CLI commands. These utilities have no dependency on terminal/UI libraries.
+//!
+//! # Module Organization
+//!
+//! - `src/core/utils/` - Shared utilities (this module): format detection, file operations, etc.
+//! - `src/utils/` - CLI-specific utilities: progress bars, logging, telemetry, etc.
+//!
+//! # Submodules
+//!
+//! - `format_detection` - Table format detection (Iceberg, Delta, Hudi)
+//! - `fs` - File system operations and path handling
+//! - `iceberg` - Iceberg metadata utilities
+//! - `parquet` - Parquet file reading utilities
+//! - `snapshot` - Snapshot expiration and management utilities
 
 pub mod format_detection;
 pub mod fs;

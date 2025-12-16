@@ -118,7 +118,8 @@ pub struct CreateWarehouseRequest {
     pub properties: HashMap<String, String>,
     /// Storage configuration (endpoint, credentials, etc.)
     /// Keys are vendor-specific (e.g., "s3.endpoint", "s3.access-key-id")
-    pub storage_config: HashMap<String, String>,
+    /// Uses serde_json::Value to preserve original types (bool, number, string)
+    pub storage_config: HashMap<String, serde_json::Value>,
 }
 
 impl CreateWarehouseRequest {
@@ -159,14 +160,25 @@ impl CreateWarehouseRequest {
         self
     }
 
-    /// Add a storage config entry
+    /// Add a storage config entry (string value)
     pub fn with_storage_config(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.storage_config.insert(key.into(), value.into());
+        self.storage_config
+            .insert(key.into(), serde_json::Value::String(value.into()));
         self
     }
 
-    /// Set all storage config from a HashMap
-    pub fn with_storage_config_map(mut self, config: HashMap<String, String>) -> Self {
+    /// Add a storage config entry with a JSON value (preserves type)
+    pub fn with_storage_config_value(
+        mut self,
+        key: impl Into<String>,
+        value: serde_json::Value,
+    ) -> Self {
+        self.storage_config.insert(key.into(), value);
+        self
+    }
+
+    /// Set all storage config from a HashMap of JSON values
+    pub fn with_storage_config_map(mut self, config: HashMap<String, serde_json::Value>) -> Self {
         self.storage_config = config;
         self
     }

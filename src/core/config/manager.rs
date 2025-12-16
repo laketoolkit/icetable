@@ -9,6 +9,49 @@ use std::path::PathBuf;
 use super::{CatalogConfig, ResolvedTable, is_direct_path};
 use crate::error::{Error, Result};
 
+/// Parsed context components from the current context string
+///
+/// Contains the catalog name and optional warehouse, namespace, and table.
+/// See [`Config::parse_current_context`] for the parsing logic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedContext {
+    /// Catalog name (always present)
+    pub catalog: String,
+    /// Warehouse name (if specified with `@` syntax)
+    pub warehouse: Option<String>,
+    /// Namespace name
+    pub namespace: Option<String>,
+    /// Table name
+    pub table: Option<String>,
+}
+
+impl ParsedContext {
+    /// Create a new ParsedContext with just a catalog
+    pub fn catalog_only(catalog: String) -> Self {
+        Self {
+            catalog,
+            warehouse: None,
+            namespace: None,
+            table: None,
+        }
+    }
+
+    /// Create a new ParsedContext with all components
+    pub fn new(
+        catalog: String,
+        warehouse: Option<String>,
+        namespace: Option<String>,
+        table: Option<String>,
+    ) -> Self {
+        Self {
+            catalog,
+            warehouse,
+            namespace,
+            table,
+        }
+    }
+}
+
 /// Configuration file name
 const CONFIG_DIR: &str = "icetable";
 const CONFIG_FILE: &str = "config.yaml";
@@ -132,18 +175,18 @@ impl Config {
             .and_then(|name| self.catalogs.get(name))
     }
 
-    /// Parse the current context into (catalog, warehouse, namespace, table) parts
+    /// Parse the current context into structured components
     ///
     /// Context format: `catalog[@warehouse][.namespace][.table]`
-    /// Examples:
-    /// - `polaris` → (polaris, None, None, None)
-    /// - `polaris@iceberg` → (polaris, Some(iceberg), None, None)
-    /// - `polaris@iceberg.demo` → (polaris, Some(iceberg), Some(demo), None)
-    /// - `polaris@iceberg.demo.events` → (polaris, Some(iceberg), Some(demo), Some(events))
-    /// - `polaris.demo.events` → (polaris, None, Some(demo), Some(events)) (legacy format)
-    pub fn parse_current_context(
-        &self,
-    ) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
+    ///
+    /// # Examples
+    ///
+    /// - `polaris` → `ParsedContext { catalog: "polaris", .. }`
+    /// - `polaris@iceberg` → `ParsedContext { catalog: "polaris", warehouse: Some("iceberg"), .. }`
+    /// - `polaris@iceberg.demo` → includes namespace "demo"
+    /// - `polaris@iceberg.demo.events` → includes table "events"
+    /// - `polaris.demo.events` → legacy format without warehouse
+    pub fn parse_current_context(&self) -> Option<ParsedContext> {
         let context = self.current_context.as_ref()?;
 
         // Split on '@' first to extract warehouse
@@ -154,14 +197,19 @@ impl Config {
             // Split the rest on '.' to get warehouse and namespace.table
             let parts: Vec<&str> = after_at.splitn(3, '.').collect();
             match parts.len() {
-                1 => Some((catalog, Some(parts[0].to_string()), None, None)),
-                2 => Some((
+                1 => Some(ParsedContext::new(
+                    catalog,
+                    Some(parts[0].to_string()),
+                    None,
+                    None,
+                )),
+                2 => Some(ParsedContext::new(
                     catalog,
                     Some(parts[0].to_string()),
                     Some(parts[1].to_string()),
                     None,
                 )),
-                3 => Some((
+                3 => Some(ParsedContext::new(
                     catalog,
                     Some(parts[0].to_string()),
                     Some(parts[1].to_string()),
@@ -173,14 +221,14 @@ impl Config {
             // Legacy format without warehouse: catalog[.namespace][.table]
             let parts: Vec<&str> = context.splitn(3, '.').collect();
             match parts.len() {
-                1 => Some((parts[0].to_string(), None, None, None)),
-                2 => Some((
+                1 => Some(ParsedContext::catalog_only(parts[0].to_string())),
+                2 => Some(ParsedContext::new(
                     parts[0].to_string(),
                     None,
                     Some(parts[1].to_string()),
                     None,
                 )),
-                3 => Some((
+                3 => Some(ParsedContext::new(
                     parts[0].to_string(),
                     None,
                     Some(parts[1].to_string()),
@@ -193,17 +241,20 @@ impl Config {
 
     /// Get the current warehouse from context (if any)
     pub fn get_current_warehouse(&self) -> Option<String> {
-        self.parse_current_context().and_then(|(_, wh, _, _)| wh)
+        self.parse_current_context()
+            .and_then(|ctx| ctx.warehouse)
     }
 
     /// Get the current namespace from context (if any)
     pub fn get_current_namespace(&self) -> Option<String> {
-        self.parse_current_context().and_then(|(_, _, ns, _)| ns)
+        self.parse_current_context()
+            .and_then(|ctx| ctx.namespace)
     }
 
     /// Get the current table name from context (if any)
     pub fn get_current_table(&self) -> Option<String> {
-        self.parse_current_context().and_then(|(_, _, _, tbl)| tbl)
+        self.parse_current_context()
+            .and_then(|ctx| ctx.table)
     }
 
     /// Add a catalog configuration

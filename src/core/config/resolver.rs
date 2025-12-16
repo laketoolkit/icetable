@@ -48,7 +48,7 @@ impl ResolvedTable {
     }
 }
 
-/// Extension trait for resolving table paths from Option<String>
+/// Extension trait for resolving table paths from `Option<String>`
 ///
 /// This provides a clean API: `args.path.resolve()?`
 pub trait ResolvePath {
@@ -87,7 +87,7 @@ impl ResolvePath for Option<String> {
     }
 }
 
-/// Extension trait for resolving table references from Option<String>
+/// Extension trait for resolving table references from `Option<String>`
 ///
 /// This provides a clean API: `args.path.resolve_ref()?`
 /// Returns the full ResolvedTable including catalog information

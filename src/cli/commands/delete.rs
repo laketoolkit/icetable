@@ -8,7 +8,7 @@ use colored::Colorize;
 
 use super::common::resolve_catalog;
 use crate::cli::parser::{
-    CliTableContext, DeleteArgs, DeleteCommands, NamespaceDeleteArgs, TableDeleteArgs,
+    CatalogContext, DeleteArgs, DeleteCommands, NamespaceDeleteArgs, TableDeleteArgs,
 };
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
@@ -18,19 +18,19 @@ pub struct DeleteCommand;
 
 impl DeleteCommand {
     /// Execute delete command
-    pub async fn execute(args: DeleteArgs, ctx: &CliTableContext) -> Result<()> {
-        const ESTIMATED_MEMORY: u64 = 32 * 1024 * 1024;
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args, ctx)).await
+    pub async fn execute(args: DeleteArgs, ctx: &CatalogContext) -> Result<()> {
+        use super::constants::MEMORY_LIGHT_OPS;
+        with_resource_limits(MEMORY_LIGHT_OPS, Self::execute_inner(args, ctx)).await
     }
 
-    async fn execute_inner(args: DeleteArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_inner(args: DeleteArgs, ctx: &CatalogContext) -> Result<()> {
         match args.command {
             DeleteCommands::Namespace(ns_args) => Self::delete_namespace(ns_args, ctx).await,
             DeleteCommands::Table(tbl_args) => Self::delete_tables(tbl_args, ctx).await,
         }
     }
 
-    async fn delete_namespace(args: NamespaceDeleteArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn delete_namespace(args: NamespaceDeleteArgs, ctx: &CatalogContext) -> Result<()> {
         // Create a modified context with the namespace from args
         let mut ctx = ctx.clone();
         ctx.namespace = Some(args.name.clone());
@@ -58,7 +58,7 @@ impl DeleteCommand {
         Ok(())
     }
 
-    async fn delete_tables(args: TableDeleteArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn delete_tables(args: TableDeleteArgs, ctx: &CatalogContext) -> Result<()> {
         let catalog = resolve_catalog(ctx).await?;
 
         // Must have namespace

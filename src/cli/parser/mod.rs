@@ -43,7 +43,7 @@ use std::path::PathBuf;
 
 use crate::core::config::CredentialSource;
 
-/// CLI for managing Apache Iceberg tables - inspect, optimize, vacuum, and more
+/// CLI for managing Apache Iceberg tables - inspect, optimize, and more
 #[derive(Parser, Debug)]
 #[command(name = "icetable")]
 #[command(version, about, long_about = None)]
@@ -190,7 +190,11 @@ pub struct Cli {
 
 /// Available commands
 #[derive(Subcommand, Debug)]
+#[command(subcommand_value_name = "COMMAND", infer_subcommands = true)]
 pub enum Commands {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Data Operations
+    // ─────────────────────────────────────────────────────────────────────────
     /// List namespaces or tables
     Ls(LsArgs),
 
@@ -200,14 +204,9 @@ pub enum Commands {
     /// Delete namespace or table
     Delete(DeleteArgs),
 
-    /// Analyze table health
-    Analyze(AnalyzeArgs),
-
-    /// Create empty table (local path)
-    Init(InitArgs),
-
-    /// Inspect table metadata
-    Inspect(InspectArgs),
+    /// Show table info (schema, stats, health)
+    #[command(visible_alias = "d")]
+    Describe(DescribeArgs),
 
     /// Validate file integrity
     Validate(ValidateArgs),
@@ -215,28 +214,30 @@ pub enum Commands {
     /// Compare snapshots/branches/tags
     Diff(DiffArgs),
 
-    /// Compute statistics
-    Stats(StatsArgs),
-
-    /// View version history
-    History(HistoryArgs),
-
-    /// Clean up unreferenced files
-    Vacuum(VacuumArgs),
-
-    /// Compact data and metadata
+    /// Import from external sources
     #[command(subcommand)]
-    Optimize(OptimizeCommands),
+    Import(ImportCommands),
 
-    /// Manage snapshots
-    Snapshot(SnapshotArgs),
+    // ─────────────────────────────────────────────────────────────────────────
+    // Maintenance
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Optimize table (compact, vacuum, manifests)
+    #[command(subcommand, visible_alias = "o")]
+    Optimize(OptimizeCommands),
 
     /// Repair table metadata
     Repair(RepairArgs),
 
-    /// Import from external sources
-    #[command(subcommand)]
-    Import(ImportCommands),
+    // ─────────────────────────────────────────────────────────────────────────
+    // Version Control
+    // ─────────────────────────────────────────────────────────────────────────
+    /// View version history
+    #[command(visible_alias = "h")]
+    History(HistoryArgs),
+
+    /// Manage snapshots
+    #[command(visible_alias = "s")]
+    Snapshot(SnapshotArgs),
 
     /// Manage branches
     Branch(BranchArgs),
@@ -244,74 +245,49 @@ pub enum Commands {
     /// Manage tags
     Tag(TagArgs),
 
-    /// Manage configuration
-    Config(ConfigArgs),
+    // ─────────────────────────────────────────────────────────────────────────
+    // Administration
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Administrative operations (config, warehouses, auth)
+    Admin(AdminArgs),
 
+    /// Diagnose environment health
+    Doctor(DoctorArgs),
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Utilities
+    // ─────────────────────────────────────────────────────────────────────────
     /// Generate synthetic test data
     Generate(GenerateArgs),
 
     /// Generate shell completions
     Completions(CompletionsArgs),
 
-    /// Diagnose environment health
-    Doctor(DoctorArgs),
-
-    /// Administrative operations (warehouses, auth)
-    Admin(AdminArgs),
-
     /// Print all global options
     Options,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Hidden (deprecated)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Analyze table health
+    #[command(hide = true)]
+    Analyze(AnalyzeArgs),
+
+    /// Inspect table metadata
+    #[command(visible_alias = "i", hide = true)]
+    Inspect(InspectArgs),
+
+    /// Compute statistics
+    #[command(hide = true)]
+    Stats(StatsArgs),
 
     /// Interactive Terminal UI
     #[cfg(feature = "tui")]
     Tui(TuiArgs),
 }
 
-/// Global context for table operations
-///
-/// Contains the global options from CLI that are relevant to table operations.
-/// This is passed to commands instead of individual parameters.
-#[derive(Debug, Clone)]
-pub struct CliTableContext {
-    /// Table name or path (e.g., "namespace.table" or "s3://bucket/path")
-    pub table: Option<String>,
-    /// Namespace (e.g., "db.schema")
-    pub namespace: Option<String>,
-    /// Catalog name (from -c/--catalog)
-    pub catalog: Option<String>,
-    /// Warehouse within catalog (from -w/--warehouse)
-    pub warehouse: Option<String>,
-    /// Catalog configuration from CLI (ad-hoc --catalog-uri)
-    pub catalog_config: Option<crate::core::CatalogConfig>,
-}
-
-impl CliTableContext {
-    /// Get the full table reference, combining namespace and table if both are present
-    ///
-    /// If both namespace and table are specified, returns "namespace.table".
-    /// If only table is specified, returns the table as-is.
-    /// If neither is specified, returns None.
-    pub fn table_ref(&self) -> Option<String> {
-        match (&self.namespace, &self.table) {
-            (Some(ns), Some(t)) => {
-                // If table already contains namespace (has '.'), use it as-is
-                if t.contains('.')
-                    || t.starts_with("s3://")
-                    || t.starts_with("gs://")
-                    || t.starts_with("az://")
-                    || t.starts_with("file://")
-                    || t.starts_with("/")
-                {
-                    Some(t.clone())
-                } else {
-                    Some(format!("{}.{}", ns, t))
-                }
-            }
-            (None, Some(t)) => Some(t.clone()),
-            _ => None,
-        }
-    }
-}
+// Re-export CatalogContext from core for CLI commands
+pub use crate::core::resolution::CatalogContext;
 
 impl Cli {
     /// Build catalog configuration from CLI options
@@ -341,8 +317,8 @@ impl Cli {
     }
 
     /// Build table context from CLI global options
-    pub fn table_context(&self) -> CliTableContext {
-        CliTableContext {
+    pub fn table_context(&self) -> CatalogContext {
+        CatalogContext {
             table: self.table.clone(),
             namespace: self.namespace.clone(),
             catalog: self.catalog.clone(),

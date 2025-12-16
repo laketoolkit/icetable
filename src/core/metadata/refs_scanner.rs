@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::{StreamExt, TryStreamExt};
 use iceberg::table::StaticTable;
-use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::error::Result;
+use crate::utils::create_progress_bar;
 
 /// Scan all snapshots and return set of all referenced data files
 ///
@@ -23,14 +23,7 @@ pub async fn scan_all_referenced_files(table: &StaticTable) -> Result<HashSet<St
     // Collect snapshot IDs upfront to avoid lifetime issues with async closures
     let snapshot_ids: Vec<i64> = metadata.snapshots().map(|s| s.snapshot_id()).collect();
 
-    let pb = ProgressBar::new(snapshot_ids.len() as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("  {spinner:.cyan} Scanning snapshots {bar:30.dim.white/dim} {pos}/{len}")
-            .expect("hardcoded progress template is valid")
-            .progress_chars("━━╺"),
-    );
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    let pb = create_progress_bar(snapshot_ids.len() as u64, "Scanning snapshots");
 
     // Counter for progress updates
     let progress_counter = Arc::new(AtomicU64::new(0));

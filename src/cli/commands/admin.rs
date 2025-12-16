@@ -12,9 +12,10 @@ use super::common::print_json;
 use crate::cli::output::create_styled_table;
 use crate::cli::parser::{
     AdminArgs, AdminCommands, AuthArgs, AuthCommands, AuthLoginArgs, AuthLogoutArgs,
-    AuthStatusArgs, CliTableContext, WarehouseArgs, WarehouseCommands, WarehouseCreateArgs,
+    AuthStatusArgs, CatalogContext, WarehouseArgs, WarehouseCommands, WarehouseCreateArgs,
     WarehouseDeleteArgs, WarehouseLsArgs,
 };
+use super::ConfigCommand;
 use crate::config::{
     AuthService, CatalogAuth, CatalogProvider, Config, CredentialSource, LogoutResult,
 };
@@ -28,8 +29,9 @@ pub struct AdminCommand;
 
 impl AdminCommand {
     /// Execute admin command
-    pub async fn execute(args: AdminArgs, ctx: &CliTableContext) -> Result<()> {
+    pub async fn execute(args: AdminArgs, ctx: &CatalogContext) -> Result<()> {
         match args.command {
+            AdminCommands::Config(args) => ConfigCommand::execute(args).await,
             AdminCommands::Warehouse(args) => Self::warehouse(args, ctx).await,
             AdminCommands::Auth(args) => Self::auth(args, ctx).await,
         }
@@ -40,7 +42,7 @@ impl AdminCommand {
     // =========================================================================
 
     /// Handle auth subcommands
-    async fn auth(args: AuthArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn auth(args: AuthArgs, ctx: &CatalogContext) -> Result<()> {
         match args.command {
             AuthCommands::Login(args) => Self::auth_login(args, ctx).await,
             AuthCommands::Logout(args) => Self::auth_logout(args, ctx).await,
@@ -49,7 +51,7 @@ impl AdminCommand {
     }
 
     /// Login to a catalog (store credentials)
-    async fn auth_login(args: AuthLoginArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn auth_login(args: AuthLoginArgs, ctx: &CatalogContext) -> Result<()> {
         // Create service and resolve catalog name
         let mut service = AuthService::new()?;
         let catalog_name = service.resolve_catalog_name(ctx.catalog.as_deref())?;
@@ -125,7 +127,7 @@ impl AdminCommand {
     }
 
     /// Logout from a catalog (remove stored credentials)
-    async fn auth_logout(args: AuthLogoutArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn auth_logout(args: AuthLogoutArgs, ctx: &CatalogContext) -> Result<()> {
         // Create service and delegate business logic
         let mut service = AuthService::new()?;
         let result = service.logout(ctx.catalog.as_deref(), args.all)?;
@@ -159,7 +161,7 @@ impl AdminCommand {
     }
 
     /// Show authentication status for catalog(s)
-    async fn auth_status(args: AuthStatusArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn auth_status(args: AuthStatusArgs, ctx: &CatalogContext) -> Result<()> {
         // Create service for business logic
         let service = AuthService::new()?;
 
@@ -229,9 +231,8 @@ impl AdminCommand {
 
                 if !status.catalog_exists {
                     println!(
-                        "  {} {}",
-                        "Warning:".yellow(),
-                        "Catalog not found in config"
+                        "  {} Catalog not found in config",
+                        "Warning:".yellow()
                     );
                 }
 
@@ -288,7 +289,7 @@ impl AdminCommand {
     // =========================================================================
 
     /// Handle warehouse subcommands
-    async fn warehouse(args: WarehouseArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn warehouse(args: WarehouseArgs, ctx: &CatalogContext) -> Result<()> {
         match args.command {
             WarehouseCommands::Ls(args) => Self::warehouse_ls(args, ctx).await,
             WarehouseCommands::Create(args) => Self::warehouse_create(args, ctx).await,
@@ -297,7 +298,7 @@ impl AdminCommand {
     }
 
     /// List warehouses
-    async fn warehouse_ls(args: WarehouseLsArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn warehouse_ls(args: WarehouseLsArgs, ctx: &CatalogContext) -> Result<()> {
         let (catalog_name, client) = Self::get_management_client(ctx).await?;
 
         if !client.supports_management() {
@@ -358,7 +359,7 @@ impl AdminCommand {
     }
 
     /// Create a warehouse
-    async fn warehouse_create(args: WarehouseCreateArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn warehouse_create(args: WarehouseCreateArgs, ctx: &CatalogContext) -> Result<()> {
         // Handle --examples flag
         if args.examples {
             let provider = Self::get_current_provider(ctx)?;
@@ -367,8 +368,12 @@ impl AdminCommand {
         }
 
         // At this point, name and location are guaranteed by clap's required_unless_present
-        let name = args.name.as_ref().expect("name required");
-        let location = args.location.as_ref().expect("location required");
+        let name = args.name.as_ref().ok_or_else(|| Error::Configuration {
+            message: "warehouse name is required (use --name or --examples)".to_string(),
+        })?;
+        let location = args.location.as_ref().ok_or_else(|| Error::Configuration {
+            message: "warehouse location is required (use --location or --examples)".to_string(),
+        })?;
 
         let (catalog_name, client) = Self::get_management_client(ctx).await?;
 
@@ -401,6 +406,13 @@ impl AdminCommand {
             "Location:".dimmed(),
             warehouse.default_base_location
         );
+        println!();
+        println!(
+            "{} icetable admin config use {} -w {}",
+            "Activate:".dimmed(),
+            catalog_name,
+            warehouse.name
+        );
 
         Ok(())
     }
@@ -412,10 +424,11 @@ impl AdminCommand {
     /// - File path: ./storage-config.json or /path/to/config.json
     ///
     /// --config-set entries override --config values
+    /// Returns HashMap<String, serde_json::Value> to preserve original types (bool, number, string)
     fn parse_storage_config(
         config: &Option<String>,
         config_set: &[(String, String)],
-    ) -> Result<HashMap<String, String>> {
+    ) -> Result<HashMap<String, serde_json::Value>> {
         let mut result = HashMap::new();
 
         // Parse --config if provided
@@ -423,23 +436,13 @@ impl AdminCommand {
             let config_str = config_str.trim();
 
             if config_str.starts_with('{') {
-                // Inline JSON
+                // Inline JSON - preserve original types
                 let parsed: HashMap<String, serde_json::Value> =
                     serde_json::from_str(config_str).map_err(|e| Error::Parse {
                         message: format!("Invalid JSON in --config: {}", e),
                         source: Some(Box::new(e)),
                     })?;
-
-                // Convert all values to strings
-                for (key, value) in parsed {
-                    let str_value = match value {
-                        serde_json::Value::String(s) => s,
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        _ => value.to_string(),
-                    };
-                    result.insert(key, str_value);
-                }
+                result = parsed;
             } else {
                 // File path
                 let path = Path::new(config_str);
@@ -453,30 +456,21 @@ impl AdminCommand {
                         message: format!("Invalid JSON in config file '{}': {}", config_str, e),
                         source: Some(Box::new(e)),
                     })?;
-
-                // Convert all values to strings
-                for (key, value) in parsed {
-                    let str_value = match value {
-                        serde_json::Value::String(s) => s,
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        _ => value.to_string(),
-                    };
-                    result.insert(key, str_value);
-                }
+                result = parsed;
             }
         }
 
         // Apply --config-set overrides (higher priority)
+        // These are always strings since they come from CLI key=value pairs
         for (key, value) in config_set {
-            result.insert(key.clone(), value.clone());
+            result.insert(key.clone(), serde_json::Value::String(value.clone()));
         }
 
         Ok(result)
     }
 
     /// Delete a warehouse
-    async fn warehouse_delete(args: WarehouseDeleteArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn warehouse_delete(args: WarehouseDeleteArgs, ctx: &CatalogContext) -> Result<()> {
         let (catalog_name, client) = Self::get_management_client(ctx).await?;
 
         if !client.supports_management() {
@@ -486,6 +480,11 @@ impl AdminCommand {
                     client.catalog_type()
                 ),
             });
+        }
+
+        // If --force, delete all contents first
+        if args.force {
+            Self::force_delete_warehouse_contents(&catalog_name, &args.name, ctx).await?;
         }
 
         client.delete_warehouse(&args.name).await?;
@@ -500,8 +499,61 @@ impl AdminCommand {
         Ok(())
     }
 
+    /// Force delete all contents of a warehouse (namespaces and tables)
+    async fn force_delete_warehouse_contents(
+        catalog_name: &str,
+        warehouse_name: &str,
+        _ctx: &CatalogContext,
+    ) -> Result<()> {
+        use crate::core::catalog::RestCatalogClient;
+
+        // Load config and create a catalog client with the warehouse
+        let config = Config::load()?;
+        let mut catalog_config = config
+            .catalogs
+            .get(catalog_name)
+            .cloned()
+            .ok_or_else(|| Error::CatalogNotFound {
+                name: catalog_name.to_string(),
+            })?;
+        catalog_config.warehouse = Some(warehouse_name.to_string());
+
+        let rest_client = RestCatalogClient::with_name(&catalog_config, Some(catalog_name)).await?;
+
+        // List all namespaces
+        let namespaces = match rest_client.list_namespaces(None).await {
+            Ok(ns) => ns,
+            Err(_) => return Ok(()), // No namespaces or error, continue with delete
+        };
+
+        // Delete contents of each namespace
+        for ns in &namespaces {
+            let ns_name = ns.join(".");
+
+            // List and delete tables in namespace
+            if let Ok(tables) = rest_client.list_tables(ns).await {
+                for table in &tables {
+                    print!("  {} {}.{} ... ", "Deleting".dimmed(), ns_name, table);
+                    match rest_client.delete_table(ns, table, true).await {
+                        Ok(_) => println!("{}", "ok".green()),
+                        Err(e) => println!("{} ({})", "failed".red(), e),
+                    }
+                }
+            }
+
+            // Delete namespace
+            print!("  {} {} ... ", "Deleting namespace".dimmed(), ns_name);
+            match rest_client.delete_namespace(ns).await {
+                Ok(_) => println!("{}", "ok".green()),
+                Err(e) => println!("{} ({})", "failed".red(), e),
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get the provider for the current catalog (from context or config)
-    fn get_current_provider(ctx: &CliTableContext) -> Result<CatalogProvider> {
+    fn get_current_provider(ctx: &CatalogContext) -> Result<CatalogProvider> {
         let config = Config::load()?;
 
         let catalog_name = ctx
@@ -528,16 +580,22 @@ impl AdminCommand {
         match provider {
             CatalogProvider::Polaris => {
                 println!("# MinIO (local development)");
+                println!("# Key: skipCredentialSubscopingIndirection=true disables STS");
                 println!("icetable admin warehouse create mywarehouse \\");
                 println!("  --location s3://bucket/warehouse \\");
-                println!("  --config-set s3.endpoint=http://localhost:9000 \\");
-                println!("  --config-set s3.path-style-access=true");
+                println!("  --config '{{\"endpoint\":\"http://localhost:9000\",\"pathStyleAccess\":true,\"skipCredentialSubscopingIndirection\":true,\"s3.credentials.catalog.accessKeyId\":\"minioadmin\",\"s3.credentials.catalog.secretAccessKey\":\"minioadmin\"}}'");
+                println!();
+                println!("# Or use a config file (recommended for readability):");
+                println!("icetable admin warehouse create mywarehouse \\");
+                println!("  --location s3://bucket/warehouse \\");
+                println!("  --config ./minio-storage.json");
                 println!();
 
-                println!("# AWS S3");
+                println!("# AWS S3 (with IAM role)");
                 println!("icetable admin warehouse create mywarehouse \\");
                 println!("  --location s3://bucket/warehouse \\");
-                println!("  --config-set s3.region=eu-west-1");
+                println!("  --config-set region=eu-west-1 \\");
+                println!("  --config-set roleArn=arn:aws:iam::123456789:role/polaris-access");
                 println!();
 
                 println!("# GCS");
@@ -578,7 +636,7 @@ impl AdminCommand {
     ///
     /// Uses credentials from credentials.yaml if available.
     async fn get_management_client(
-        ctx: &CliTableContext,
+        ctx: &CatalogContext,
     ) -> Result<(String, Box<dyn CatalogManagement>)> {
         let config = Config::load()?;
 

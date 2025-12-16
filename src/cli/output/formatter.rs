@@ -36,9 +36,66 @@ pub fn format_timestamp_ms(timestamp_ms: i64) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Format a DateTime<Utc> to human-readable string with UTC suffix
+/// Format a `DateTime<Utc>` to human-readable string with UTC suffix
 pub fn format_datetime_utc(dt: &chrono::DateTime<chrono::Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
+/// Trait for types that can be displayed in CLI output
+///
+/// Implement this trait for result types that need to be displayed
+/// in both text and JSON formats. The trait requires `Serialize` for JSON output.
+///
+/// # Example
+///
+/// ```ignore
+/// use icetable::cli::output::CliOutput;
+///
+/// struct MyResult {
+///     count: u32,
+///     message: String,
+/// }
+///
+/// impl CliOutput for MyResult {
+///     fn format_text(&self) -> String {
+///         format!("Count: {}\nMessage: {}", self.count, self.message)
+///     }
+/// }
+///
+/// // In command handler:
+/// let result = MyResult { count: 42, message: "done".into() };
+/// output_result(&result, output_format)?;
+/// ```
+pub trait CliOutput: serde::Serialize {
+    /// Format the result as human-readable text
+    fn format_text(&self) -> String;
+}
+
+/// Output a result in the specified format
+///
+/// This is the standard way to output command results. It handles
+/// JSON vs text formatting automatically based on the output format.
+pub fn output_result<T: CliOutput>(result: &T, format: &str) -> crate::error::Result<()> {
+    match format {
+        "json" => {
+            let json = serde_json::to_string_pretty(result)
+                .map_err(|e| crate::error::Error::Serialization {
+                    message: format!("JSON serialization failed: {}", e),
+                })?;
+            println!("{}", json);
+        }
+        "yaml" => {
+            let yaml = serde_yaml::to_string(result)
+                .map_err(|e| crate::error::Error::Serialization {
+                    message: format!("YAML serialization failed: {}", e),
+                })?;
+            print!("{}", yaml);
+        }
+        _ => {
+            println!("{}", result.format_text());
+        }
+    }
+    Ok(())
 }
 
 /// Output formatter for different formats

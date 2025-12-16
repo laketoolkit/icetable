@@ -8,26 +8,11 @@ pub use crate::core::resolution::{
     no_table_error, resolve_catalog_from_context, resolve_table, resolve_table_path,
 };
 
-// Re-export CliTableContext for convenience (used by resolve_table_from_context)
-use crate::cli::parser::CliTableContext;
-
-impl From<&CliTableContext> for CatalogContext {
-    fn from(ctx: &CliTableContext) -> Self {
-        CatalogContext {
-            table: ctx.table.clone(),
-            namespace: ctx.namespace.clone(),
-            catalog: ctx.catalog.clone(),
-            warehouse: ctx.warehouse.clone(),
-        }
-    }
-}
-
-/// Resolve catalog context from CLI table context
+/// Resolve catalog context from CLI context
 ///
-/// Convenience wrapper that converts `CliTableContext` to `CatalogContext`
-/// and delegates to `resolve_catalog_from_context`.
-pub async fn resolve_catalog(ctx: &CliTableContext) -> crate::error::Result<CatalogResolution> {
-    resolve_catalog_from_context(&CatalogContext::from(ctx)).await
+/// Delegates to `resolve_catalog_from_context` from core.
+pub async fn resolve_catalog(ctx: &CatalogContext) -> crate::error::Result<CatalogResolution> {
+    resolve_catalog_from_context(ctx).await
 }
 
 /// Resolve a table from global context
@@ -35,7 +20,7 @@ pub async fn resolve_catalog(ctx: &CliTableContext) -> crate::error::Result<Cata
 /// This is the primary entry point for resolving tables from CLI commands.
 /// Uses the global `-t/--table` and `-n/--namespace` options along with
 /// catalog configuration.
-pub async fn resolve_table_from_context(ctx: &CliTableContext) -> Result<TableResolution> {
+pub async fn resolve_table_from_context(ctx: &CatalogContext) -> Result<TableResolution> {
     let table_ref = ctx.table_ref();
     resolve_table(&table_ref, ctx.catalog_config.as_ref()).await
 }
@@ -67,22 +52,8 @@ pub fn print_version_if_present(new_version: Option<i64>) {
     }
 }
 
-/// Create a spinner progress bar for long-running operations
-///
-/// Returns a spinner with the given message that ticks every 100ms
-pub fn create_spinner(message: &str) -> indicatif::ProgressBar {
-    use indicatif::{ProgressBar, ProgressStyle};
-    use std::time::Duration;
-
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{{spinner:.cyan}} {}...", message))
-            .expect("hardcoded progress template is valid"),
-    );
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb
-}
+// Re-export progress utilities from utils
+pub use crate::utils::{create_progress_bar, create_spinner};
 
 /// Print dry-run output for ref delete operations (branch/tag)
 ///
@@ -104,4 +75,37 @@ pub fn extract_table_name(path: &str) -> &str {
         .rsplit('/')
         .next()
         .unwrap_or("table")
+}
+
+/// Output data in the specified format (json/yaml/text)
+///
+/// Helper that reduces boilerplate for commands that output structured data.
+/// For text output, the provided closure is called to format the data.
+///
+/// # Example
+/// ```ignore
+/// output_formatted(&args.output, &data, || {
+///     println!("Files: {}", data.files);
+///     println!("Size: {}", data.size);
+/// })
+/// ```
+pub fn output_formatted<T, F>(format: &str, data: &T, text_formatter: F) -> Result<()>
+where
+    T: serde::Serialize,
+    F: FnOnce(),
+{
+    match format {
+        "json" => print_json(data),
+        "yaml" => {
+            let yaml = serde_yaml::to_string(data).map_err(|e| Error::Serialization {
+                message: format!("YAML serialization failed: {}", e),
+            })?;
+            print!("{}", yaml);
+            Ok(())
+        }
+        _ => {
+            text_formatter();
+            Ok(())
+        }
+    }
 }

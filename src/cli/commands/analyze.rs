@@ -8,7 +8,7 @@ use comfy_table::{Cell, CellAlignment};
 
 use super::common::{create_spinner, extract_table_name, print_json, resolve_table_from_context};
 use crate::cli::output::create_styled_table;
-use crate::cli::parser::{AnalyzeArgs, CliTableContext};
+use crate::cli::parser::{AnalyzeArgs, CatalogContext};
 use crate::core::analysis::{
     AnalysisConfig, AnalyzeService, DataCompactionAnalysis, ManifestCompactionAnalysis,
     OrphanFilesAnalysis, SnapshotExpirationAnalysis,
@@ -22,14 +22,13 @@ pub struct AnalyzeCommand;
 
 impl AnalyzeCommand {
     /// Execute analyze command
-    pub async fn execute(args: AnalyzeArgs, ctx: &CliTableContext) -> Result<()> {
+    pub async fn execute(args: AnalyzeArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location();
 
-        // Apply resource limits (timeout, cancellation, memory tracking)
-        const ESTIMATED_MEMORY: u64 = 128 * 1024 * 1024; // 128MB for analysis
+        use super::constants::MEMORY_HEAVY_OPS;
         with_resource_limits(
-            ESTIMATED_MEMORY,
+            MEMORY_HEAVY_OPS,
             Self::analyze_iceberg(&table_path, &args, &resolution),
         )
         .await

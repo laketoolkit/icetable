@@ -1,6 +1,48 @@
 //! Progress tracking for long-running operations
 
+use std::time::Duration;
+
 use indicatif::{ProgressBar, ProgressStyle};
+
+// =============================================================================
+// Simple factory functions (preferred API)
+// =============================================================================
+
+/// Create a spinner for indeterminate operations
+///
+/// Use this when you don't know the total count upfront.
+pub fn create_spinner(message: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template(&format!("{{spinner:.cyan}} {}...", message))
+            .expect("hardcoded progress template is valid"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb
+}
+
+/// Create a progress bar for operations with known total
+///
+/// Use this when you know how many items will be processed.
+pub fn create_progress_bar(total: u64, action: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(&format!(
+                "{{spinner:.green}} {} {{bar:30.cyan/blue}} {{percent}}% {{msg}}",
+                action
+            ))
+            .expect("hardcoded progress template is valid")
+            .progress_chars("━━╺"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb
+}
+
+// =============================================================================
+// ProgressTracker (alternative API with more control)
+// =============================================================================
 
 /// Display mode for progress indication
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

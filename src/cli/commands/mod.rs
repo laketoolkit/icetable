@@ -3,6 +3,8 @@
 pub mod admin;
 pub mod analyze;
 pub mod common;
+pub mod constants;
+pub mod describe;
 pub mod config;
 pub mod create;
 pub mod delete;
@@ -25,10 +27,14 @@ pub mod validate;
 #[cfg(feature = "tui")]
 pub mod tui;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export command handlers
 pub use admin::AdminCommand;
 pub use analyze::AnalyzeCommand;
 pub use config::ConfigCommand;
+pub use describe::DescribeCommand;
 pub use create::CreateCommand;
 pub use delete::DeleteCommand;
 pub use diff::DiffCommand;

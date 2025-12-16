@@ -1,33 +1,38 @@
-/// Un elemento individual en una sección de caja
+//! Box item types for content within sections
+//!
+//! Items are the individual content elements (text, key-value pairs, separators)
+//! that appear within box sections.
+
+/// An individual element in a box section
 #[derive(Debug, Clone)]
 pub enum BoxItem {
-    /// Línea de texto simple (puede incluir ANSI codes)
+    /// Simple text line (may include ANSI codes)
     Text(String),
 
-    /// Par clave-valor con alineación
+    /// Key-value pair with alignment
     KeyValue {
         /// The key portion of the key-value pair
         key: String,
         /// The value portion of the key-value pair
         value: String,
-        /// Ancho de alineación para la clave (None = sin padding extra)
+        /// Key alignment width (None = no extra padding)
         key_width: Option<usize>,
     },
 
-    /// Separador horizontal
+    /// Horizontal separator
     Separator,
 
-    /// Línea vacía
+    /// Empty line
     Empty,
 }
 
 impl BoxItem {
-    /// Crea un item de texto simple
+    /// Creates a simple text item
     pub fn text(s: impl Into<String>) -> Self {
         BoxItem::Text(s.into())
     }
 
-    /// Crea un item key-value sin alineación específica
+    /// Creates a key-value item without specific alignment
     pub fn kv(key: impl Into<String>, value: impl Into<String>) -> Self {
         BoxItem::KeyValue {
             key: key.into(),
@@ -36,7 +41,7 @@ impl BoxItem {
         }
     }
 
-    /// Crea un item key-value con ancho de clave específico para alineación
+    /// Creates a key-value item with specific key width for alignment
     pub fn kv_aligned(key: impl Into<String>, value: impl Into<String>, key_width: usize) -> Self {
         BoxItem::KeyValue {
             key: key.into(),
@@ -45,12 +50,12 @@ impl BoxItem {
         }
     }
 
-    /// Crea un separador horizontal
+    /// Creates a horizontal separator
     pub fn separator() -> Self {
         BoxItem::Separator
     }
 
-    /// Crea una línea vacía
+    /// Creates an empty line
     pub fn empty() -> Self {
         BoxItem::Empty
     }

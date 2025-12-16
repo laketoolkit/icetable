@@ -6,6 +6,7 @@
 pub mod commands;
 pub mod output;
 pub mod parser;
+pub mod utils;
 
 pub use output::OutputFormatter;
 pub use parser::{Cli, Commands};

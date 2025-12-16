@@ -5,22 +5,25 @@
 //! Subcommands:
 //! - `data`: Compact small data files into larger ones
 //! - `manifests`: Rewrite and compact manifest files
+//! - `vacuum`: Clean up unreferenced files
 
 use colored::Colorize;
 
 use super::common::{
     TableResolution, print_dry_run_header, print_json, resolve_table_from_context,
 };
+use super::VacuumCommand;
 use crate::cli::parser::{
-    CliTableContext, OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs,
+    CatalogContext, OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs,
 };
+use crate::cli::utils::IndicatifReporter;
 use crate::core::maintenance::{
     MaintenanceConfig, ManifestConfig, ManifestService, OptimizeService,
 };
 use crate::core::metadata::MaintenanceResult;
 use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
-use crate::utils::core::parse_bytes;
+use crate::core::utils::parse_bytes;
 use crate::utils::with_resource_limits;
 
 /// Handler for optimize command
@@ -28,15 +31,16 @@ pub struct OptimizeCommand;
 
 impl OptimizeCommand {
     /// Execute optimize command
-    pub async fn execute(cmd: OptimizeCommands, ctx: &CliTableContext) -> Result<()> {
+    pub async fn execute(cmd: OptimizeCommands, ctx: &CatalogContext) -> Result<()> {
         match cmd {
             OptimizeCommands::Data(args) => Self::execute_data(args, ctx).await,
             OptimizeCommands::Manifests(args) => Self::execute_manifests(args, ctx).await,
+            OptimizeCommands::Vacuum(args) => VacuumCommand::execute(args, ctx).await,
         }
     }
 
     /// Execute optimize data subcommand
-    async fn execute_data(args: OptimizeDataArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_data(args: OptimizeDataArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 
@@ -61,7 +65,13 @@ impl OptimizeCommand {
             ..Default::default()
         };
 
-        let service = OptimizeService::with_config(config);
+        // Create service with progress reporter (skip for dry-run as it doesn't process files)
+        let service = if args.dry_run {
+            OptimizeService::with_config(config)
+        } else {
+            let progress = IndicatifReporter::spinner("Analyzing files...").arc();
+            OptimizeService::with_config(config).with_progress(progress)
+        };
 
         // Apply resource limits (timeout, cancellation, memory tracking)
         let estimated_memory = args.target_size * args.max_concurrent_tasks as u64;
@@ -82,7 +92,7 @@ impl OptimizeCommand {
     }
 
     /// Execute optimize manifests subcommand
-    async fn execute_manifests(args: OptimizeManifestsArgs, ctx: &CliTableContext) -> Result<()> {
+    async fn execute_manifests(args: OptimizeManifestsArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 

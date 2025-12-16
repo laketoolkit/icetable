@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use colored::Colorize;
 
-use super::common::{no_namespace_error, no_table_error, print_json, resolve_catalog};
-use crate::cli::parser::{CliTableContext, GenerateArgs, SchemaTemplate as CliSchemaTemplate};
+use super::common::{create_progress_bar, no_namespace_error, no_table_error, print_json, resolve_catalog};
+use crate::cli::parser::{CatalogContext, GenerateArgs, SchemaTemplate as CliSchemaTemplate};
 use crate::core::format_bytes;
 use crate::core::operations::generate::{
-    ExistingTableInfo, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
+    ExistingTableInfo, GenerateOperation, GenerateResult, ProgressCallback, SchemaTemplate,
+    parse_schema_string,
 };
 use crate::error::Result;
 
@@ -20,7 +21,7 @@ pub struct GenerateCommand;
 
 impl GenerateCommand {
     /// Execute generate command
-    pub async fn execute(args: GenerateArgs, ctx: &CliTableContext) -> Result<()> {
+    pub async fn execute(args: GenerateArgs, ctx: &CatalogContext) -> Result<()> {
         // Resolve catalog context (error propagates with full context)
         let catalog = resolve_catalog(ctx).await?;
 
@@ -107,6 +108,20 @@ impl GenerateCommand {
         println!("  Files: {}", args.files);
         println!("  Total rows: {}", total_rows);
 
+        // Create progress bar for text output (skip for JSON)
+        let (progress, pb): (Option<ProgressCallback>, Option<indicatif::ProgressBar>) =
+            if args.output != "json" {
+                let pb = create_progress_bar(args.files as u64, "Writing");
+                let pb_clone = pb.clone();
+                let callback: ProgressCallback = Arc::new(move |completed, total| {
+                    pb_clone.set_position(completed as u64);
+                    pb_clone.set_message(format!("{}/{} files", completed, total));
+                });
+                (Some(callback), Some(pb))
+            } else {
+                (None, None)
+            };
+
         // Execute with catalog for proper commits
         let result = GenerateOperation::execute_with_catalog(
             table,
@@ -115,8 +130,14 @@ impl GenerateCommand {
             total_rows,
             args.files,
             args.seed.unwrap_or(42),
+            progress,
         )
         .await?;
+
+        // Finish progress bar
+        if let Some(pb) = pb {
+            pb.finish_with_message("done");
+        }
 
         Self::print_result(&result, &args.output);
 

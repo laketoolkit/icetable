@@ -31,9 +31,8 @@ pub struct DoctorCommand;
 impl DoctorCommand {
     /// Execute doctor command
     pub async fn execute(args: DoctorArgs) -> Result<()> {
-        // Apply resource limits (timeout, cancellation, memory tracking)
-        const ESTIMATED_MEMORY: u64 = 64 * 1024 * 1024; // 64MB for doctor checks
-        with_resource_limits(ESTIMATED_MEMORY, Self::execute_inner(args)).await
+        use super::constants::MEMORY_MEDIUM_OPS;
+        with_resource_limits(MEMORY_MEDIUM_OPS, Self::execute_inner(args)).await
     }
 
     async fn execute_inner(args: DoctorArgs) -> Result<()> {
@@ -98,16 +97,14 @@ impl DoctorCommand {
         }
 
         // If no cloud storage configured, note that
-        if !storage_types.uses_s3 && !storage_types.uses_gcs && !storage_types.uses_azure {
-            if let Ok(config) = Config::load() {
-                if config.tables.is_empty() && config.catalogs.is_empty() {
+        if !storage_types.uses_s3 && !storage_types.uses_gcs && !storage_types.uses_azure
+            && let Ok(config) = Config::load()
+                && config.tables.is_empty() && config.catalogs.is_empty() {
                     checks.push(CheckResult::ok(
                         "Cloud credentials",
                         "No cloud storage configured (local paths only)",
                     ));
                 }
-            }
-        }
 
         if args.storage {
             checks.push(DoctorService::check_storage_connectivity().await);
@@ -245,30 +242,30 @@ impl DoctorCommand {
         };
 
         // Check current context - validate each part individually
-        if let Some((catalog, warehouse, namespace, table)) = config.parse_current_context() {
+        if let Some(ctx) = config.parse_current_context() {
             // Build context description
-            let mut parts = vec![catalog.clone()];
-            if let Some(ref wh) = warehouse {
+            let mut parts = vec![ctx.catalog.clone()];
+            if let Some(ref wh) = ctx.warehouse {
                 parts.push(format!("@{}", wh));
             }
-            if let Some(ref ns) = namespace {
+            if let Some(ref ns) = ctx.namespace {
                 parts.push(format!(".{}", ns));
             }
-            if let Some(ref tbl) = table {
+            if let Some(ref tbl) = ctx.table {
                 parts.push(format!(".{}", tbl));
             }
             let context_str = parts.join("");
 
             // Check catalog exists
-            if config.catalogs.contains_key(&catalog) {
+            if config.catalogs.contains_key(&ctx.catalog) {
                 checks.push(CheckResult::ok(
                     "Current context",
-                    format!("{} (catalog '{}' found)", context_str, catalog),
+                    format!("{} (catalog '{}' found)", context_str, ctx.catalog),
                 ));
             } else {
                 checks.push(CheckResult::warning(
                     "Current context",
-                    format!("{} (catalog '{}' not found in config)", context_str, catalog),
+                    format!("{} (catalog '{}' not found in config)", context_str, ctx.catalog),
                     "Run 'icetable config add-catalog' to add the catalog",
                 ));
             }

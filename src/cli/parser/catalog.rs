@@ -52,7 +52,7 @@ pub struct CreateArgs {
 pub enum CreateCommands {
     /// Create a namespace
     Namespace(NamespaceCreateArgs),
-    /// Create a table
+    /// Create a table (catalog or path-based)
     Table(TableCreateArgs),
 }
 
@@ -68,26 +68,46 @@ pub struct NamespaceCreateArgs {
 }
 
 /// Arguments for creating a table
+///
+/// Detects table type from name:
+/// - Path-based (no catalog): starts with /, s3://, gs://, az://, file://, abfss://
+/// - Catalog-based: namespace.table format
 #[derive(Parser, Debug)]
 pub struct TableCreateArgs {
-    /// Table name
+    /// Table name or path
+    ///
+    /// Path-based: /path/to/table, s3://bucket/path, file://...
+    /// Catalog-based: namespace.table (requires --schema)
     pub name: String,
 
-    /// Schema file (JSON)
+    /// Schema file (JSON) - required for catalog tables, optional for path-based
     #[arg(long)]
-    pub schema: PathBuf,
+    pub schema: Option<PathBuf>,
 
     /// Partition columns (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub partition_by: Option<Vec<String>>,
 
-    /// Table location (optional)
+    /// Table location (catalog tables only)
     #[arg(long)]
     pub location: Option<String>,
 
     /// Properties (key=value, repeatable)
     #[arg(short, long, value_parser = super::parse_key_value)]
     pub property: Vec<(String, String)>,
+}
+
+impl TableCreateArgs {
+    /// Check if this is a path-based table (no catalog)
+    pub fn is_path_based(&self) -> bool {
+        self.name.starts_with('/')
+            || self.name.starts_with("s3://")
+            || self.name.starts_with("s3a://")
+            || self.name.starts_with("gs://")
+            || self.name.starts_with("az://")
+            || self.name.starts_with("abfss://")
+            || self.name.starts_with("file://")
+    }
 }
 
 // ============================================================================

@@ -1,6 +1,23 @@
-//! Utility modules
+//! CLI Utility modules
 //!
-//! Unified utilities for both CLI and core operations.
+//! This module contains **CLI-specific** utilities that depend on terminal/UI libraries
+//! like indicatif. These should NOT be used by core library code.
+//!
+//! # Module Organization
+//!
+//! - `src/utils/` - CLI utilities (this module): progress bars, logging, telemetry, etc.
+//! - `src/core/utils/` - Shared/core utilities: format detection, file operations, etc.
+//!
+//! # For Core Services
+//!
+//! Core services should use:
+//! - `crate::core::progress::ProgressReporter` trait for progress reporting
+//! - `crate::core::utils::*` for shared utilities
+//!
+//! # Re-exports for Backward Compatibility
+//!
+//! This module re-exports `crate::core::utils::*` for backward compatibility.
+//! New code should import directly from `crate::core::utils` instead.
 
 // CLI utilities
 pub mod box_frame;
@@ -13,9 +30,6 @@ pub mod text;
 pub mod time;
 pub mod types;
 
-// Core/domain utilities
-pub mod core;
-
 // CLI re-exports
 pub use box_frame::create_box_frame;
 pub use cancellation::{
@@ -27,7 +41,7 @@ pub use logging::{LogLevel, init_logger};
 
 // Re-export CredentialSource from core::config for backward compatibility
 pub use crate::core::config::CredentialSource;
-pub use progress::ProgressTracker;
+pub use progress::{ProgressTracker, create_progress_bar, create_spinner};
 pub use resources::{
     ResourceLimits, current_memory_usage, get_resource_limits, init_resource_limits,
     release_memory, track_memory_usage, with_resource_limits, with_timeout,
@@ -37,8 +51,9 @@ pub use text::{strip_ansi_codes, visual_width, wrap_line};
 pub use time::{parse_relative_duration, parse_timestamp};
 pub use types::parse_data_type;
 
-// Core re-exports
-pub use core::{
+// Core re-exports (from crate::core::utils for backward compatibility)
+pub use crate::core::utils as core;
+pub use crate::core::utils::{
     ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, WriteMetadataResult, detect_format,
     detect_table_format, detect_table_format_async, determine_cutoff_timestamp,
     determine_snapshots_to_expire, extract_version_from_path, find_latest_metadata, format_bytes,
