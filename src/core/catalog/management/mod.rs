@@ -6,8 +6,8 @@
 //! These operations are NOT part of the standard Iceberg REST Catalog API,
 //! but are specific to each catalog implementation.
 
-mod traits;
 pub mod polaris;
+mod traits;
 
 pub use traits::{CatalogManagement, UnsupportedManagement};
 

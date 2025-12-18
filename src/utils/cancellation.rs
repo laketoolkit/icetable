@@ -99,8 +99,16 @@ pub struct CancellationToken {
 }
 
 impl CancellationToken {
-    /// Check if cancelled
+    /// Check if this specific token is cancelled
+    ///
+    /// Note: This only checks the local token state. For global cancellation,
+    /// use the `is_cancelled()` function directly.
     pub fn is_cancelled(&self) -> bool {
+        *self.receiver.borrow()
+    }
+
+    /// Check if cancelled (either local token or global)
+    pub fn is_cancelled_global(&self) -> bool {
         *self.receiver.borrow() || is_cancelled()
     }
 
@@ -136,8 +144,19 @@ impl CancellationTokenSource {
     }
 
     /// Cancel all operations using this token
+    ///
+    /// Note: This only cancels the local token. Use `cancel_global()` to also
+    /// trigger global cancellation (e.g., for signal handlers).
     pub fn cancel(&self) {
         let _ = self.sender.send(true);
+    }
+
+    /// Cancel this token and trigger global cancellation
+    ///
+    /// Use this when handling signals to ensure both local and global
+    /// cancellation is triggered.
+    pub fn cancel_global(&self) {
+        self.cancel();
         request_cancellation();
     }
 }
@@ -245,9 +264,13 @@ async fn wait_for_cancellation() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    // Tests that use global state must run serially to avoid race conditions.
+    // The #[serial] attribute ensures these tests don't run in parallel.
 
     #[test]
-    #[ignore] // Flaky: uses global state shared with other tests
+    #[serial]
     fn test_cancellation_flag() {
         reset_cancellation();
         assert!(!is_cancelled());
@@ -260,24 +283,57 @@ mod tests {
     }
 
     #[test]
-    fn test_cancellation_token_source() {
+    fn test_cancellation_token_source_isolated() {
+        // This test uses only local token state - fully isolated, no #[serial] needed
         let cts = CancellationTokenSource::new();
         let token = cts.token();
 
         assert!(!token.is_cancelled());
 
-        cts.cancel();
+        cts.cancel(); // Only affects local token, not global state
         assert!(token.is_cancelled());
     }
 
+    #[test]
+    #[serial]
+    fn test_cancellation_token_global() {
+        reset_cancellation();
+        let cts = CancellationTokenSource::new();
+        let token = cts.token();
+
+        assert!(!token.is_cancelled_global());
+
+        // Cancel local only
+        cts.cancel();
+        assert!(token.is_cancelled());
+        // is_cancelled_global returns true because local is cancelled
+        assert!(token.is_cancelled_global());
+
+        reset_cancellation();
+    }
+
     #[tokio::test]
-    #[ignore] // Flaky: uses global state shared with other tests
+    #[serial]
     async fn test_check_cancellation() {
         reset_cancellation();
         assert!(check_cancellation().is_ok());
 
         request_cancellation();
         assert!(check_cancellation().is_err());
+
+        reset_cancellation();
+    }
+
+    #[test]
+    #[serial]
+    fn test_cancel_global() {
+        reset_cancellation();
+        let cts = CancellationTokenSource::new();
+
+        assert!(!is_cancelled());
+        cts.cancel_global();
+        assert!(is_cancelled());
+        assert!(cts.token().is_cancelled());
 
         reset_cancellation();
     }

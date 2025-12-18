@@ -50,7 +50,7 @@ impl Serialize for CredentialSource {
     {
         match self {
             CredentialSource::Inline(s) => {
-                // For backward compatibility: plain strings serialize as simple YAML strings
+                // Inline credentials serialize as simple YAML strings for user convenience
                 serializer.serialize_str(s)
             }
             CredentialSource::EnvVar(var) => {
@@ -103,7 +103,7 @@ impl<'de> Deserialize<'de> for CredentialSource {
             where
                 E: serde_de::Error,
             {
-                // Plain string → Inline credential (backward compatibility)
+                // Plain string in YAML → Inline credential (user convenience)
                 Ok(CredentialSource::Inline(value.to_string()))
             }
 
@@ -151,10 +151,31 @@ impl<'de> Deserialize<'de> for CredentialSource {
 }
 
 impl CredentialSource {
+    /// Check if inline credentials are being used and warn the user
+    fn warn_inline_credentials() {
+        // Allow suppression via environment variable for CI/testing
+        if std::env::var("ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS").is_ok() {
+            return;
+        }
+
+        eprintln!(
+            "\x1b[33mWarning: Using inline (plain text) credentials is not recommended for production.\x1b[0m"
+        );
+        eprintln!(
+            "\x1b[33m         Consider using environment variables (env-var) or IAM roles (iam-role) instead.\x1b[0m"
+        );
+        eprintln!(
+            "\x1b[33m         Set ICETABLE_SUPPRESS_CREDENTIAL_WARNINGS=1 to suppress this warning.\x1b[0m"
+        );
+    }
+
     /// Resolve credential to a string token/secret
     pub fn resolve(&self) -> Result<Option<String>> {
         match self {
-            CredentialSource::Inline(s) => Ok(Some(s.clone())),
+            CredentialSource::Inline(s) => {
+                Self::warn_inline_credentials();
+                Ok(Some(s.clone()))
+            }
             CredentialSource::EnvVar(var) => {
                 std::env::var(var)
                     .map(Some)

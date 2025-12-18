@@ -200,9 +200,13 @@ pub struct SortFieldInfo {
     pub null_order: String,
 }
 
-/// Snapshot information
+/// Detailed snapshot information for inspection
+///
+/// Note: This is different from `crate::core::metadata::traits::InspectSnapshotDetail`
+/// which is a simpler type used by the TableServiceReader trait.
+/// This type contains additional fields needed for detailed inspection.
 #[derive(Debug, Clone, Serialize)]
-pub struct SnapshotInfo {
+pub struct InspectSnapshotDetail {
     /// Snapshot ID
     pub snapshot_id: i64,
     /// Sequence number (for conflict resolution)
@@ -356,7 +360,7 @@ pub struct IcebergInspectResult {
     // SNAPSHOTS (for verbose mode)
     // ═══════════════════════════════════════════════════════════════════════════
     /// Snapshot history
-    pub snapshots: Vec<SnapshotInfo>,
+    pub snapshots: Vec<InspectSnapshotDetail>,
 }
 
 /// Inspector for Iceberg tables using native iceberg-rs API
@@ -511,14 +515,14 @@ impl IcebergTableInspector {
         // ═══════════════════════════════════════════════════════════════════════
         // SNAPSHOTS (for verbose mode)
         // ═══════════════════════════════════════════════════════════════════════
-        let snapshots: Vec<SnapshotInfo> = if options.verbose {
+        let snapshots: Vec<InspectSnapshotDetail> = if options.verbose {
             metadata
                 .snapshots()
                 .map(|s| {
                     let summary = s.summary();
                     let props = &summary.additional_properties;
 
-                    SnapshotInfo {
+                    InspectSnapshotDetail {
                         snapshot_id: s.snapshot_id(),
                         sequence_number: s.sequence_number(),
                         timestamp_ms: s.timestamp_ms(),

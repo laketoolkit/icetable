@@ -5,17 +5,11 @@
 //! - `ls tables` - list tables in namespace
 //! - `ls` (no subcommand) - auto-detect from context
 
-use colored::Colorize;
-
-use super::common::{print_json, resolve_catalog, CatalogResolution};
+use super::common::{CatalogResolution, resolve_catalog};
+use crate::cli::output::{LsFormatter, LsRefInfo, LsSnapshotInfo};
 use crate::cli::parser::{CatalogContext, LsArgs, LsCommands};
 use crate::core::metadata::{IcebergMetadataService, TableServiceReader};
-use crate::error::Result;
-
-/// Tree drawing characters
-const TREE_BRANCH: &str = "├── ";
-const TREE_LAST: &str = "└── ";
-const TREE_INDENT: &str = "│   ";
+use crate::error::{Error, Result};
 
 /// Handler for ls command
 pub struct LsCommand;
@@ -27,12 +21,8 @@ impl LsCommand {
         let catalog = resolve_catalog(ctx).await?;
 
         match args.command {
-            Some(LsCommands::Namespaces) => {
-                Self::list_namespaces(&catalog, &args.output).await
-            }
-            Some(LsCommands::Tables) => {
-                Self::list_tables(&catalog, &args.output).await
-            }
+            Some(LsCommands::Namespaces) => Self::list_namespaces(&catalog, &args.output).await,
+            Some(LsCommands::Tables) => Self::list_tables(&catalog, &args.output).await,
             None => {
                 // Auto-detect from context (backwards compatible behavior)
                 Self::auto_detect(&catalog, &args.output).await
@@ -45,13 +35,16 @@ impl LsCommand {
         let namespaces = catalog.list_namespaces().await?;
 
         if output == "json" {
-            let json = serde_json::json!({
-                "catalog": catalog.catalog_name,
-                "namespaces": namespaces.iter().map(|ns| ns.join(".")).collect::<Vec<_>>(),
-            });
-            print_json(&json)?;
+            let json_str = LsFormatter::format_namespaces_json(&catalog.catalog_name, &namespaces)
+                .map_err(|e| Error::Serialization {
+                    message: e.to_string(),
+                })?;
+            println!("{}", json_str);
         } else {
-            Self::print_namespaces_tree(&catalog.catalog_name, &namespaces);
+            println!(
+                "{}",
+                LsFormatter::format_namespaces_tree(&catalog.catalog_name, &namespaces)
+            );
         }
 
         Ok(())
@@ -59,24 +52,27 @@ impl LsCommand {
 
     /// List tables in namespace
     async fn list_tables(catalog: &CatalogResolution, output: &str) -> Result<()> {
-        let namespace = catalog.namespace().ok_or_else(|| {
-            crate::error::Error::MissingArgument {
-                argument: "-n/--namespace".to_string(),
-                description: "Namespace required to list tables. Use -n or set context with 'icetable config use'".to_string(),
-            }
+        let namespace = catalog.namespace().ok_or_else(|| Error::MissingArgument {
+            argument: "-n/--namespace".to_string(),
+            description:
+                "Namespace required to list tables. Use -n or set context with 'icetable config use'"
+                    .to_string(),
         })?;
 
         let tables = catalog.list_tables().await?;
 
         if output == "json" {
-            let json = serde_json::json!({
-                "catalog": catalog.catalog_name,
-                "namespace": namespace,
-                "tables": tables,
-            });
-            print_json(&json)?;
+            let json_str =
+                LsFormatter::format_tables_json(&catalog.catalog_name, namespace, &tables)
+                    .map_err(|e| Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+            println!("{}", json_str);
         } else {
-            Self::print_tables_tree(&catalog.catalog_name, namespace, &tables);
+            println!(
+                "{}",
+                LsFormatter::format_tables_tree(&catalog.catalog_name, namespace, &tables)
+            );
         }
 
         Ok(())
@@ -121,173 +117,59 @@ impl LsCommand {
         let tags: Vec<_> = refs.iter().filter(|r| r.ref_type == "tag").collect();
 
         if output == "json" {
-            let json = serde_json::json!({
-                "catalog": &catalog.catalog_name,
-                "namespace": namespace,
-                "table": table_name,
-                "location": location,
-                "snapshots": snapshots.len(),
-                "branches": branches.iter().map(|b| &b.name).collect::<Vec<_>>(),
-                "tags": tags.iter().map(|t| &t.name).collect::<Vec<_>>(),
-            });
-            print_json(&json)?;
-        } else {
-            Self::print_table_info_tree(
+            let branch_names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+            let tag_names: Vec<&str> = tags.iter().map(|t| t.name.as_str()).collect();
+
+            let json_str = LsFormatter::format_table_info_json(
                 &catalog.catalog_name,
                 namespace,
                 table_name,
-                &snapshots,
-                &branches,
-                &tags,
+                location,
+                snapshots.len(),
+                &branch_names,
+                &tag_names,
+            )
+            .map_err(|e| Error::Serialization {
+                message: e.to_string(),
+            })?;
+            println!("{}", json_str);
+        } else {
+            // Convert to formatter types
+            let snapshot_infos: Vec<LsSnapshotInfo> = snapshots
+                .iter()
+                .map(|s| LsSnapshotInfo {
+                    id: s.id,
+                    operation: s.operation.clone(),
+                })
+                .collect();
+
+            let branch_infos: Vec<LsRefInfo> = branches
+                .iter()
+                .map(|b| LsRefInfo {
+                    name: b.name.clone(),
+                })
+                .collect();
+
+            let tag_infos: Vec<LsRefInfo> = tags
+                .iter()
+                .map(|t| LsRefInfo {
+                    name: t.name.clone(),
+                })
+                .collect();
+
+            println!(
+                "{}",
+                LsFormatter::format_table_info_tree(
+                    &catalog.catalog_name,
+                    namespace,
+                    table_name,
+                    &snapshot_infos,
+                    &branch_infos,
+                    &tag_infos,
+                )
             );
         }
 
         Ok(())
-    }
-
-    /// Print table info in tree format
-    fn print_table_info_tree(
-        catalog: &str,
-        namespace: &str,
-        table: &str,
-        snapshots: &[crate::core::metadata::SnapshotInfo],
-        branches: &[&crate::core::metadata::RefInfo],
-        tags: &[&crate::core::metadata::RefInfo],
-    ) {
-        println!(
-            "{}.{}.{}",
-            catalog.cyan(),
-            namespace.cyan(),
-            table.cyan().bold()
-        );
-
-        // Snapshots
-        let is_last_section = branches.is_empty() && tags.is_empty();
-        let prefix = if is_last_section {
-            TREE_LAST
-        } else {
-            TREE_BRANCH
-        };
-        println!(
-            "{}{} {}",
-            prefix,
-            "snapshots".yellow(),
-            format!("({})", snapshots.len()).dimmed()
-        );
-
-        // Show last 3 snapshots
-        let recent: Vec<_> = snapshots.iter().take(3).collect();
-        let indent = if is_last_section { "    " } else { TREE_INDENT };
-        for (i, snap) in recent.iter().enumerate() {
-            let snap_prefix = if i == recent.len() - 1 {
-                TREE_LAST
-            } else {
-                TREE_BRANCH
-            };
-            println!(
-                "{}{}#{} {}",
-                indent,
-                snap_prefix,
-                snap.id.to_string().dimmed(),
-                snap.operation.dimmed()
-            );
-        }
-        if snapshots.len() > 3 {
-            println!(
-                "{}{}... and {} more",
-                indent,
-                TREE_LAST,
-                snapshots.len() - 3
-            );
-        }
-
-        // Branches
-        if !branches.is_empty() || !tags.is_empty() {
-            let is_last_section = tags.is_empty();
-            let prefix = if is_last_section {
-                TREE_LAST
-            } else {
-                TREE_BRANCH
-            };
-            println!(
-                "{}{} {}",
-                prefix,
-                "branches".yellow(),
-                format!("({})", branches.len()).dimmed()
-            );
-
-            let indent = if is_last_section { "    " } else { TREE_INDENT };
-            for (i, branch) in branches.iter().enumerate() {
-                let is_last = i == branches.len() - 1;
-                let branch_prefix = if is_last { TREE_LAST } else { TREE_BRANCH };
-                let current_marker = if branch.name == "main" { " *" } else { "" };
-                println!(
-                    "{}{}{}{}",
-                    indent,
-                    branch_prefix,
-                    branch.name,
-                    current_marker.green()
-                );
-            }
-        }
-
-        // Tags
-        if !tags.is_empty() {
-            println!(
-                "{}{} {}",
-                TREE_LAST,
-                "tags".yellow(),
-                format!("({})", tags.len()).dimmed()
-            );
-
-            for (i, tag) in tags.iter().enumerate() {
-                let is_last = i == tags.len() - 1;
-                let tag_prefix = if is_last { TREE_LAST } else { TREE_BRANCH };
-                println!("    {}{}", tag_prefix, tag.name);
-            }
-        }
-    }
-
-    /// Print namespaces in tree format
-    fn print_namespaces_tree(catalog: &str, namespaces: &[Vec<String>]) {
-        println!(
-            "{} {}",
-            catalog.cyan(),
-            format!("({})", namespaces.len()).dimmed()
-        );
-
-        if namespaces.is_empty() {
-            println!("{}{}", TREE_LAST, "(empty)".dimmed());
-            return;
-        }
-
-        let len = namespaces.len();
-        for (i, ns) in namespaces.iter().enumerate() {
-            let is_last = i == len - 1;
-            let prefix = if is_last { TREE_LAST } else { TREE_BRANCH };
-            println!("{}{}", prefix, ns.join("."));
-        }
-    }
-
-    /// Print tables in tree format
-    fn print_tables_tree(catalog: &str, namespace: &str, tables: &[String]) {
-        println!(
-            "{}.{} {}",
-            catalog.cyan(),
-            namespace.cyan(),
-            format!("({})", tables.len()).dimmed()
-        );
-
-        if tables.is_empty() {
-            println!("{}{}", TREE_LAST, "(empty)".dimmed());
-            return;
-        }
-
-        let len = tables.len();
-        for (i, table) in tables.iter().enumerate() {
-            let is_last = i == len - 1;
-            let prefix = if is_last { TREE_LAST } else { TREE_BRANCH };
-            println!("{}{}", prefix, table);
-        }
     }
 }

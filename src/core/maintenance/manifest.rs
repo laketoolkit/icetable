@@ -228,10 +228,7 @@ impl ManifestService {
     /// Analyze manifests for potential rewrite (dry-run mode)
     ///
     /// Uses `MetadataServiceReader` trait to access table metadata and FileIO.
-    pub async fn analyze<S: MetadataServiceReader>(
-        &self,
-        service: &S,
-    ) -> Result<ManifestAnalysis> {
+    pub async fn analyze<S: MetadataServiceReader>(&self, service: &S) -> Result<ManifestAnalysis> {
         let (metadata, _) = service.load_metadata().await?;
         let file_io = service.file_io().clone();
 

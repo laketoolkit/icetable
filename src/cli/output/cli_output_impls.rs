@@ -197,11 +197,7 @@ impl<T: CliOutput + serde::Serialize> CliOutput for ListOutput<T> {
             return "No items found.".dimmed().to_string();
         }
 
-        let mut lines: Vec<String> = self
-            .items
-            .iter()
-            .map(|item| item.format_text())
-            .collect();
+        let mut lines: Vec<String> = self.items.iter().map(|item| item.format_text()).collect();
 
         lines.push(String::new());
         lines.push(format!("Total: {} items", self.total).dimmed().to_string());

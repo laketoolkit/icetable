@@ -132,9 +132,6 @@ pub mod utils;
 pub mod validation;
 
 // Re-export commonly used types
-pub use utils::{
-    TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
-};
 pub use catalog::{CatalogClient, RestCatalogClient, TableCommitter, TableRef};
 pub use commit::{CommitResult, DirectCommitter, SnapshotCommitter};
 pub use config::{
@@ -145,11 +142,12 @@ pub use formats::{FormatHandler, FormatHandlerFactory};
 pub use inspection::{PhysicalInspectionService, PhysicalInspector, PhysicalMetadata};
 pub use storage::{ObjectStoreExt, Storage, create_object_store};
 pub use table_loader::{TableExt, TableLoader};
+pub use utils::{
+    TableFormat, detect_table_format, detect_table_format_async, format_bytes, generate_unique_id,
+};
 
 // Re-export metadata service types and traits
-pub use metadata::{
-    IcebergMetadataService, TableServiceReader, TableServiceWriter,
-};
+pub use metadata::{IcebergMetadataService, TableServiceReader, TableServiceWriter};
 
 // Re-export resolution types for table/catalog resolution
 pub use resolution::{
@@ -159,7 +157,7 @@ pub use resolution::{
 
 // Re-export formatting utilities for consistent access across CLI
 pub use inspection::formatters::{
-    extract_filename, format_count, format_number, format_percentage, format_size,
+    extract_filename, format_count, format_number, format_percentage,
 };
 
 // Re-export iceberg types used by CLI to avoid direct iceberg:: dependency

@@ -1,9 +1,63 @@
 //! Optimize service for compacting small files
 //!
-//! This service handles file compaction for both Iceberg tables
+//! This service handles file compaction for Iceberg tables
 //! by using the MetadataService trait for transactional operations.
 //!
-//! Features:
+//! # Architecture
+//!
+//! The optimization pipeline is split into two modules:
+//! - `mod.rs` - Service API and orchestration
+//! - `pipeline.rs` - Internal types and helper functions
+//!
+//! # Concurrency Model
+//!
+//! The optimization pipeline uses a producer-consumer pattern with async channels:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                    Partition Processing                         │
+//! │  (buffer_unordered with configurable parallelism)               │
+//! └─────────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                   Per-Partition Pipeline                        │
+//! │                                                                 │
+//! │  ┌──────────┐   ┌──────────┐   ┌──────────┐                    │
+//! │  │ Reader 1 │   │ Reader 2 │   │ Reader N │  (8-32 concurrent)  │
+//! │  └────┬─────┘   └────┬─────┘   └────┬─────┘                    │
+//! │       │              │              │                          │
+//! │       └──────────────┼──────────────┘                          │
+//! │                      │                                         │
+//! │                      ▼                                         │
+//! │            ┌─────────────────┐                                 │
+//! │            │  async_channel  │  (bounded, memory-limited)      │
+//! │            └────────┬────────┘                                 │
+//! │                     │                                          │
+//! │       ┌─────────────┼─────────────┐                            │
+//! │       │             │             │                            │
+//! │       ▼             ▼             ▼                            │
+//! │  ┌─────────┐   ┌─────────┐   ┌─────────┐  (1-8 writers)       │
+//! │  │Writer 1 │   │Writer 2 │   │Writer N │                       │
+//! │  └─────────┘   └─────────┘   └─────────┘                       │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Dynamic Concurrency Tuning
+//!
+//! - **Read concurrency**: 8-32 based on average file size
+//!   - Small files (<10KB): 32 readers
+//!   - Large files (>10MB): 4 readers
+//!
+//! - **Write concurrency**: 1-8 based on cores and expected output
+//!   - `min(cores, expected_files).clamp(1, 8)`
+//!
+//! - **Channel size**: Memory-aware bounded channel
+//!   - With `--max-memory`: `(limit / 2) / 5MB_per_batch`
+//!   - Without: `writers * readers * 4`
+//!
+//! # Features
+//!
 //! - **True streaming**: Batches are streamed directly from readers to writer
 //!   without accumulating in memory
 //! - **Concurrent partitions**: Uses async concurrency for I/O-bound partition
@@ -12,13 +66,12 @@
 //!   to avoid OOM and produce optimally-sized files
 //! - **Cloud storage support**: Works with S3, GCS, Azure through object_store
 
+mod pipeline;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
-use arrow_cast::cast;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::ObjectStore;
 use object_store::path::Path as ObjectPath;
@@ -33,54 +86,13 @@ use crate::core::metadata::{
 };
 use crate::core::progress::{OptionalProgress, ProgressReporter};
 use crate::error::{Error, Result};
-use crate::utils::core::{format_bytes, generate_unique_id, normalize_relative_path};
+use crate::utils::core::{format_bytes, generate_unique_id};
 use crate::utils::resources::get_resource_limits;
 
-/// Result of compacting a single partition group
-struct CompactionResult {
-    added: Vec<DataFileInfo>,
-    removed: Vec<DataFileInfo>,
-}
-
-/// Message type for the reader-writer pipeline channel
-enum BatchMessage {
-    /// A record batch to write (already coerced if needed)
-    Batch(RecordBatch),
-    /// All readers are done - writers should finish and exit
-    Done,
-    /// An error occurred during reading
-    Error(String),
-}
-
-/// Calculate optimal subgroup size based on workload characteristics
-fn calculate_optimal_subgroup_size(
-    total_files: usize,
-    total_bytes: u64,
-    parallelism: usize,
-) -> usize {
-    if total_files == 0 {
-        return 100;
-    }
-
-    let avg_file_size = total_bytes / total_files as u64;
-
-    // Base size adjusted by file size (smaller files = smaller groups for more parallelism)
-    let size_factor = match avg_file_size {
-        0..=1_000_000 => 100,           // <1MB: small files, groups of ~100
-        1_000_001..=10_000_000 => 200,  // 1-10MB: groups of ~200
-        10_000_001..=50_000_000 => 350, // 10-50MB: groups of ~350
-        50_000_001..=100_000_000 => 500, // 50-100MB: groups of ~500
-        _ => 750,                        // >100MB: large groups
-    };
-
-    // Ensure we have enough groups for parallelism (at least 2x parallelism)
-    let min_groups = parallelism * 2;
-    let max_subgroup_for_parallelism = total_files / min_groups.max(1);
-
-    // Take the smaller of size-based and parallelism-based limits
-    // but ensure at least 50 files per group to avoid excessive overhead
-    size_factor.min(max_subgroup_for_parallelism).max(50)
-}
+use pipeline::{
+    BatchMessage, CompactionResult, calculate_optimal_subgroup_size, coerce_batch_to_schema,
+    parse_partition_key, path_to_object_path, subdivide_groups,
+};
 
 /// Service for optimizing tables by compacting small files
 pub struct OptimizeService {
@@ -99,7 +111,10 @@ impl OptimizeService {
 
     /// Create with custom configuration
     pub fn with_config(config: MaintenanceConfig) -> Self {
-        Self { config, progress: None }
+        Self {
+            config,
+            progress: None,
+        }
     }
 
     /// Set the progress reporter for this service
@@ -263,7 +278,13 @@ impl OptimizeService {
 
                 async move {
                     let result = self
-                        .compact_group_pipeline(&group, &schema, &data_dir, &object_store, &progress)
+                        .compact_group_pipeline(
+                            &group,
+                            &schema,
+                            &data_dir,
+                            &object_store,
+                            &progress,
+                        )
                         .await;
 
                     if let Ok(ref r) = result {
@@ -367,7 +388,7 @@ impl OptimizeService {
 
         // Parse partition from clean key (used for all output files)
         // Wrap in Arc for cheap cloning in async tasks
-        let partition = Arc::new(self.parse_partition_key(&clean_partition_key));
+        let partition = Arc::new(parse_partition_key(&clean_partition_key));
 
         // P2: Optimized WriterProperties - ZSTD level 1 is ~3x faster with ~5% less compression
         let props = Arc::new(
@@ -384,9 +405,9 @@ impl OptimizeService {
         // P1: Dynamic read concurrency based on average file size
         let avg_file_size = group.total_size / group.files.len().max(1) as u64;
         let read_concurrency = match avg_file_size {
-            0..=10_000 => 32,           // <10KB: maximize concurrency for small files
-            10_001..=100_000 => 24,     // 10-100KB
-            100_001..=1_000_000 => 16,  // 100KB-1MB
+            0..=10_000 => 32,            // <10KB: maximize concurrency for small files
+            10_001..=100_000 => 24,      // 10-100KB
+            100_001..=1_000_000 => 16,   // 100KB-1MB
             1_000_001..=10_000_000 => 8, // 1-10MB
             _ => 4,                      // >10MB: large files, limit concurrency
         };
@@ -396,9 +417,7 @@ impl OptimizeService {
             .map(|p| p.get())
             .unwrap_or(4);
         let expected_output_files = (group.total_size / self.config.target_size).max(1) as usize;
-        let num_writers = available_cores
-            .min(expected_output_files)
-            .clamp(1, 8); // Cap at 1-8 writers per group to avoid too much contention
+        let num_writers = available_cores.min(expected_output_files).clamp(1, 8); // Cap at 1-8 writers per group to avoid too much contention
 
         // Channel size: respect --max-memory if set, otherwise use default
         // Each batch in channel is ~5MB average, so limit channel to use at most 50% of memory limit
@@ -430,22 +449,26 @@ impl OptimizeService {
 
                     async move {
                         // Open parquet reader
-                        let path = match file.path
+                        let path = match file
+                            .path
                             .strip_prefix("s3://")
                             .and_then(|p| p.find('/').map(|i| &p[i + 1..]))
                         {
                             Some(p) => ObjectPath::from(p),
                             None => ObjectPath::from(file.path.as_str()),
                         };
-                        let reader = ParquetObjectReader::new(object_store, path)
-                            .with_file_size(file.size);
+                        let reader =
+                            ParquetObjectReader::new(object_store, path).with_file_size(file.size);
 
                         let builder = match ParquetRecordBatchStreamBuilder::new(reader).await {
                             Ok(b) => b,
                             Err(e) => {
-                                let _ = tx.send(BatchMessage::Error(format!(
-                                    "Failed to open {}: {}", file.path, e
-                                ))).await;
+                                let _ = tx
+                                    .send(BatchMessage::Error(format!(
+                                        "Failed to open {}: {}",
+                                        file.path, e
+                                    )))
+                                    .await;
                                 return;
                             }
                         };
@@ -457,9 +480,12 @@ impl OptimizeService {
                         let mut stream = match builder.build() {
                             Ok(s) => s,
                             Err(e) => {
-                                let _ = tx.send(BatchMessage::Error(format!(
-                                    "Failed to build stream for {}: {}", file.path, e
-                                ))).await;
+                                let _ = tx
+                                    .send(BatchMessage::Error(format!(
+                                        "Failed to build stream for {}: {}",
+                                        file.path, e
+                                    )))
+                                    .await;
                                 return;
                             }
                         };
@@ -468,12 +494,15 @@ impl OptimizeService {
                         while let Ok(Some(batch)) = stream.try_next().await {
                             // Skip coercion if schema matches (zero-copy)
                             let output_batch = if needs_coercion {
-                                match Self::coerce_batch_to_schema(&batch, &table_schema) {
+                                match coerce_batch_to_schema(&batch, &table_schema) {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        let _ = tx.send(BatchMessage::Error(format!(
-                                            "Schema coercion failed for {}: {}", file.path, e
-                                        ))).await;
+                                        let _ = tx
+                                            .send(BatchMessage::Error(format!(
+                                                "Schema coercion failed for {}: {}",
+                                                file.path, e
+                                            )))
+                                            .await;
                                         return;
                                     }
                                 }
@@ -551,11 +580,14 @@ impl OptimizeService {
                                         (current_writer.take(), current_path.take())
                                     {
                                         if let Err(e) = writer.close().await {
-                                            *error_flag.lock().await = Some(format!("Writer {}: Failed to close: {}", writer_id, e));
+                                            *error_flag.lock().await = Some(format!(
+                                                "Writer {}: Failed to close: {}",
+                                                writer_id, e
+                                            ));
                                             break;
                                         }
 
-                                        let out_object_path = match Self::path_to_object_path_static(
+                                        let out_object_path = match path_to_object_path(
                                             &out_path.to_string_lossy(),
                                             &table_base,
                                         ) {
@@ -569,7 +601,10 @@ impl OptimizeService {
                                         let meta = match object_store.head(&out_object_path).await {
                                             Ok(m) => m,
                                             Err(e) => {
-                                                *error_flag.lock().await = Some(format!("Writer {}: Failed to get metadata: {}", writer_id, e));
+                                                *error_flag.lock().await = Some(format!(
+                                                    "Writer {}: Failed to get metadata: {}",
+                                                    writer_id, e
+                                                ));
                                                 break;
                                             }
                                         };
@@ -589,14 +624,15 @@ impl OptimizeService {
                                 if current_writer.is_none() {
                                     let file_num = file_counter.fetch_add(1, Ordering::Relaxed);
                                     let unique_id = generate_unique_id();
-                                    let filename = format!("compact-{}-{}.parquet", unique_id, file_num);
+                                    let filename =
+                                        format!("compact-{}-{}.parquet", unique_id, file_num);
                                     let output_path = if clean_partition_key.is_empty() {
                                         data_dir.join(&filename)
                                     } else {
                                         data_dir.join(&clean_partition_key).join(&filename)
                                     };
 
-                                    let output_object_path = match Self::path_to_object_path_static(
+                                    let output_object_path = match path_to_object_path(
                                         &output_path.to_string_lossy(),
                                         &table_base,
                                     ) {
@@ -607,10 +643,11 @@ impl OptimizeService {
                                         }
                                     };
 
-                                    let writer_obj = parquet::arrow::async_writer::ParquetObjectWriter::new(
-                                        object_store.clone(),
-                                        output_object_path,
-                                    );
+                                    let writer_obj =
+                                        parquet::arrow::async_writer::ParquetObjectWriter::new(
+                                            object_store.clone(),
+                                            output_object_path,
+                                        );
 
                                     let async_writer = match AsyncArrowWriter::try_new(
                                         writer_obj,
@@ -619,7 +656,10 @@ impl OptimizeService {
                                     ) {
                                         Ok(w) => w,
                                         Err(e) => {
-                                            *error_flag.lock().await = Some(format!("Writer {}: Failed to create: {}", writer_id, e));
+                                            *error_flag.lock().await = Some(format!(
+                                                "Writer {}: Failed to create: {}",
+                                                writer_id, e
+                                            ));
                                             break;
                                         }
                                     };
@@ -633,7 +673,10 @@ impl OptimizeService {
                                     current_records += batch.num_rows() as u64;
                                     current_bytes_estimate += batch_size_estimate;
                                     if let Err(e) = writer.write(&batch).await {
-                                        *error_flag.lock().await = Some(format!("Writer {}: Failed to write: {}", writer_id, e));
+                                        *error_flag.lock().await = Some(format!(
+                                            "Writer {}: Failed to write: {}",
+                                            writer_id, e
+                                        ));
                                         break;
                                     }
                                 }
@@ -651,25 +694,29 @@ impl OptimizeService {
                     // Finalize the last writer for this worker
                     if let (Some(writer), Some(ref out_path)) = (current_writer, current_path) {
                         if let Err(e) = writer.close().await {
-                            *error_flag.lock().await = Some(format!("Writer {}: Failed to close final: {}", writer_id, e));
+                            *error_flag.lock().await = Some(format!(
+                                "Writer {}: Failed to close final: {}",
+                                writer_id, e
+                            ));
                             return;
                         }
 
-                        let out_object_path = match Self::path_to_object_path_static(
-                            &out_path.to_string_lossy(),
-                            &table_base,
-                        ) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                *error_flag.lock().await = Some(e);
-                                return;
-                            }
-                        };
+                        let out_object_path =
+                            match path_to_object_path(&out_path.to_string_lossy(), &table_base) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    *error_flag.lock().await = Some(e);
+                                    return;
+                                }
+                            };
 
                         let meta = match object_store.head(&out_object_path).await {
                             Ok(m) => m,
                             Err(e) => {
-                                *error_flag.lock().await = Some(format!("Writer {}: Failed to get final metadata: {}", writer_id, e));
+                                *error_flag.lock().await = Some(format!(
+                                    "Writer {}: Failed to get final metadata: {}",
+                                    writer_id, e
+                                ));
                                 return;
                             }
                         };
@@ -708,154 +755,12 @@ impl OptimizeService {
             removed: group.files.clone(),
         })
     }
-
-    /// Static version of path_to_object_path for use in closures
-    fn path_to_object_path_static(path: &str, table_base: &str) -> std::result::Result<ObjectPath, String> {
-        // For S3 URLs, extract the path within the bucket
-        if let Some(s3_path) = path.strip_prefix("s3://")
-            && let Some(slash_pos) = s3_path.find('/') {
-                let object_path = &s3_path[slash_pos + 1..];
-                return Ok(ObjectPath::from(object_path));
-            }
-
-        // For gs:// (GCS) URLs
-        if let Some(gcs_path) = path.strip_prefix("gs://")
-            && let Some(slash_pos) = gcs_path.find('/') {
-                let object_path = &gcs_path[slash_pos + 1..];
-                return Ok(ObjectPath::from(object_path));
-            }
-
-        // For az:// or azure:// URLs
-        for prefix in ["az://", "azure://"] {
-            if let Some(az_path) = path.strip_prefix(prefix)
-                && let Some(slash_pos) = az_path.find('/') {
-                    let object_path = &az_path[slash_pos + 1..];
-                    return Ok(ObjectPath::from(object_path));
-                }
-        }
-
-        // For local paths, use relative path from table base
-        if let Some(relative) = normalize_relative_path(path, table_base) {
-            return Ok(ObjectPath::from(relative));
-        }
-
-        // Fallback
-        let clean_path = path.strip_prefix("file://").unwrap_or(path);
-        Ok(ObjectPath::from(clean_path))
-    }
-
-    /// Parse a partition key string into a HashMap
-    fn parse_partition_key(&self, key: &str) -> HashMap<String, String> {
-        if key.is_empty() {
-            return HashMap::new();
-        }
-
-        key.split('/')
-            .filter_map(|part| {
-                let mut split = part.splitn(2, '=');
-                match (split.next(), split.next()) {
-                    (Some(k), Some(v)) => Some((k.to_string(), v.to_string())),
-                    _ => None,
-                }
-            })
-            .collect()
-    }
-
-    /// Coerce a batch to match the target schema
-    ///
-    /// This handles cases where batches from different files have slightly
-    /// different schemas (e.g., different field metadata, different column order,
-    /// or missing columns). Columns are matched by name, not position.
-    fn coerce_batch_to_schema(
-        batch: &RecordBatch,
-        target_schema: &SchemaRef,
-    ) -> Result<RecordBatch> {
-        // If schemas match exactly, return as-is
-        if batch.schema() == *target_schema {
-            return Ok(batch.clone());
-        }
-
-        let batch_schema = batch.schema();
-        let num_rows = batch.num_rows();
-
-        // Match columns by name, not by position
-        let columns: Vec<_> = target_schema
-            .fields()
-            .iter()
-            .map(|target_field| {
-                let target_name = target_field.name();
-                let target_type = target_field.data_type();
-
-                // Find column in source batch by name
-                match batch_schema.column_with_name(target_name) {
-                    Some((idx, _source_field)) => {
-                        let source_column = batch.column(idx);
-                        let source_type = source_column.data_type();
-
-                        if source_type == target_type {
-                            Ok(source_column.clone())
-                        } else {
-                            cast(source_column, target_type).map_err(|e| Error::DataValidation {
-                                message: format!(
-                                    "Failed to cast column '{}' from {:?} to {:?}: {}",
-                                    target_name, source_type, target_type, e
-                                ),
-                            })
-                        }
-                    }
-                    None => {
-                        // Column missing in source - create null array
-                        use arrow::array::new_null_array;
-                        Ok(new_null_array(target_type, num_rows))
-                    }
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        RecordBatch::try_new(target_schema.clone(), columns).map_err(|e| Error::DataValidation {
-            message: format!("Failed to create coerced batch: {}", e),
-        })
-    }
 }
 
 impl Default for OptimizeService {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Subdivide large groups into smaller sub-groups for parallel processing
-///
-/// This ensures that even non-partitioned tables with many small files
-/// can benefit from parallel compaction.
-fn subdivide_groups(groups: Vec<FileGroup>, max_files_per_subgroup: usize) -> Vec<FileGroup> {
-    let mut result = Vec::new();
-
-    for group in groups {
-        if group.files.len() <= max_files_per_subgroup {
-            result.push(group);
-        } else {
-            // Split into sub-groups
-            for (idx, chunk) in group.files.chunks(max_files_per_subgroup).enumerate() {
-                let total_size: u64 = chunk.iter().map(|f| f.size).sum();
-                let total_records: u64 = chunk.iter().map(|f| f.record_count).sum();
-
-                result.push(FileGroup {
-                    files: chunk.to_vec(),
-                    total_size,
-                    total_records,
-                    // Add sub-group index to partition key for unique output files
-                    partition_key: if group.partition_key.is_empty() {
-                        format!("__subgroup_{}", idx)
-                    } else {
-                        format!("{}/__subgroup_{}", group.partition_key, idx)
-                    },
-                });
-            }
-        }
-    }
-
-    result
 }
 
 #[cfg(test)]

@@ -7,23 +7,20 @@
 //! - `manifests`: Rewrite and compact manifest files
 //! - `vacuum`: Clean up unreferenced files
 
-use colored::Colorize;
-
-use super::common::{
-    TableResolution, print_dry_run_header, print_json, resolve_table_from_context,
-};
 use super::VacuumCommand;
+use super::common::{TableResolution, resolve_table_from_context};
+use crate::cli::output::OptimizeFormatter;
 use crate::cli::parser::{
     CatalogContext, OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs,
 };
 use crate::cli::utils::IndicatifReporter;
+use crate::core::CatalogConfig;
 use crate::core::maintenance::{
     MaintenanceConfig, ManifestConfig, ManifestService, OptimizeService,
 };
 use crate::core::metadata::MaintenanceResult;
-use crate::core::{CatalogConfig, format_bytes};
-use crate::error::{Error, Result};
 use crate::core::utils::parse_bytes;
+use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
 /// Handler for optimize command
@@ -118,16 +115,10 @@ impl OptimizeCommand {
         resolution: &TableResolution,
         cli_catalog: Option<&CatalogConfig>,
     ) -> Result<MaintenanceResult> {
-        if let Some(b) = branch {
-            println!(
-                "{} Iceberg table at {} (branch: {})",
-                "Optimizing".green(),
-                table_path,
-                b.cyan()
-            );
-        } else {
-            println!("{} Iceberg table at {}", "Optimizing".green(), table_path);
-        }
+        println!(
+            "{}",
+            OptimizeFormatter::format_data_header(table_path, branch)
+        );
 
         // Create metadata service using factory method - handles catalog vs path context automatically
         let metadata_service = resolution.to_writable_service(cli_catalog, branch).await?;
@@ -141,23 +132,10 @@ impl OptimizeCommand {
         resolution: &TableResolution,
         cli_catalog: Option<&CatalogConfig>,
     ) -> Result<()> {
-        let target_branch = args.branch.as_deref().unwrap_or("main");
-
-        // Print header
-        if args.branch.is_some() {
-            println!(
-                "{} Iceberg manifests at {} (branch: {})",
-                "Rewriting".green(),
-                table_path,
-                target_branch.cyan()
-            );
-        } else {
-            println!(
-                "{} Iceberg manifests at {}",
-                "Rewriting".green(),
-                table_path
-            );
-        }
+        println!(
+            "{}",
+            OptimizeFormatter::format_manifests_header(table_path, args.branch.as_deref())
+        );
 
         let config = ManifestConfig {
             target_size: args.target_size,
@@ -191,54 +169,12 @@ impl OptimizeCommand {
         analysis: &crate::core::maintenance::ManifestAnalysis,
         output_format: &str,
     ) -> Result<()> {
-        if !analysis.should_rewrite {
-            println!();
-            println!(
-                "{} {}",
-                "Skipping:".yellow(),
-                analysis
-                    .skip_reason
-                    .as_deref()
-                    .unwrap_or("No rewrite needed")
-            );
-            return Ok(());
-        }
-
-        println!(
-            "Current manifests: {}",
-            analysis.current_manifests.to_string().cyan()
-        );
-        println!(
-            "  Data manifests:   {}",
-            analysis.data_manifests.to_string().cyan()
-        );
-        println!(
-            "  Delete manifests: {}",
-            analysis.delete_manifests.to_string().cyan()
-        );
-        println!();
-        print_dry_run_header();
-        println!(
-            "Total data entries: {}",
-            analysis.total_entries.to_string().cyan()
-        );
-        println!(
-            "Would rewrite into: {} manifests",
-            analysis.estimated_after.to_string().cyan()
-        );
-
         if output_format == "json" {
-            let json = serde_json::json!({
-                "dry_run": true,
-                "current_manifests": analysis.current_manifests,
-                "data_manifests": analysis.data_manifests,
-                "delete_manifests": analysis.delete_manifests,
-                "total_entries": analysis.total_entries,
-                "estimated_after": analysis.estimated_after,
-            });
-            print_json(&json)?;
+            let json_str = OptimizeFormatter::format_manifest_analysis_json(analysis)?;
+            println!("{}", json_str);
+        } else {
+            println!("{}", OptimizeFormatter::format_manifest_analysis(analysis));
         }
-
         Ok(())
     }
 
@@ -247,115 +183,22 @@ impl OptimizeCommand {
         result: &crate::core::maintenance::ManifestRewriteResult,
         output_format: &str,
     ) -> Result<()> {
-        println!();
-        println!("{}", "Manifests rewritten successfully!".green().bold());
-        println!(
-            "Manifests: {} -> {}",
-            result.previous_manifests.to_string().cyan(),
-            result.new_manifests.to_string().cyan()
-        );
-        println!("Snapshot:  {}", result.snapshot_id.to_string().cyan());
-        println!("Version:   {}", result.metadata_version.to_string().cyan());
-
         if output_format == "json" {
-            let json = serde_json::json!({
-                "previous_manifests": result.previous_manifests,
-                "new_manifests": result.new_manifests,
-                "data_manifests_rewritten": result.data_manifests_rewritten,
-                "delete_manifests_kept": result.delete_manifests_kept,
-                "total_entries": result.total_entries,
-                "snapshot_id": result.snapshot_id,
-                "metadata_version": result.metadata_version,
-            });
-            print_json(&json)?;
+            let json_str = OptimizeFormatter::format_manifest_result_json(result)?;
+            println!("{}", json_str);
+        } else {
+            println!("{}", OptimizeFormatter::format_manifest_result(result));
         }
-
         Ok(())
     }
 
     /// Output data optimization result
     fn output_data_result(result: &MaintenanceResult, output_format: &str) -> Result<()> {
-        let is_dry_run = result.operation.contains("dry-run")
-            || result
-                .details
-                .get("mode")
-                .map(|m| m == "dry-run")
-                .unwrap_or(false);
-
-        match output_format {
-            "json" => {
-                let json = serde_json::json!({
-                    "dry_run": is_dry_run,
-                    "operation": result.operation,
-                    "files_added": result.files_added,
-                    "files_removed": result.files_removed,
-                    "bytes_added": result.bytes_added,
-                    "bytes_removed": result.bytes_removed,
-                    "records_affected": result.records_affected,
-                    "details": result.details,
-                });
-                print_json(&json)?;
-            }
-            _ => {
-                println!();
-
-                if is_dry_run {
-                    print_dry_run_header();
-                    if result.files_added == 0 && result.files_removed == 0 {
-                        println!("{}", "Table is already optimized.".green());
-                        if let Some(reason) = result.details.get("reason") {
-                            println!("{}", reason);
-                        }
-                    } else {
-                        println!("{}", "Would perform the following changes:".cyan());
-                        println!();
-                        println!(
-                            "  Files to compact:  {} -> {}",
-                            result.files_removed.to_string().yellow(),
-                            result.files_added.to_string().yellow()
-                        );
-
-                        if let Some(partitions) = result.details.get("partitions") {
-                            println!("  Partitions:        {}", partitions.yellow());
-                        }
-
-                        if let Some(would_compact) = result.details.get("would_compact") {
-                            println!("  Summary:           {}", would_compact.yellow());
-                        }
-
-                        println!();
-                        println!(
-                            "{}",
-                            "Run without --dry-run to apply these changes.".dimmed()
-                        );
-                    }
-                } else if result.files_added == 0 && result.files_removed == 0 {
-                    println!("{}", "Table is already optimized.".green());
-                    if let Some(reason) = result.details.get("reason") {
-                        println!("{}", reason);
-                    }
-                } else {
-                    println!("{}", "Compaction complete!".green().bold());
-                    println!();
-                    println!(
-                        "Files compacted:  {} -> {}",
-                        result.files_removed.to_string().cyan(),
-                        result.files_added.to_string().cyan()
-                    );
-                    println!(
-                        "Bytes saved:      {}",
-                        format_bytes(result.bytes_removed.saturating_sub(result.bytes_added))
-                    );
-                    println!(
-                        "Records affected: {}",
-                        result.records_affected.to_string().cyan()
-                    );
-
-                    if let Some(snapshot_id) = result.details.get("snapshot_id") {
-                        println!("Snapshot:         {}", snapshot_id.cyan());
-                    }
-                }
-            }
+        if output_format == "json" {
+            let json_str = OptimizeFormatter::format_data_result_json(result)?;
+            println!("{}", json_str);
+        } else {
+            println!("{}", OptimizeFormatter::format_data_result_text(result));
         }
         Ok(())
     }

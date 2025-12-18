@@ -78,17 +78,19 @@ pub trait CliOutput: serde::Serialize {
 pub fn output_result<T: CliOutput>(result: &T, format: &str) -> crate::error::Result<()> {
     match format {
         "json" => {
-            let json = serde_json::to_string_pretty(result)
-                .map_err(|e| crate::error::Error::Serialization {
+            let json = serde_json::to_string_pretty(result).map_err(|e| {
+                crate::error::Error::Serialization {
                     message: format!("JSON serialization failed: {}", e),
-                })?;
+                }
+            })?;
             println!("{}", json);
         }
         "yaml" => {
-            let yaml = serde_yaml_ng::to_string(result)
-                .map_err(|e| crate::error::Error::Serialization {
+            let yaml = serde_yaml_ng::to_string(result).map_err(|e| {
+                crate::error::Error::Serialization {
                     message: format!("YAML serialization failed: {}", e),
-                })?;
+                }
+            })?;
             print!("{}", yaml);
         }
         _ => {

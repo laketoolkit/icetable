@@ -381,7 +381,11 @@ impl TableCommitter {
     /// This is a shared helper for all direct-mode metadata writes.
     /// It handles finding the current metadata, calculating the next version,
     /// and writing the new metadata file.
-    async fn persist_metadata(&self, table_path: &str, new_metadata: &TableMetadata) -> Result<i64> {
+    async fn persist_metadata(
+        &self,
+        table_path: &str,
+        new_metadata: &TableMetadata,
+    ) -> Result<i64> {
         use crate::utils::core::{
             extract_version_from_path, find_latest_metadata, metadata_location_filename,
             new_metadata_location, next_metadata_location,

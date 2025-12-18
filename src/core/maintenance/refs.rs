@@ -6,7 +6,9 @@
 //!
 //! Uses `MetadataServiceWriter` trait for catalog-aware commits.
 
-use iceberg::spec::{SnapshotReference, SnapshotRetention};
+use std::sync::Arc;
+
+use iceberg::spec::{SnapshotReference, SnapshotRetention, TableMetadata};
 
 use crate::core::metadata::MetadataServiceWriter;
 use crate::error::{Error, Result};
@@ -50,6 +52,97 @@ pub struct RefService {
     config: RefConfig,
 }
 
+/// Helper context for ref operations
+struct RefContext<'a> {
+    metadata: Arc<TableMetadata>,
+    table_path: &'a str,
+    current_version: i32,
+}
+
+impl<'a> RefContext<'a> {
+    /// Load context from service
+    async fn load<S: MetadataServiceWriter>(service: &'a S) -> Result<RefContext<'a>> {
+        let (metadata, current_version) = service.load_metadata().await?;
+        Ok(RefContext {
+            metadata,
+            table_path: service.table_path(),
+            current_version,
+        })
+    }
+
+    /// Resolve target snapshot ID (from explicit ID or current snapshot)
+    fn resolve_target_snapshot(&self, snapshot_id: Option<i64>) -> Result<i64> {
+        let target_id = match snapshot_id {
+            Some(id) => id,
+            None => self
+                .metadata
+                .current_snapshot_id()
+                .ok_or_else(|| Error::Metadata {
+                    message: "Table has no current snapshot. Specify a snapshot ID explicitly."
+                        .to_string(),
+                })?,
+        };
+
+        // Verify snapshot exists
+        self.metadata
+            .snapshot_by_id(target_id)
+            .ok_or_else(|| Error::SnapshotNotFound {
+                snapshot_id: target_id,
+            })?;
+
+        Ok(target_id)
+    }
+
+    /// Check that a reference doesn't already exist
+    fn ensure_ref_not_exists(&self, name: &str) -> Result<()> {
+        if self.metadata.snapshot_for_ref(name).is_some() {
+            return Err(Error::Conflict(format!(
+                "Reference '{}' already exists",
+                name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Get snapshot ID for an existing reference
+    fn get_ref_snapshot(&self, name: &str, ref_type: &str) -> Result<i64> {
+        let snapshot = self
+            .metadata
+            .snapshot_for_ref(name)
+            .ok_or_else(|| Error::Metadata {
+                message: format!("{} '{}' not found", ref_type, name),
+            })?;
+        Ok(snapshot.snapshot_id())
+    }
+}
+
+/// Write metadata directly (without catalog) for a ref operation
+async fn write_ref_direct<S: MetadataServiceWriter, F>(
+    service: &S,
+    metadata: &TableMetadata,
+    table_path: &str,
+    apply_changes: F,
+) -> Result<i64>
+where
+    F: FnOnce(
+        iceberg::spec::TableMetadataBuilder,
+    ) -> std::result::Result<iceberg::spec::TableMetadataBuilder, iceberg::Error>,
+{
+    let metadata_file_path = service.current_metadata_path().await?;
+    let metadata_clone = metadata.clone();
+
+    let builder = metadata_clone.into_builder(Some(metadata_file_path));
+    let builder = apply_changes(builder).map_err(|e| Error::Metadata {
+        message: format!("Failed to apply ref changes: {}", e),
+    })?;
+
+    let build_result = builder.build().map_err(|e| Error::Metadata {
+        message: format!("Failed to build metadata: {}", e),
+    })?;
+
+    super::write_metadata_direct(table_path, &build_result.metadata).await
+}
+
 impl RefService {
     /// Create a new reference service
     pub fn new() -> Self {
@@ -73,34 +166,9 @@ impl RefService {
         snapshot_id: Option<i64>,
         retention: BranchRetention,
     ) -> Result<RefResult> {
-        let (metadata, current_version) = service.load_metadata().await?;
-        let table_path = service.table_path();
-
-        // Use specified snapshot or current
-        let target_id = match snapshot_id {
-            Some(id) => id,
-            None => metadata
-                .current_snapshot_id()
-                .ok_or_else(|| Error::Metadata {
-                    message: "Table has no current snapshot. Specify a snapshot ID explicitly."
-                        .to_string(),
-                })?,
-        };
-
-        // Verify snapshot exists
-        metadata
-            .snapshot_by_id(target_id)
-            .ok_or_else(|| Error::SnapshotNotFound {
-                snapshot_id: target_id,
-            })?;
-
-        // Check if ref already exists
-        if metadata.snapshot_for_ref(name).is_some() {
-            return Err(Error::Conflict(format!(
-                "Reference '{}' already exists",
-                name
-            )));
-        }
+        let ctx = RefContext::load(service).await?;
+        let target_id = ctx.resolve_target_snapshot(snapshot_id)?;
+        ctx.ensure_ref_not_exists(name)?;
 
         if self.config.dry_run {
             return Ok(RefResult {
@@ -120,28 +188,22 @@ impl RefService {
             },
         };
 
-        // Use committer if available (catalog mode)
         let new_version = if let Some(committer) = service.committer() {
             committer
-                .commit_add_ref(table_path, &metadata, name, branch_ref, current_version)
+                .commit_add_ref(
+                    ctx.table_path,
+                    &ctx.metadata,
+                    name,
+                    branch_ref,
+                    ctx.current_version,
+                )
                 .await?
         } else {
-            // Direct mode: build and write new metadata
-            let metadata_file_path = service.current_metadata_path().await?;
-            let metadata_clone = (*metadata).clone();
-
-            let build_result = metadata_clone
-                .into_builder(Some(metadata_file_path))
-                .set_ref(name, branch_ref)
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to set branch: {}", e),
-                })?
-                .build()
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build metadata: {}", e),
-                })?;
-
-            super::write_metadata_direct(table_path, &build_result.metadata).await?
+            let name = name.to_string();
+            write_ref_direct(service, &ctx.metadata, ctx.table_path, |b| {
+                b.set_ref(&name, branch_ref)
+            })
+            .await?
         };
 
         Ok(RefResult {
@@ -162,34 +224,9 @@ impl RefService {
         snapshot_id: Option<i64>,
         max_ref_age_ms: Option<i64>,
     ) -> Result<RefResult> {
-        let (metadata, current_version) = service.load_metadata().await?;
-        let table_path = service.table_path();
-
-        // Use specified snapshot or current
-        let target_id = match snapshot_id {
-            Some(id) => id,
-            None => metadata
-                .current_snapshot_id()
-                .ok_or_else(|| Error::Metadata {
-                    message: "Table has no current snapshot. Specify a snapshot ID explicitly."
-                        .to_string(),
-                })?,
-        };
-
-        // Verify snapshot exists
-        metadata
-            .snapshot_by_id(target_id)
-            .ok_or_else(|| Error::SnapshotNotFound {
-                snapshot_id: target_id,
-            })?;
-
-        // Check if ref already exists
-        if metadata.snapshot_for_ref(name).is_some() {
-            return Err(Error::Conflict(format!(
-                "Reference '{}' already exists",
-                name
-            )));
-        }
+        let ctx = RefContext::load(service).await?;
+        let target_id = ctx.resolve_target_snapshot(snapshot_id)?;
+        ctx.ensure_ref_not_exists(name)?;
 
         if self.config.dry_run {
             return Ok(RefResult {
@@ -205,28 +242,22 @@ impl RefService {
             retention: SnapshotRetention::Tag { max_ref_age_ms },
         };
 
-        // Use committer if available (catalog mode)
         let new_version = if let Some(committer) = service.committer() {
             committer
-                .commit_add_ref(table_path, &metadata, name, tag_ref, current_version)
+                .commit_add_ref(
+                    ctx.table_path,
+                    &ctx.metadata,
+                    name,
+                    tag_ref,
+                    ctx.current_version,
+                )
                 .await?
         } else {
-            // Direct mode: build and write new metadata
-            let metadata_file_path = service.current_metadata_path().await?;
-            let metadata_clone = (*metadata).clone();
-
-            let build_result = metadata_clone
-                .into_builder(Some(metadata_file_path))
-                .set_ref(name, tag_ref)
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to set tag: {}", e),
-                })?
-                .build()
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build metadata: {}", e),
-                })?;
-
-            super::write_metadata_direct(table_path, &build_result.metadata).await?
+            let name = name.to_string();
+            write_ref_direct(service, &ctx.metadata, ctx.table_path, |b| {
+                b.set_ref(&name, tag_ref)
+            })
+            .await?
         };
 
         Ok(RefResult {
@@ -251,16 +282,8 @@ impl RefService {
             });
         }
 
-        let (metadata, current_version) = service.load_metadata().await?;
-        let table_path = service.table_path();
-
-        // Verify ref exists and get its snapshot
-        let snapshot = metadata
-            .snapshot_for_ref(name)
-            .ok_or_else(|| Error::Metadata {
-                message: format!("Reference '{}' not found", name),
-            })?;
-        let snapshot_id = snapshot.snapshot_id();
+        let ctx = RefContext::load(service).await?;
+        let snapshot_id = ctx.get_ref_snapshot(name, "Reference")?;
 
         if self.config.dry_run {
             return Ok(RefResult {
@@ -271,25 +294,16 @@ impl RefService {
             });
         }
 
-        // Use committer if available (catalog mode)
         let new_version = if let Some(committer) = service.committer() {
             committer
-                .commit_remove_ref(table_path, &metadata, name, current_version)
+                .commit_remove_ref(ctx.table_path, &ctx.metadata, name, ctx.current_version)
                 .await?
         } else {
-            // Direct mode: build and write new metadata
-            let metadata_file_path = service.current_metadata_path().await?;
-            let metadata_clone = (*metadata).clone();
-
-            let build_result = metadata_clone
-                .into_builder(Some(metadata_file_path))
-                .remove_ref(name)
-                .build()
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build metadata: {}", e),
-                })?;
-
-            super::write_metadata_direct(table_path, &build_result.metadata).await?
+            let name = name.to_string();
+            write_ref_direct(service, &ctx.metadata, ctx.table_path, |b| {
+                Ok(b.remove_ref(&name))
+            })
+            .await?
         };
 
         Ok(RefResult {
@@ -320,24 +334,9 @@ impl RefService {
             });
         }
 
-        let (metadata, current_version) = service.load_metadata().await?;
-        let table_path = service.table_path();
-
-        // Verify old ref exists
-        let snapshot = metadata
-            .snapshot_for_ref(old_name)
-            .ok_or_else(|| Error::Metadata {
-                message: format!("Branch '{}' not found", old_name),
-            })?;
-        let snapshot_id = snapshot.snapshot_id();
-
-        // Verify new name doesn't exist
-        if metadata.snapshot_for_ref(new_name).is_some() {
-            return Err(Error::Conflict(format!(
-                "Reference '{}' already exists",
-                new_name
-            )));
-        }
+        let ctx = RefContext::load(service).await?;
+        let snapshot_id = ctx.get_ref_snapshot(old_name, "Branch")?;
+        ctx.ensure_ref_not_exists(new_name)?;
 
         if self.config.dry_run {
             return Ok(RefResult {
@@ -348,7 +347,6 @@ impl RefService {
             });
         }
 
-        // Create new branch ref with default retention
         let new_ref = SnapshotReference {
             snapshot_id,
             retention: SnapshotRetention::Branch {
@@ -358,36 +356,24 @@ impl RefService {
             },
         };
 
-        // Use committer if available (catalog mode)
         let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_rename_ref(
-                    table_path,
-                    &metadata,
+                    ctx.table_path,
+                    &ctx.metadata,
                     old_name,
                     new_name,
                     new_ref,
-                    current_version,
+                    ctx.current_version,
                 )
                 .await?
         } else {
-            // Direct mode: build and write new metadata
-            let metadata_file_path = service.current_metadata_path().await?;
-            let metadata_clone = (*metadata).clone();
-
-            let build_result = metadata_clone
-                .into_builder(Some(metadata_file_path))
-                .remove_ref(old_name)
-                .set_ref(new_name, new_ref)
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to set reference: {}", e),
-                })?
-                .build()
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build metadata: {}", e),
-                })?;
-
-            super::write_metadata_direct(table_path, &build_result.metadata).await?
+            let old_name = old_name.to_string();
+            let new_name_owned = new_name.to_string();
+            write_ref_direct(service, &ctx.metadata, ctx.table_path, |b| {
+                b.remove_ref(&old_name).set_ref(&new_name_owned, new_ref)
+            })
+            .await?
         };
 
         Ok(RefResult {
@@ -407,24 +393,9 @@ impl RefService {
         old_name: &str,
         new_name: &str,
     ) -> Result<RefResult> {
-        let (metadata, current_version) = service.load_metadata().await?;
-        let table_path = service.table_path();
-
-        // Verify old ref exists
-        let snapshot = metadata
-            .snapshot_for_ref(old_name)
-            .ok_or_else(|| Error::Metadata {
-                message: format!("Tag '{}' not found", old_name),
-            })?;
-        let snapshot_id = snapshot.snapshot_id();
-
-        // Verify new name doesn't exist
-        if metadata.snapshot_for_ref(new_name).is_some() {
-            return Err(Error::Conflict(format!(
-                "Reference '{}' already exists",
-                new_name
-            )));
-        }
+        let ctx = RefContext::load(service).await?;
+        let snapshot_id = ctx.get_ref_snapshot(old_name, "Tag")?;
+        ctx.ensure_ref_not_exists(new_name)?;
 
         if self.config.dry_run {
             return Ok(RefResult {
@@ -435,7 +406,6 @@ impl RefService {
             });
         }
 
-        // Create new tag ref with default retention
         let new_ref = SnapshotReference {
             snapshot_id,
             retention: SnapshotRetention::Tag {
@@ -443,36 +413,24 @@ impl RefService {
             },
         };
 
-        // Use committer if available (catalog mode)
         let new_version = if let Some(committer) = service.committer() {
             committer
                 .commit_rename_ref(
-                    table_path,
-                    &metadata,
+                    ctx.table_path,
+                    &ctx.metadata,
                     old_name,
                     new_name,
                     new_ref,
-                    current_version,
+                    ctx.current_version,
                 )
                 .await?
         } else {
-            // Direct mode: build and write new metadata
-            let metadata_file_path = service.current_metadata_path().await?;
-            let metadata_clone = (*metadata).clone();
-
-            let build_result = metadata_clone
-                .into_builder(Some(metadata_file_path))
-                .remove_ref(old_name)
-                .set_ref(new_name, new_ref)
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to set reference: {}", e),
-                })?
-                .build()
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build metadata: {}", e),
-                })?;
-
-            super::write_metadata_direct(table_path, &build_result.metadata).await?
+            let old_name = old_name.to_string();
+            let new_name_owned = new_name.to_string();
+            write_ref_direct(service, &ctx.metadata, ctx.table_path, |b| {
+                b.remove_ref(&old_name).set_ref(&new_name_owned, new_ref)
+            })
+            .await?
         };
 
         Ok(RefResult {
@@ -497,24 +455,16 @@ impl RefService {
     ) -> Result<RefResult> {
         use crate::utils::core::snapshot::is_ancestor;
 
-        let (metadata, current_version) = service.load_metadata().await?;
-        let table_path = service.table_path();
-
-        // Verify branch exists and get its current snapshot
-        let branch_snapshot = metadata
-            .snapshot_for_ref(name)
-            .ok_or_else(|| Error::Metadata {
-                message: format!("Branch '{}' not found", name),
-            })?;
-        let branch_snapshot_id = branch_snapshot.snapshot_id();
+        let ctx = RefContext::load(service).await?;
+        let branch_snapshot_id = ctx.get_ref_snapshot(name, "Branch")?;
 
         // Resolve target to snapshot ID
         let target_id: i64 = if let Ok(id) = target.parse() {
-            metadata
+            ctx.metadata
                 .snapshot_by_id(id)
                 .ok_or_else(|| Error::SnapshotNotFound { snapshot_id: id })?;
             id
-        } else if let Some(snap) = metadata.snapshot_for_ref(target) {
+        } else if let Some(snap) = ctx.metadata.snapshot_for_ref(target) {
             snap.snapshot_id()
         } else {
             return Err(Error::Metadata {
@@ -523,8 +473,7 @@ impl RefService {
         };
 
         // Verify this is a valid fast-forward: target must be a descendant of current
-        // (i.e., current must be an ancestor of target)
-        if !is_ancestor(&metadata, branch_snapshot_id, target_id) {
+        if !is_ancestor(&ctx.metadata, branch_snapshot_id, target_id) {
             return Err(Error::Conflict(format!(
                 "Cannot fast-forward: snapshot {} is not a descendant of branch '{}' (snapshot {}). \
                 The branches have diverged.",
@@ -550,28 +499,22 @@ impl RefService {
             },
         };
 
-        // Use committer if available (catalog mode)
         let new_version = if let Some(committer) = service.committer() {
             committer
-                .commit_add_ref(table_path, &metadata, name, new_ref, current_version)
+                .commit_add_ref(
+                    ctx.table_path,
+                    &ctx.metadata,
+                    name,
+                    new_ref,
+                    ctx.current_version,
+                )
                 .await?
         } else {
-            // Direct mode: build and write new metadata
-            let metadata_file_path = service.current_metadata_path().await?;
-            let metadata_clone = (*metadata).clone();
-
-            let build_result = metadata_clone
-                .into_builder(Some(metadata_file_path))
-                .set_ref(name, new_ref)
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to update branch: {}", e),
-                })?
-                .build()
-                .map_err(|e| Error::Metadata {
-                    message: format!("Failed to build metadata: {}", e),
-                })?;
-
-            super::write_metadata_direct(table_path, &build_result.metadata).await?
+            let name = name.to_string();
+            write_ref_direct(service, &ctx.metadata, ctx.table_path, |b| {
+                b.set_ref(&name, new_ref)
+            })
+            .await?
         };
 
         Ok(RefResult {
@@ -586,5 +529,75 @@ impl RefService {
 impl Default for RefService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ref_service_new() {
+        let service = RefService::new();
+        assert!(!service.config.dry_run);
+    }
+
+    #[test]
+    fn test_ref_service_with_config() {
+        let config = RefConfig { dry_run: true };
+        let service = RefService::with_config(config);
+        assert!(service.config.dry_run);
+    }
+
+    #[test]
+    fn test_ref_config_default() {
+        let config = RefConfig::default();
+        assert!(!config.dry_run);
+    }
+
+    #[test]
+    fn test_branch_retention_default() {
+        let retention = BranchRetention::default();
+        assert!(retention.min_snapshots_to_keep.is_none());
+        assert!(retention.max_snapshot_age_ms.is_none());
+        assert!(retention.max_ref_age_ms.is_none());
+    }
+
+    #[test]
+    fn test_branch_retention_custom() {
+        let retention = BranchRetention {
+            min_snapshots_to_keep: Some(5),
+            max_snapshot_age_ms: Some(86400000), // 1 day
+            max_ref_age_ms: Some(604800000),     // 7 days
+        };
+        assert_eq!(retention.min_snapshots_to_keep, Some(5));
+        assert_eq!(retention.max_snapshot_age_ms, Some(86400000));
+        assert_eq!(retention.max_ref_age_ms, Some(604800000));
+    }
+
+    #[test]
+    fn test_ref_result_struct() {
+        let result = RefResult {
+            name: "feature-branch".to_string(),
+            snapshot_id: 12345,
+            new_version: Some(2),
+            dry_run: false,
+        };
+        assert_eq!(result.name, "feature-branch");
+        assert_eq!(result.snapshot_id, 12345);
+        assert_eq!(result.new_version, Some(2));
+        assert!(!result.dry_run);
+    }
+
+    #[test]
+    fn test_ref_result_dry_run() {
+        let result = RefResult {
+            name: "test-branch".to_string(),
+            snapshot_id: 67890,
+            new_version: None,
+            dry_run: true,
+        };
+        assert!(result.dry_run);
+        assert!(result.new_version.is_none());
     }
 }

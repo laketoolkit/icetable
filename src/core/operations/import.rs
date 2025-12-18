@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::core::metadata::{
-    DataFileChanges, DataFileInfo, IcebergMetadataService, TableServiceWriter, OperationType,
+    DataFileChanges, DataFileInfo, IcebergMetadataService, OperationType, TableServiceWriter,
 };
 use crate::core::storage::{ObjectMeta, ObjectStoreExt, Storage};
 use crate::error::Result;

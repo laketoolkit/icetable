@@ -11,17 +11,42 @@ use crate::error::{Error, Result};
 /// This function ensures paths are consistently formatted:
 /// - Strips `file://` prefix if present
 /// - Removes trailing slashes (except for root "/")
+/// - Rejects path traversal attempts (`..`)
+/// - Rejects null bytes (path injection)
 ///
 /// Use this function when comparing paths from different sources
 /// (e.g., metadata vs filesystem) to avoid false mismatches.
-pub fn normalize_path(path: &str) -> String {
+///
+/// # Security
+///
+/// This function validates against common path injection attacks.
+/// Returns an error for paths containing `..` or null bytes.
+pub fn normalize_path(path: &str) -> Result<String> {
     let path = path.strip_prefix("file://").unwrap_or(path);
+
+    // Security: reject path traversal attempts
+    if path.contains("..") {
+        return Err(Error::Configuration {
+            message: format!(
+                "Path traversal detected in '{}': '..' sequences not allowed",
+                path
+            ),
+        });
+    }
+
+    // Security: reject null bytes (path injection)
+    if path.contains('\0') {
+        return Err(Error::Configuration {
+            message: "Invalid null byte in path".to_string(),
+        });
+    }
+
     // Remove trailing slash unless it's the root path
     let path = path.strip_suffix('/').unwrap_or(path);
     if path.is_empty() {
-        "/".to_string()
+        Ok("/".to_string())
     } else {
-        path.to_string()
+        Ok(path.to_string())
     }
 }
 
@@ -33,14 +58,18 @@ pub fn normalize_path(path: &str) -> String {
 /// # Examples
 /// ```ignore
 /// normalize_relative_path("/data/table/file.parquet", "/data/table")
-/// // Returns: "file.parquet"
+/// // Returns: Some("file.parquet")
 ///
 /// normalize_relative_path("file:///data/table/file.parquet", "/data/table")
-/// // Returns: "file.parquet"
+/// // Returns: Some("file.parquet")
 /// ```
+///
+/// # Security
+///
+/// Returns `None` if either path contains path traversal sequences.
 pub fn normalize_relative_path(full_path: &str, base_path: &str) -> Option<String> {
-    let normalized_full = normalize_path(full_path);
-    let normalized_base = normalize_path(base_path);
+    let normalized_full = normalize_path(full_path).ok()?;
+    let normalized_base = normalize_path(base_path).ok()?;
 
     // Try to strip the base path
     if let Some(relative) = normalized_full.strip_prefix(&normalized_base) {
@@ -169,8 +198,60 @@ fn scan_single_file(path: &Path, cutoff_timestamp: Option<i64>) -> Result<Option
     }
 
     Ok(Some(ScannedFile {
-        path: normalize_path(&path.to_string_lossy()),
+        path: normalize_path(&path.to_string_lossy())?,
         size: metadata.len(),
         mtime_seconds: mtime,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_path_basic() {
+        assert_eq!(normalize_path("/data/table").unwrap(), "/data/table");
+        assert_eq!(normalize_path("/data/table/").unwrap(), "/data/table");
+        assert_eq!(normalize_path("file:///data/table").unwrap(), "/data/table");
+    }
+
+    #[test]
+    fn test_normalize_path_root() {
+        assert_eq!(normalize_path("/").unwrap(), "/");
+        assert_eq!(normalize_path("").unwrap(), "/");
+    }
+
+    #[test]
+    fn test_normalize_path_rejects_traversal() {
+        let result = normalize_path("/data/../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Path traversal"));
+    }
+
+    #[test]
+    fn test_normalize_path_rejects_traversal_file_url() {
+        let result = normalize_path("file:///../../../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Path traversal"));
+    }
+
+    #[test]
+    fn test_normalize_path_rejects_null_bytes() {
+        let result = normalize_path("/data/table\0/file");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("null byte"));
+    }
+
+    #[test]
+    fn test_normalize_relative_path_basic() {
+        let result = normalize_relative_path("/data/table/file.parquet", "/data/table");
+        assert_eq!(result, Some("file.parquet".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_relative_path_rejects_traversal() {
+        // If either path contains traversal, returns None
+        let result = normalize_relative_path("/data/../etc/passwd", "/data");
+        assert_eq!(result, None);
+    }
 }

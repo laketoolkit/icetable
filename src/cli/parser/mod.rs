@@ -298,7 +298,7 @@ impl Cli {
                 config = config.with_warehouse(warehouse);
             }
 
-            // Build credential source from CLI options
+            // Build auth from CLI options
             let credential_source = CredentialSource::from_cli_options(
                 self.catalog_credential.clone(),
                 self.catalog_credential_env.clone(),
@@ -307,9 +307,9 @@ impl Cli {
                 self.catalog_use_oauth2,
             );
 
-            // Set credential source if present
+            // Set auth if credential source is present
             if let Some(source) = credential_source {
-                config = config.with_credential(source);
+                config = config.with_auth(crate::core::CatalogAuth::bearer(source));
             }
 
             config

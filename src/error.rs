@@ -605,7 +605,9 @@ impl From<iceberg::Error> for Error {
             ErrorKind::TableAlreadyExists => Error::TableAlreadyExists { path: message },
             ErrorKind::NamespaceAlreadyExists => Error::NamespaceAlreadyExists { name: message },
             ErrorKind::CatalogCommitConflicts => Error::Conflict(message),
-            ErrorKind::PreconditionFailed => Error::Conflict(format!("Precondition failed: {}", message)),
+            ErrorKind::PreconditionFailed => {
+                Error::Conflict(format!("Precondition failed: {}", message))
+            }
             ErrorKind::Unexpected => Error::Metadata { message },
             // Handle future ErrorKind variants
             _ => Error::Metadata { message },
@@ -709,8 +711,8 @@ mod tests {
         }
 
         let table_name = "my_table";
-        let result = failing_operation()
-            .with_context(|| format!("processing table {}", table_name));
+        let result =
+            failing_operation().with_context(|| format!("processing table {}", table_name));
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

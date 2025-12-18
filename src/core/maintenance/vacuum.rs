@@ -56,10 +56,7 @@ impl VacuumService {
     /// Analyze files that would be deleted (works with any storage backend)
     ///
     /// Uses `MetadataServiceReader` trait to access table metadata and storage.
-    pub async fn analyze<S: MetadataServiceReader>(
-        &self,
-        service: &S,
-    ) -> Result<VacuumAnalysis> {
+    pub async fn analyze<S: MetadataServiceReader>(&self, service: &S) -> Result<VacuumAnalysis> {
         let (metadata, _) = service.load_metadata().await?;
         let file_io = service.file_io();
         let table_path = service.table_path();
@@ -159,10 +156,7 @@ impl VacuumService {
     ///
     /// Uses `MetadataServiceReader` trait to access table metadata and storage.
     /// Note: This only deletes orphan files, it does NOT modify Iceberg metadata.
-    pub async fn execute<S: MetadataServiceReader>(
-        &self,
-        service: &S,
-    ) -> Result<VacuumResult> {
+    pub async fn execute<S: MetadataServiceReader>(&self, service: &S) -> Result<VacuumResult> {
         let analysis = self.analyze(service).await?;
 
         if analysis.orphan_files.is_empty() {
@@ -188,7 +182,11 @@ impl VacuumService {
         // Delete files using bulk delete API (much faster for cloud storage)
         let storage = service.storage();
 
-        let paths: Vec<String> = analysis.orphan_files.iter().map(|f| f.path.clone()).collect();
+        let paths: Vec<String> = analysis
+            .orphan_files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
         let errors = storage.delete_bulk(&paths).await?;
 
         let deleted_count = analysis.orphan_files.len() - errors.len();
@@ -328,7 +326,10 @@ mod tests {
     #[test]
     fn test_vacuum_service_creation() {
         let service = VacuumService::new();
-        assert_eq!(service.config.retention_hours, sizes::DEFAULT_RETENTION_HOURS);
+        assert_eq!(
+            service.config.retention_hours,
+            sizes::DEFAULT_RETENTION_HOURS
+        );
         assert!(!service.config.dry_run);
     }
 
@@ -406,7 +407,10 @@ mod tests {
         assert_eq!(maintenance_result.operation, "vacuum (dry-run)");
         assert_eq!(maintenance_result.files_removed, 2);
         assert_eq!(maintenance_result.bytes_removed, 3000);
-        assert_eq!(maintenance_result.details.get("mode"), Some(&"dry-run".to_string()));
+        assert_eq!(
+            maintenance_result.details.get("mode"),
+            Some(&"dry-run".to_string())
+        );
     }
 
     #[test]
@@ -451,6 +455,9 @@ mod tests {
         };
 
         let maintenance_result = service.to_maintenance_result(&result);
-        assert_eq!(maintenance_result.details.get("errors"), Some(&"1".to_string()));
+        assert_eq!(
+            maintenance_result.details.get("errors"),
+            Some(&"1".to_string())
+        );
     }
 }

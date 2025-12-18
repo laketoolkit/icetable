@@ -125,6 +125,20 @@ impl SnapshotFormatter {
         serde_json::to_string_pretty(&json)
     }
 
+    /// Format list of snapshots to be expired (preview before operation)
+    pub fn format_expire_preview(snapshot_ids: &[i64], timestamps: &[i64]) -> String {
+        let mut output = Vec::new();
+        output.push(String::new());
+        output.push(format!("Snapshots to expire: {}", snapshot_ids.len()));
+
+        for (id, ts) in snapshot_ids.iter().zip(timestamps.iter()) {
+            let ts_str = super::formatter::format_timestamp_ms(*ts);
+            output.push(format!("  - {} ({})", id, ts_str));
+        }
+
+        output.join("\n")
+    }
+
     /// Format expire result as table
     pub fn format_expire_table(
         deleted_count: usize,
@@ -237,9 +251,128 @@ impl SnapshotFormatter {
 
         serde_json::to_string_pretty(&json)
     }
+
+    /// Format lineage as a table
+    pub fn format_lineage_table(
+        entries: &[LineageEntry],
+        total_count: usize,
+        limit: Option<usize>,
+    ) -> String {
+        let max_items = limit.unwrap_or(usize::MAX);
+        let is_truncated = total_count > max_items && limit.is_some();
+
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
+            Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+        ]);
+
+        // Show items up to limit
+        let display_count = if is_truncated {
+            max_items - 1
+        } else {
+            total_count
+        };
+
+        for entry in entries.iter().take(display_count) {
+            let ts_str = super::formatter::format_timestamp_ms(entry.timestamp_ms);
+
+            let status = if entry.is_current {
+                "● current".green().to_string()
+            } else if entry.is_root && !is_truncated {
+                "● root".green().to_string()
+            } else {
+                String::new()
+            };
+
+            table.add_row(vec![
+                Cell::new(entry.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                Cell::new(&entry.operation),
+                Cell::new(ts_str),
+                Cell::new(status),
+            ]);
+        }
+
+        let mut output = table.to_string();
+
+        // Show truncation indicator and root
+        if is_truncated {
+            let skipped = total_count - max_items;
+            output.push_str(&format!(
+                "\n         {} ({})",
+                "...".dimmed(),
+                format!("{} more", skipped).dimmed()
+            ));
+
+            // Show root in a separate mini-table
+            if let Some(root) = entries.last() {
+                let ts_str = super::formatter::format_timestamp_ms(root.timestamp_ms);
+
+                let mut root_table = create_styled_table();
+                root_table.set_header(vec![
+                    Cell::new("Snapshot".cyan().to_string()).set_alignment(CellAlignment::Center),
+                    Cell::new("Operation".cyan().to_string()).set_alignment(CellAlignment::Center),
+                    Cell::new("Timestamp".cyan().to_string()).set_alignment(CellAlignment::Center),
+                    Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
+                ]);
+                root_table.add_row(vec![
+                    Cell::new(root.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
+                    Cell::new(&root.operation),
+                    Cell::new(ts_str),
+                    Cell::new("● root".green().to_string()),
+                ]);
+                output.push_str(&format!("\n{}", root_table));
+            }
+        }
+
+        output.push_str(&format!(
+            "\n\n{}",
+            format!("{} snapshots total", total_count).dimmed()
+        ));
+        output
+    }
+
+    /// Format lineage as JSON
+    pub fn format_lineage_json(
+        table_path: &str,
+        entries: &[LineageEntry],
+        total_count: usize,
+    ) -> Result<String, serde_json::Error> {
+        let json_lineage: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "snapshot_id": entry.snapshot_id,
+                    "parent_id": entry.parent_id,
+                    "timestamp": chrono::DateTime::from_timestamp_millis(entry.timestamp_ms)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                    "operation": entry.operation,
+                    "is_current": entry.is_current,
+                })
+            })
+            .collect();
+
+        let json = serde_json::json!({
+            "table": table_path,
+            "lineage": json_lineage,
+            "total": total_count,
+        });
+
+        serde_json::to_string_pretty(&json)
+    }
 }
 
-/// Common snapshot information for formatting
+/// Snapshot information for CLI formatting
+///
+/// This is a CLI-specific type optimized for display formatting, with:
+/// - `DateTime<Utc>` instead of milliseconds for easy formatting
+/// - `is_current` flag for visual indicators
+/// - Builder pattern for convenient construction
+///
+/// For the core domain type, see `crate::core::metadata::traits::SnapshotInfo`.
 #[derive(Debug, Clone)]
 pub struct SnapshotInfo {
     /// Snapshot ID (unique identifier)
@@ -282,5 +415,118 @@ impl SnapshotInfo {
     pub fn with_operation(mut self, operation: String) -> Self {
         self.operation = Some(operation);
         self
+    }
+}
+
+/// Lineage entry for formatting snapshot ancestry
+#[derive(Debug, Clone)]
+pub struct LineageEntry {
+    /// Snapshot ID
+    pub snapshot_id: i64,
+    /// Parent snapshot ID (if any)
+    pub parent_id: Option<i64>,
+    /// Timestamp in milliseconds
+    pub timestamp_ms: i64,
+    /// Operation that created this snapshot
+    pub operation: String,
+    /// Whether this is the current snapshot
+    pub is_current: bool,
+    /// Whether this is the root (oldest) snapshot in the lineage
+    pub is_root: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_lineage() -> Vec<LineageEntry> {
+        vec![
+            LineageEntry {
+                snapshot_id: 3000,
+                parent_id: Some(2000),
+                timestamp_ms: 1700000003000,
+                operation: "append".to_string(),
+                is_current: true,
+                is_root: false,
+            },
+            LineageEntry {
+                snapshot_id: 2000,
+                parent_id: Some(1000),
+                timestamp_ms: 1700000002000,
+                operation: "append".to_string(),
+                is_current: false,
+                is_root: false,
+            },
+            LineageEntry {
+                snapshot_id: 1000,
+                parent_id: None,
+                timestamp_ms: 1700000001000,
+                operation: "append".to_string(),
+                is_current: false,
+                is_root: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_format_lineage_table() {
+        let entries = sample_lineage();
+        let result = SnapshotFormatter::format_lineage_table(&entries, 3, None);
+        assert!(result.contains("3000"));
+        assert!(result.contains("2000"));
+        assert!(result.contains("1000"));
+        assert!(result.contains("current"));
+        assert!(result.contains("root"));
+        assert!(result.contains("3 snapshots total"));
+    }
+
+    #[test]
+    fn test_format_lineage_table_with_limit() {
+        let entries = sample_lineage();
+        let result = SnapshotFormatter::format_lineage_table(&entries, 3, Some(2));
+        // Should show truncation indicator
+        assert!(result.contains("..."));
+        assert!(result.contains("1 more"));
+    }
+
+    #[test]
+    fn test_format_lineage_json() {
+        let entries = sample_lineage();
+        let result = SnapshotFormatter::format_lineage_json("/path/to/table", &entries, 3).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["table"], "/path/to/table");
+        assert_eq!(parsed["total"], 3);
+        assert_eq!(parsed["lineage"].as_array().unwrap().len(), 3);
+        assert_eq!(parsed["lineage"][0]["snapshot_id"], 3000);
+        assert_eq!(parsed["lineage"][0]["is_current"], true);
+    }
+
+    #[test]
+    fn test_snapshot_info_builder() {
+        let info = SnapshotInfo::new(1234, None)
+            .with_parent(Some(1000))
+            .with_current(true)
+            .with_operation("append".to_string());
+
+        assert_eq!(info.id, 1234);
+        assert_eq!(info.parent_id, Some(1000));
+        assert!(info.is_current);
+        assert_eq!(info.operation, Some("append".to_string()));
+    }
+
+    #[test]
+    fn test_format_list_table_empty() {
+        let result = SnapshotFormatter::format_list_table(&[], "Test Snapshots");
+        assert!(result.contains("No snapshots found"));
+    }
+
+    #[test]
+    fn test_format_list_json() {
+        let snapshots = vec![SnapshotInfo::new(1000, None).with_current(true)];
+        let result = SnapshotFormatter::format_list_json(&snapshots).unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["id"], 1000);
+        assert_eq!(parsed[0]["is_current"], true);
     }
 }

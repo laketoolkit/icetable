@@ -192,6 +192,21 @@ impl DoctorService {
         environment::test_catalog_connectivity(name, catalog).await
     }
 
+    /// Check config file existence and validity
+    pub fn check_config_file() -> CheckResult {
+        environment::check_config_file()
+    }
+
+    /// Check configuration (context, aliases, catalogs)
+    pub async fn check_configuration(catalog_to_test: Option<&str>) -> Vec<CheckResult> {
+        environment::check_configuration(catalog_to_test).await
+    }
+
+    /// Detect which storage types are configured
+    pub fn detect_configured_storage_types() -> environment::ConfiguredStorageTypes {
+        environment::detect_configured_storage_types()
+    }
+
     // ========================================================================
     // Table Integrity Checks
     // ========================================================================

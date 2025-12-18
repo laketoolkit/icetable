@@ -2,13 +2,8 @@
 //!
 //! Manages branches and tags for Iceberg tables using shared code.
 
-use colored::Colorize;
-use comfy_table::{Cell, CellAlignment};
-
-use super::common::{
-    print_json, print_ref_delete_dry_run, print_version_if_present, resolve_table_from_context,
-};
-use crate::cli::output::create_styled_table;
+use super::common::resolve_table_from_context;
+use crate::cli::output::{FormatterRefInfo, RefsFormatter};
 use crate::cli::parser::CatalogContext;
 use crate::core::maintenance::{BranchRetention, RefConfig, RefService};
 use crate::core::metadata::IcebergMetadataService;
@@ -66,67 +61,28 @@ impl RefCommands {
             None
         };
 
-        // Filter by ref type
-        let filtered: Vec<_> = refs
+        // Filter by ref type and convert to formatter types
+        let filtered: Vec<FormatterRefInfo> = refs
             .iter()
             .filter(|r| r.ref_type == ref_type.filter_type())
+            .map(|r| FormatterRefInfo::new(r.name.clone(), r.snapshot_id, r.ref_type.clone()))
             .collect();
 
         if output == "json" {
-            let json_refs: Vec<serde_json::Value> = filtered
-                .iter()
-                .map(|r| {
-                    let mut obj = serde_json::json!({
-                        "name": r.name,
-                        "snapshot_id": r.snapshot_id,
-                    });
-                    if show_current {
-                        obj["is_current"] = serde_json::json!(
-                            Some(r.snapshot_id) == current_snapshot_id && r.name == "main"
-                        );
-                    }
-                    obj
-                })
-                .collect();
-            print_json(&json_refs)?;
-        } else if filtered.is_empty() {
-            println!(
-                "{}",
-                format!("No {}s found", ref_type.name_lower()).dimmed()
-            );
+            let json_str =
+                RefsFormatter::format_list_json(&filtered, show_current, current_snapshot_id)
+                    .map_err(|e| crate::error::Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+            println!("{}", json_str);
         } else {
-            let mut table = create_styled_table();
-
-            let mut headers = vec![
-                Cell::new(ref_type.name().cyan().to_string()).set_alignment(CellAlignment::Left),
-                Cell::new("Snapshot ID".cyan().to_string()).set_alignment(CellAlignment::Right),
-            ];
-            if show_current {
-                headers.push(
-                    Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Center),
-                );
-            }
-            table.set_header(headers);
-
-            for r in &filtered {
-                let mut row = vec![
-                    Cell::new(&r.name).set_alignment(CellAlignment::Left),
-                    Cell::new(r.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
-                ];
-                if show_current {
-                    let is_main_current =
-                        r.name == "main" && Some(r.snapshot_id) == current_snapshot_id;
-                    let status = if is_main_current {
-                        "● current".green().to_string()
-                    } else {
-                        String::new()
-                    };
-                    row.push(Cell::new(status).set_alignment(CellAlignment::Center));
-                }
-                table.add_row(row);
-            }
-
-            println!("{}", table);
+            let table_str = RefsFormatter::format_list_table(
+                &filtered,
+                ref_type.name(),
+                show_current,
+                current_snapshot_id,
+            );
+            println!("{}", table_str);
         }
 
         Ok(())
@@ -189,23 +145,34 @@ impl RefCommands {
         let result = ref_service.delete_ref(metadata_service, name).await?;
 
         if output == "json" {
-            let json = serde_json::json!({
-                "name": result.name,
-                "snapshot_id": result.snapshot_id,
-                "new_version": result.new_version,
-                "dry_run": result.dry_run,
-            });
-            print_json(&json)?;
+            let json_str = RefsFormatter::format_delete_json(
+                &result.name,
+                result.snapshot_id,
+                result.new_version,
+                result.dry_run,
+            )
+            .map_err(|e| crate::error::Error::Serialization {
+                message: e.to_string(),
+            })?;
+            println!("{}", json_str);
         } else if result.dry_run {
-            print_ref_delete_dry_run(ref_type.name(), &result.name, result.snapshot_id);
+            println!(
+                "{}",
+                RefsFormatter::format_delete_dry_run(
+                    ref_type.name(),
+                    &result.name,
+                    result.snapshot_id
+                )
+            );
         } else {
             println!(
-                "{} Deleted {} '{}'",
-                "Success:".green(),
-                ref_type.name_lower(),
-                result.name.red()
+                "{}",
+                RefsFormatter::format_delete_table(
+                    ref_type.name(),
+                    &result.name,
+                    result.new_version
+                )
             );
-            print_version_if_present(result.new_version);
         }
 
         Ok(())
@@ -268,20 +235,24 @@ impl RefCommands {
             .await?;
 
         if output == "json" {
-            let json = serde_json::json!({
-                "name": result.name,
-                "snapshot_id": result.snapshot_id,
-                "new_version": result.new_version,
-            });
-            print_json(&json)?;
+            let json_str = RefsFormatter::format_fast_forward_json(
+                &result.name,
+                result.snapshot_id,
+                result.new_version,
+            )
+            .map_err(|e| crate::error::Error::Serialization {
+                message: e.to_string(),
+            })?;
+            println!("{}", json_str);
         } else {
             println!(
-                "{} Fast-forwarded branch '{}' to snapshot {}",
-                "Success:".green(),
-                result.name.cyan(),
-                result.snapshot_id
+                "{}",
+                RefsFormatter::format_fast_forward_table(
+                    &result.name,
+                    result.snapshot_id,
+                    result.new_version
+                )
             );
-            print_version_if_present(result.new_version);
         }
 
         Ok(())
@@ -296,21 +267,16 @@ impl RefCommands {
         output: &str,
     ) -> Result<()> {
         if output == "json" {
-            let json = serde_json::json!({
-                "name": name,
-                "snapshot_id": snapshot_id,
-                "new_version": new_version,
-            });
-            print_json(&json)?;
+            let json_str = RefsFormatter::format_create_json(name, snapshot_id, new_version)
+                .map_err(|e| crate::error::Error::Serialization {
+                    message: e.to_string(),
+                })?;
+            println!("{}", json_str);
         } else {
             println!(
-                "{} Created {} '{}' at snapshot {}",
-                "Success:".green(),
-                ref_type.name_lower(),
-                name.cyan(),
-                snapshot_id
+                "{}",
+                RefsFormatter::format_create_table(ref_type.name(), name, snapshot_id, new_version)
             );
-            print_version_if_present(new_version);
         }
         Ok(())
     }
@@ -320,27 +286,27 @@ impl RefCommands {
         ref_type: RefType,
         old_name: &str,
         new_name: &str,
-        snapshot_id: i64,
+        _snapshot_id: i64,
         new_version: Option<i64>,
         output: &str,
     ) -> Result<()> {
         if output == "json" {
-            let json = serde_json::json!({
-                "old_name": old_name,
-                "new_name": new_name,
-                "snapshot_id": snapshot_id,
-                "new_version": new_version,
-            });
-            print_json(&json)?;
+            let json_str =
+                RefsFormatter::format_rename_json(old_name, new_name, _snapshot_id, new_version)
+                    .map_err(|e| crate::error::Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+            println!("{}", json_str);
         } else {
             println!(
-                "{} Renamed {} '{}' to '{}'",
-                "Success:".green(),
-                ref_type.name_lower(),
-                old_name.yellow(),
-                new_name.cyan()
+                "{}",
+                RefsFormatter::format_rename_table(
+                    ref_type.name(),
+                    old_name,
+                    new_name,
+                    new_version
+                )
             );
-            print_version_if_present(new_version);
         }
         Ok(())
     }

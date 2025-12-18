@@ -4,8 +4,8 @@
 //! that doesn't require external services.
 
 use icetable::core::utils::{
-    TableFormat, detect_table_format, extract_version_from_path, format_bytes,
-    normalize_path, normalize_relative_path, parse_bytes,
+    TableFormat, detect_table_format, extract_version_from_path, format_bytes, normalize_path,
+    normalize_relative_path, parse_bytes,
 };
 use tempfile::TempDir;
 
@@ -72,16 +72,28 @@ fn test_delta_takes_precedence_over_iceberg() {
 
 #[test]
 fn test_normalize_path_trailing_slash() {
-    assert_eq!(normalize_path("/path/to/table/"), "/path/to/table");
-    assert_eq!(normalize_path("/path/to/table"), "/path/to/table");
+    assert_eq!(normalize_path("/path/to/table/").unwrap(), "/path/to/table");
+    assert_eq!(normalize_path("/path/to/table").unwrap(), "/path/to/table");
 }
 
 #[test]
 fn test_normalize_path_s3() {
     assert_eq!(
-        normalize_path("s3://bucket/path/"),
+        normalize_path("s3://bucket/path/").unwrap(),
         "s3://bucket/path"
     );
+}
+
+#[test]
+fn test_normalize_path_rejects_traversal() {
+    // Path traversal should be rejected
+    assert!(normalize_path("/path/../etc/passwd").is_err());
+    assert!(normalize_path("s3://bucket/../other").is_err());
+}
+
+#[test]
+fn test_normalize_path_rejects_null_bytes() {
+    assert!(normalize_path("/path/to\0/file").is_err());
 }
 
 #[test]
@@ -151,7 +163,10 @@ fn test_format_bytes() {
     assert!(format_bytes(512).contains("512"));
     assert!(format_bytes(1024).contains("KB") || format_bytes(1024).contains("1"));
     assert!(format_bytes(1024 * 1024).contains("MB") || format_bytes(1024 * 1024).contains("1"));
-    assert!(format_bytes(1024 * 1024 * 1024).contains("GB") || format_bytes(1024 * 1024 * 1024).contains("1"));
+    assert!(
+        format_bytes(1024 * 1024 * 1024).contains("GB")
+            || format_bytes(1024 * 1024 * 1024).contains("1")
+    );
 }
 
 // ============================================================================
@@ -179,8 +194,14 @@ fn test_storage_type_detection() {
 fn test_resource_limits_parse_memory() {
     use icetable::utils::ResourceLimits;
 
-    assert_eq!(ResourceLimits::parse_memory("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
-    assert_eq!(ResourceLimits::parse_memory("512MB").unwrap(), 512 * 1024 * 1024);
+    assert_eq!(
+        ResourceLimits::parse_memory("2GB").unwrap(),
+        2 * 1024 * 1024 * 1024
+    );
+    assert_eq!(
+        ResourceLimits::parse_memory("512MB").unwrap(),
+        512 * 1024 * 1024
+    );
     assert_eq!(ResourceLimits::parse_memory("0").unwrap(), 0);
 }
 
@@ -214,8 +235,8 @@ fn test_parse_relative_duration() {
 
 #[test]
 fn test_parse_timestamp() {
-    use icetable::utils::parse_timestamp;
     use chrono::Utc;
+    use icetable::utils::parse_timestamp;
 
     // Relative duration format (7d = 7 days ago)
     let ts = parse_timestamp("7d").unwrap();
@@ -234,8 +255,8 @@ fn test_parse_timestamp() {
 
 #[test]
 fn test_parse_data_type() {
-    use icetable::utils::parse_data_type;
     use arrow::datatypes::DataType;
+    use icetable::utils::parse_data_type;
 
     // Standard Arrow type names
     assert_eq!(parse_data_type("Int32").unwrap(), DataType::Int32);

@@ -3,13 +3,11 @@
 //! Shows version history for Iceberg tables.
 //! Thin wrapper that delegates to HistoryService in core.
 
-use colored::Colorize;
-
-use super::common::{print_json, resolve_table_from_context};
-use crate::cli::output::format_datetime_utc;
+use super::common::resolve_table_from_context;
+use crate::cli::output::{HistoryEntryInfo, HistoryFormatter};
 use crate::cli::parser::{CatalogContext, HistoryArgs};
-use crate::core::operations::{HistoryConfig, HistoryEntry, HistoryService};
-use crate::error::Result;
+use crate::core::operations::{HistoryConfig, HistoryService};
+use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
 /// Handler for history command
@@ -37,79 +35,20 @@ impl HistoryCommand {
 
         let entries = HistoryService::get_history(&table, &config)?;
 
-        // 5. Output
-        Self::output(&entries, &args.output)
-    }
+        // 4. Convert to formatter types
+        let entry_infos: Vec<HistoryEntryInfo> =
+            entries.iter().map(HistoryEntryInfo::from_core).collect();
 
-    /// Output history in the requested format
-    fn output(entries: &[HistoryEntry], format: &str) -> Result<()> {
-        match format {
-            "json" => Self::output_json(entries),
-            _ => Self::output_table(entries),
+        // 5. Output using formatter
+        if args.output == "json" {
+            let json_str =
+                HistoryFormatter::format_json(&entry_infos).map_err(|e| Error::Serialization {
+                    message: e.to_string(),
+                })?;
+            println!("{}", json_str);
+        } else {
+            println!("{}", HistoryFormatter::format_table(&entry_infos));
         }
-    }
-
-    /// Output history as a table
-    fn output_table(entries: &[HistoryEntry]) -> Result<()> {
-        if entries.is_empty() {
-            println!("No history entries found.");
-            return Ok(());
-        }
-
-        for entry in entries {
-            let marker = if entry.is_current {
-                "●".yellow().bold()
-            } else {
-                "○".dimmed()
-            };
-
-            let timestamp = format_datetime_utc(&entry.timestamp);
-
-            let op = match entry.operation.as_str() {
-                "Append" => "append".green(),
-                "Overwrite" => "overwrite".yellow(),
-                "Delete" => "delete".red(),
-                "Replace" => "replace".cyan(),
-                other => other.normal(),
-            };
-
-            println!(
-                "{} {} - {} ({})",
-                marker,
-                entry.version.to_string().cyan().bold(),
-                op,
-                timestamp.to_string().dimmed()
-            );
-
-            // Details line
-            let details = HistoryService::format_details(entry);
-            if !details.is_empty() {
-                println!("  {}", details.join(", ").dimmed());
-            }
-            println!();
-        }
-
-        println!("{} snapshots", entries.len());
-
-        Ok(())
-    }
-
-    /// Output history as JSON
-    fn output_json(entries: &[HistoryEntry]) -> Result<()> {
-        let json_entries: Vec<serde_json::Value> = entries
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "snapshot_id": e.version,
-                    "timestamp": e.timestamp.to_rfc3339(),
-                    "operation": e.operation,
-                    "details": e.details,
-                    "is_current": e.is_current,
-                })
-            })
-            .collect();
-
-        print_json(&json_entries)?;
 
         Ok(())
     }

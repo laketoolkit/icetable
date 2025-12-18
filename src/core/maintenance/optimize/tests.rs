@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use super::pipeline::parse_partition_key;
 use super::*;
 
 fn make_file(path: &str, size: u64, partition: HashMap<String, String>) -> DataFileInfo {
@@ -37,23 +38,20 @@ fn test_service_with_config() {
 
 #[test]
 fn test_parse_partition_key_empty() {
-    let service = OptimizeService::new();
-    let result = service.parse_partition_key("");
+    let result = parse_partition_key("");
     assert!(result.is_empty());
 }
 
 #[test]
 fn test_parse_partition_key_single() {
-    let service = OptimizeService::new();
-    let result = service.parse_partition_key("year=2024");
+    let result = parse_partition_key("year=2024");
     assert_eq!(result.len(), 1);
     assert_eq!(result.get("year"), Some(&"2024".to_string()));
 }
 
 #[test]
 fn test_parse_partition_key_multiple() {
-    let service = OptimizeService::new();
-    let result = service.parse_partition_key("year=2024/month=12/day=15");
+    let result = parse_partition_key("year=2024/month=12/day=15");
     assert_eq!(result.len(), 3);
     assert_eq!(result.get("year"), Some(&"2024".to_string()));
     assert_eq!(result.get("month"), Some(&"12".to_string()));
@@ -64,7 +62,7 @@ fn test_parse_partition_key_multiple() {
 fn test_optimal_subgroup_size_small_files() {
     // Small files (<1MB avg) should get groups of ~100
     let size = calculate_optimal_subgroup_size(1000, 500_000_000, 4);
-    assert!(size >= 50 && size <= 125);
+    assert!((50..=125).contains(&size));
 }
 
 #[test]
@@ -191,21 +189,9 @@ fn test_analyze_with_partition_filter() {
     part_2023.insert("year".to_string(), "2023".to_string());
 
     let files = vec![
-        make_file(
-            "data/year=2024/file1.parquet",
-            1_000_000,
-            part_2024.clone(),
-        ),
-        make_file(
-            "data/year=2024/file2.parquet",
-            2_000_000,
-            part_2024.clone(),
-        ),
-        make_file(
-            "data/year=2023/file1.parquet",
-            1_000_000,
-            part_2023.clone(),
-        ),
+        make_file("data/year=2024/file1.parquet", 1_000_000, part_2024.clone()),
+        make_file("data/year=2024/file2.parquet", 2_000_000, part_2024.clone()),
+        make_file("data/year=2023/file1.parquet", 1_000_000, part_2023.clone()),
     ];
 
     let result = service.analyze(&files);

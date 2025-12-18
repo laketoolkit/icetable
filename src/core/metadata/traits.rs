@@ -252,7 +252,6 @@ pub trait MetadataServiceWriter: MetadataServiceReader + TableServiceWriter {
     fn committer(&self) -> Option<TableCommitter>;
 }
 
-
 /// Result of a maintenance operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaintenanceResult {

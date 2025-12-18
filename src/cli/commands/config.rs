@@ -3,10 +3,8 @@
 //! Manages icetable configuration (aliases, catalogs, context).
 
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment};
 
-use super::common::print_json;
-use crate::cli::output::create_styled_table;
+use crate::cli::output::{ConfigCatalogInfo, ConfigFormatter, ConfigTableInfo};
 use crate::cli::parser::{
     ConfigAddArgs, ConfigArgs, ConfigCommands, ConfigDeleteArgs, ConfigLsArgs, ConfigUseArgs,
 };
@@ -74,8 +72,7 @@ impl ConfigCommand {
         let is_table = config.tables.contains_key(name);
 
         if !is_catalog && !is_table {
-            println!("{} Not found: {}", "!".yellow(), name.cyan());
-            println!("  Use {} to add it first", "icetable config add".dimmed());
+            println!("{}", ConfigFormatter::format_use_not_found(name));
             return Ok(());
         }
 
@@ -90,7 +87,10 @@ impl ConfigCommand {
             }
             config.set_current_context(name.clone());
             config.save()?;
-            println!("{} Using table: {}", "✓".green(), name.cyan());
+            println!(
+                "{}",
+                ConfigFormatter::format_use_success(&format!("table: {}", name.cyan()))
+            );
             return Ok(());
         }
 
@@ -142,7 +142,7 @@ impl ConfigCommand {
             display_parts.join(".")
         };
 
-        println!("{} Using: {}", "✓".green(), display);
+        println!("{}", ConfigFormatter::format_use_success(&display));
 
         Ok(())
     }
@@ -176,10 +176,8 @@ impl ConfigCommand {
             config.save()?;
 
             println!(
-                "{} Added table: {} → {}",
-                "✓".green(),
-                args.name.cyan(),
-                uri.dimmed()
+                "{}",
+                ConfigFormatter::format_add_table_success(&args.name, &uri)
             );
         }
 
@@ -267,7 +265,6 @@ impl ConfigCommand {
             uri: uri.to_string(),
             warehouse: args.warehouse.clone(),
             auth,
-            credential: None,
             properties,
         };
 
@@ -279,15 +276,14 @@ impl ConfigCommand {
         config.save()?;
 
         println!(
-            "{} Added catalog: {} ({}) → {}",
-            "✓".green(),
-            name.cyan(),
-            provider,
-            uri.dimmed()
+            "{}",
+            ConfigFormatter::format_add_catalog_success(
+                name,
+                &provider.to_string(),
+                uri,
+                Some(&auth_desc)
+            )
         );
-        if auth_desc != "none" {
-            println!("  {} {}", "Auth:".dimmed(), auth_desc.dimmed());
-        }
 
         Ok(())
     }
@@ -303,16 +299,22 @@ impl ConfigCommand {
                 config.unset_current_context();
             }
             config.save()?;
-            println!("{} Deleted table: {}", "✓".green(), args.name.cyan());
+            println!(
+                "{}",
+                ConfigFormatter::format_delete_success("table", &args.name)
+            );
         } else if config.delete_catalog(&args.name) {
             // Clear current catalog if it was this one
             if config.get_current_catalog() == Some(args.name.as_str()) {
                 config.unset_current_catalog();
             }
             config.save()?;
-            println!("{} Deleted catalog: {}", "✓".green(), args.name.cyan());
+            println!(
+                "{}",
+                ConfigFormatter::format_delete_success("catalog", &args.name)
+            );
         } else {
-            println!("{} Not found: {}", "!".yellow(), args.name.cyan());
+            println!("{}", ConfigFormatter::format_delete_not_found(&args.name));
         }
 
         Ok(())
@@ -328,116 +330,49 @@ impl ConfigCommand {
             .map(|ctx| (ctx.warehouse, ctx.namespace, ctx.table))
             .unwrap_or((None, None, None));
 
+        // Convert config data to formatter types
+        let tables: Vec<ConfigTableInfo> = config
+            .tables
+            .iter()
+            .map(|(name, path)| ConfigTableInfo {
+                name: name.clone(),
+                path: path.clone(),
+            })
+            .collect();
+
+        let catalogs: Vec<ConfigCatalogInfo> = config
+            .catalogs
+            .iter()
+            .map(|(name, cat)| ConfigCatalogInfo {
+                name: name.clone(),
+                provider: cat.provider().to_string(),
+                uri: cat.uri.clone(),
+                warehouse: cat.warehouse.clone(),
+            })
+            .collect();
+
         if args.output == "json" {
-            let json = serde_json::json!({
-                "current_catalog": config.get_current_catalog(),
-                "current_warehouse": current_warehouse,
-                "current_namespace": current_namespace,
-                "current_table": current_table,
-                "tables": config.tables.iter().map(|(name, path)| {
-                    serde_json::json!({
-                        "name": name,
-                        "path": path,
-                    })
-                }).collect::<Vec<_>>(),
-                "catalogs": config.catalogs.iter().map(|(name, cat)| {
-                    serde_json::json!({
-                        "name": name,
-                        "provider": cat.provider().to_string(),
-                        "uri": cat.uri,
-                        "warehouse": cat.warehouse,
-                    })
-                }).collect::<Vec<_>>(),
-            });
-            print_json(&json)?;
+            let json_str = ConfigFormatter::format_config_list_json(
+                config.get_current_catalog(),
+                current_warehouse.as_deref(),
+                current_namespace.as_deref(),
+                current_table.as_deref(),
+                &tables,
+                &catalogs,
+            )?;
+            println!("{}", json_str);
         } else {
-            // Show catalogs with current context inline
-            println!("{}", "Catalogs:".bold());
-            if config.catalogs.is_empty() {
-                println!("  {}", "(none)".dimmed());
-            } else {
-                let mut table = create_styled_table();
-
-                table.set_header(vec![
-                    Cell::new("".to_string()).set_alignment(CellAlignment::Center),
-                    Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Provider".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Warehouse".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Namespace".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Table".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("URI".cyan().to_string()).set_alignment(CellAlignment::Left),
-                ]);
-
-                let mut names: Vec<_> = config.catalogs.keys().collect();
-                names.sort();
-
-                for name in names {
-                    let cat = &config.catalogs[name];
-                    let is_current = config.get_current_catalog() == Some(name.as_str());
-                    let marker = if is_current {
-                        "●".green().to_string()
-                    } else {
-                        "".to_string()
-                    };
-
-                    // Show warehouse/namespace/table only for the current catalog
-                    let (wh_display, ns_display, tbl_display) = if is_current {
-                        (
-                            current_warehouse.as_deref().unwrap_or("-"),
-                            current_namespace.as_deref().unwrap_or("-"),
-                            current_table.as_deref().unwrap_or("-"),
-                        )
-                    } else {
-                        ("-", "-", "-")
-                    };
-
-                    table.add_row(vec![
-                        Cell::new(marker).set_alignment(CellAlignment::Center),
-                        Cell::new(name).set_alignment(CellAlignment::Left),
-                        Cell::new(cat.provider().to_string()).set_alignment(CellAlignment::Left),
-                        Cell::new(wh_display).set_alignment(CellAlignment::Left),
-                        Cell::new(ns_display).set_alignment(CellAlignment::Left),
-                        Cell::new(tbl_display).set_alignment(CellAlignment::Left),
-                        Cell::new(&cat.uri).set_alignment(CellAlignment::Left),
-                    ]);
-                }
-
-                println!("{}", table);
-            }
-
-            // Show tables (only if there are any)
-            if !config.tables.is_empty() {
-                println!();
-                println!("{}", "Tables:".bold());
-                let mut table = create_styled_table();
-
-                table.set_header(vec![
-                    Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Path".cyan().to_string()).set_alignment(CellAlignment::Left),
-                ]);
-
-                let mut names: Vec<_> = config.tables.keys().collect();
-                names.sort();
-
-                for name in names {
-                    let path = &config.tables[name];
-
-                    table.add_row(vec![
-                        Cell::new(name).set_alignment(CellAlignment::Left),
-                        Cell::new(path).set_alignment(CellAlignment::Left),
-                    ]);
-                }
-
-                println!("{}", table);
-            }
-
-            // Show config path
-            println!();
-            println!(
-                "{} {}",
-                "Config file:".dimmed(),
-                Config::config_path()?.display()
+            let config_path = Config::config_path()?.display().to_string();
+            let text = ConfigFormatter::format_config_list_text(
+                config.get_current_catalog(),
+                current_warehouse.as_deref(),
+                current_namespace.as_deref(),
+                current_table.as_deref(),
+                &tables,
+                &catalogs,
+                &config_path,
             );
+            println!("{}", text);
         }
 
         Ok(())

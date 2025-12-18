@@ -235,10 +235,6 @@ pub struct CatalogConfig {
     /// Authentication configuration
     #[serde(default)]
     pub auth: CatalogAuth,
-    /// Legacy credential field (for backwards compatibility)
-    /// Prefer using `auth` instead
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<CredentialSource>,
     /// Additional properties
     #[serde(default)]
     pub properties: HashMap<String, String>,
@@ -253,7 +249,6 @@ impl CatalogConfig {
             uri: uri.into(),
             warehouse: None,
             auth: CatalogAuth::None,
-            credential: None,
             properties: HashMap::new(),
         }
     }
@@ -282,12 +277,6 @@ impl CatalogConfig {
         self
     }
 
-    /// Set credential source (legacy, prefer with_auth)
-    pub fn with_credential(mut self, credential: CredentialSource) -> Self {
-        self.credential = Some(credential);
-        self
-    }
-
     /// Add a property
     pub fn with_property(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.properties.insert(key.into(), value.into());
@@ -302,26 +291,10 @@ impl CatalogConfig {
         // Add auth properties
         props.extend(self.auth.to_properties()?);
 
-        // Legacy credential support (if auth is None)
-        if matches!(self.auth, CatalogAuth::None)
-            && let Some(ref cred) = self.credential
-            && let Some(token) = cred.resolve()?
-        {
-            props.insert("credential".to_string(), token);
-        }
-
         // Add custom properties
         props.extend(self.properties.clone());
 
         Ok(props)
-    }
-
-    /// Resolve credential to a string token/secret (legacy)
-    pub fn resolve_credential(&self) -> Result<Option<String>> {
-        match &self.credential {
-            Some(source) => source.resolve(),
-            None => Ok(None),
-        }
     }
 
     /// Create a copy of this config with auth overridden
@@ -359,14 +332,6 @@ impl CatalogConfig {
         // Get effective auth (credentials.yaml has priority)
         let auth = self.effective_auth(catalog_name)?;
         props.extend(auth.to_properties()?);
-
-        // Legacy credential support (only if auth is None and no credentials.yaml)
-        if matches!(auth, CatalogAuth::None)
-            && let Some(ref cred) = self.credential
-            && let Some(token) = cred.resolve()?
-        {
-            props.insert("credential".to_string(), token);
-        }
 
         // Add custom properties
         props.extend(self.properties.clone());

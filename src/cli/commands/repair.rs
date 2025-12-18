@@ -2,14 +2,11 @@
 //!
 //! Thin wrapper that delegates to RepairService for Iceberg tables.
 
-use colored::Colorize;
-
-use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
+use super::common::{TableResolution, resolve_table_from_context};
+use crate::cli::output::RepairFormatter;
 use crate::cli::parser::{CatalogContext, RepairArgs};
-use crate::core::extract_filename;
+use crate::core::CatalogConfig;
 use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
-use crate::core::metadata::MaintenanceResult;
-use crate::core::{CatalogConfig, format_bytes};
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
@@ -88,14 +85,8 @@ impl RepairCommand {
         cli_catalog: Option<&CatalogConfig>,
     ) -> Result<()> {
         println!(
-            "{} Iceberg table at {}",
-            if args.dry_run {
-                "Analyzing"
-            } else {
-                "Repairing"
-            }
-            .green(),
-            table_path
+            "{}",
+            RepairFormatter::format_analysis_header(table_path, args.dry_run)
         );
 
         // Create metadata service using factory method - handles catalog vs path context automatically
@@ -114,11 +105,7 @@ impl RepairCommand {
             || (options.remove_missing && !analysis.missing_files.is_empty());
 
         if !has_work {
-            println!();
-            println!(
-                "{}",
-                "No issues match the selected repair options.".yellow()
-            );
+            println!("{}", RepairFormatter::format_no_work());
             return Ok(());
         }
 
@@ -128,7 +115,7 @@ impl RepairCommand {
 
         // Execute the repair
         let result = service.execute(&metadata_service).await?;
-        Self::print_result(&result)?;
+        println!("{}", RepairFormatter::format_result(&result));
 
         Ok(())
     }
@@ -139,89 +126,31 @@ impl RepairCommand {
         args: &RepairArgs,
         options: RepairOptions,
     ) -> Result<()> {
-        println!();
-        println!(
-            "Tracked files in metadata: {}",
-            analysis.total_tracked.to_string().cyan()
-        );
-        println!(
-            "Parquet files on disk:     {}",
-            analysis.total_on_disk.to_string().cyan()
-        );
+        println!("{}", RepairFormatter::format_analysis_summary(analysis));
 
         if !analysis.has_issues() {
-            println!();
-            println!("{}", "No issues found - table is healthy!".green());
+            println!("{}", RepairFormatter::format_healthy());
             return Ok(());
         }
 
-        println!();
-        println!("Issues found:");
-
-        if !analysis.missing_files.is_empty() {
-            let status = if options.remove_missing {
-                "will fix".green()
-            } else {
-                "skipped".dimmed()
-            };
-            println!(
-                "  Missing files:  {} ({}) [{}]",
-                analysis.missing_files.len().to_string().red(),
-                format_bytes(analysis.missing_bytes()),
-                status
-            );
-        }
-
-        if !analysis.orphan_files.is_empty() {
-            let status = if options.add_orphans {
-                "will fix".green()
-            } else {
-                "skipped".dimmed()
-            };
-            println!(
-                "  Orphan files:   {} ({}) [{}]",
-                analysis.orphan_files.len().to_string().yellow(),
-                format_bytes(analysis.orphan_bytes()),
-                status
-            );
-        }
-
-        if args.dry_run {
-            println!();
-            print_dry_run_header();
-            if options.remove_missing {
-                for file in &analysis.missing_files {
-                    let name = extract_filename(&file.path);
-                    println!("  Would remove reference: {}", name.red());
-                }
-            }
-
-            if options.add_orphans {
-                for file in &analysis.orphan_files {
-                    let name = extract_filename(&file.path);
-                    println!(
-                        "  Would add: {} ({})",
-                        name.green(),
-                        format_bytes(file.size)
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Print repair result
-    fn print_result(result: &MaintenanceResult) -> Result<()> {
-        println!();
-        println!("{}", "Repair complete!".green().bold());
         println!(
-            "Removed {} missing references, added {} orphan files",
-            result.files_removed, result.files_added
+            "{}",
+            RepairFormatter::format_issues_found(
+                analysis,
+                options.add_orphans,
+                options.remove_missing
+            )
         );
 
-        if let Some(snapshot_id) = result.details.get("snapshot_id") {
-            println!("New snapshot: {}", snapshot_id.cyan());
+        if args.dry_run {
+            println!(
+                "{}",
+                RepairFormatter::format_dry_run_details(
+                    analysis,
+                    options.add_orphans,
+                    options.remove_missing
+                )
+            );
         }
 
         Ok(())

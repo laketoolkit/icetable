@@ -95,6 +95,9 @@ impl Config {
     }
 
     /// Load configuration from file
+    ///
+    /// Automatically validates the configuration after loading.
+    /// Returns an error if the configuration contains invalid references.
     pub fn load() -> Result<Self> {
         let yaml_path = Self::config_path()?;
 
@@ -104,13 +107,59 @@ impl Config {
                     message: format!("Failed to read config file: {}", e),
                 })?;
 
-            return serde_yaml_ng::from_str(&content).map_err(|e| Error::Parse {
+            let config: Self = serde_yaml_ng::from_str(&content).map_err(|e| Error::Parse {
                 message: format!("Failed to parse config file: {}", e),
                 source: Some(Box::new(e)),
-            });
+            })?;
+
+            // Validate the loaded config
+            config.validate()?;
+
+            return Ok(config);
         }
 
         Ok(Self::default())
+    }
+
+    /// Validate configuration consistency
+    ///
+    /// Checks:
+    /// - `current_catalog` references an existing catalog
+    /// - Catalog URIs are not empty
+    /// - Table alias paths are not empty
+    pub fn validate(&self) -> Result<()> {
+        // Check current_catalog references an existing catalog
+        if let Some(ref catalog_name) = self.current_catalog
+            && !self.catalogs.contains_key(catalog_name)
+        {
+            return Err(Error::Configuration {
+                message: format!(
+                    "current_catalog '{}' does not exist in catalogs. Available: {}",
+                    catalog_name,
+                    self.catalogs.keys().cloned().collect::<Vec<_>>().join(", ")
+                ),
+            });
+        }
+
+        // Validate catalog configurations
+        for (name, catalog) in &self.catalogs {
+            if catalog.uri.is_empty() {
+                return Err(Error::Configuration {
+                    message: format!("Catalog '{}' has empty URI", name),
+                });
+            }
+        }
+
+        // Validate table aliases
+        for (name, path) in &self.tables {
+            if path.is_empty() {
+                return Err(Error::Configuration {
+                    message: format!("Table alias '{}' has empty path", name),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Save configuration to file
@@ -241,20 +290,17 @@ impl Config {
 
     /// Get the current warehouse from context (if any)
     pub fn get_current_warehouse(&self) -> Option<String> {
-        self.parse_current_context()
-            .and_then(|ctx| ctx.warehouse)
+        self.parse_current_context().and_then(|ctx| ctx.warehouse)
     }
 
     /// Get the current namespace from context (if any)
     pub fn get_current_namespace(&self) -> Option<String> {
-        self.parse_current_context()
-            .and_then(|ctx| ctx.namespace)
+        self.parse_current_context().and_then(|ctx| ctx.namespace)
     }
 
     /// Get the current table name from context (if any)
     pub fn get_current_table(&self) -> Option<String> {
-        self.parse_current_context()
-            .and_then(|ctx| ctx.table)
+        self.parse_current_context().and_then(|ctx| ctx.table)
     }
 
     /// Add a catalog configuration
@@ -416,5 +462,53 @@ mod tests {
             }
             _ => panic!("Expected catalog resolution"),
         }
+    }
+
+    #[test]
+    fn test_validate_empty_config() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_valid_config() {
+        let mut config = Config::default();
+        config.add_catalog(
+            "polaris".to_string(),
+            CatalogConfig::rest("http://localhost:8181"),
+        );
+        config.set_current_catalog("polaris".to_string());
+        config.add_table("events".to_string(), "s3://bucket/events".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_current_catalog() {
+        let mut config = Config::default();
+        config.set_current_catalog("nonexistent".to_string());
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_validate_empty_catalog_uri() {
+        let mut config = Config::default();
+        // Create a catalog config with empty URI
+        let mut bad_catalog = CatalogConfig::rest("http://localhost:8181");
+        bad_catalog.uri = String::new();
+        config.catalogs.insert("bad".to_string(), bad_catalog);
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty URI"));
+    }
+
+    #[test]
+    fn test_validate_empty_table_path() {
+        let mut config = Config::default();
+        config.tables.insert("bad".to_string(), String::new());
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty path"));
     }
 }

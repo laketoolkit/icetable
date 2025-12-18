@@ -77,7 +77,9 @@ fn format_warehouse_not_found_error(msg: &str) -> String {
         // Look for quoted name or just take the next word
         if let Some(quote_start) = after.find('\'') {
             let after_quote = &after[quote_start + 1..];
-            after_quote.find('\'').map(|quote_end| &after_quote[..quote_end])
+            after_quote
+                .find('\'')
+                .map(|quote_end| &after_quote[..quote_end])
         } else {
             // Try unquoted - take first word
             after.split_whitespace().next()
@@ -218,11 +220,7 @@ impl RestCatalogClient {
             .list_namespaces(parent_ident.as_ref())
             .await
             .map_err(|e| Error::CatalogOperation {
-                message: format!(
-                    "{} in catalog '{}'",
-                    clean_iceberg_error(&e),
-                    self.name
-                ),
+                message: format!("{} in catalog '{}'", clean_iceberg_error(&e), self.name),
             })?;
 
         Ok(namespaces

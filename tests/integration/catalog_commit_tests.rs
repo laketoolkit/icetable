@@ -4,7 +4,7 @@
 //! Note: Full integration tests with a live REST catalog (Nessie/Polaris) should
 //! be run separately with the catalog available.
 
-use icetable::core::catalog::{CatalogConfig, TableCommitter};
+use icetable::core::catalog::{CatalogAuth, CatalogConfig, TableCommitter};
 use icetable::core::config::CredentialSource;
 
 /// Test that TableCommitter can be created for direct mode (no catalog)
@@ -73,29 +73,28 @@ fn test_committer_multi_level_namespace() {
     assert_eq!(ident.namespace().as_ref(), &["prod", "analytics", "data"]);
 }
 
-/// Test catalog config with credential
+/// Test catalog config with bearer auth
 #[test]
-fn test_catalog_config_with_credential() {
-    let config = CatalogConfig::rest("http://localhost:19120/api/v2")
-        .with_credential(CredentialSource::Inline("user:password".to_string()));
+fn test_catalog_config_with_bearer_auth() {
+    let config = CatalogConfig::rest("http://localhost:19120/api/v2").with_auth(
+        CatalogAuth::bearer(CredentialSource::Inline("user:password".to_string())),
+    );
 
     assert_eq!(config.uri, "http://localhost:19120/api/v2");
-    assert_eq!(
-        config.credential,
-        Some(CredentialSource::Inline("user:password".to_string()))
-    );
+    assert!(matches!(config.auth, CatalogAuth::Bearer { .. }));
 }
 
 /// Test catalog config with bearer token
 #[test]
 fn test_catalog_config_with_bearer_token() {
     let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test";
-    let config = CatalogConfig::rest("http://localhost:19120/api/v2")
-        .with_credential(CredentialSource::Inline(token.to_string()));
+    let config = CatalogConfig::rest("http://localhost:19120/api/v2").with_auth(
+        CatalogAuth::bearer(CredentialSource::Inline(token.to_string())),
+    );
 
-    // Bearer tokens don't contain ':' so they're used with bearer_auth
-    let resolved = config.resolve_credential().unwrap();
-    assert!(resolved.as_ref().map(|c| !c.contains(':')).unwrap_or(true));
+    // Check auth is set correctly
+    let props = config.to_catalog_properties().unwrap();
+    assert_eq!(props.get("token"), Some(&token.to_string()));
 }
 
 /// Test single-level namespace
@@ -115,7 +114,9 @@ fn test_committer_single_level_namespace() {
 #[test]
 fn test_committer_config_accessible() {
     let config = CatalogConfig::rest("http://nessie:19120/api/v2")
-        .with_credential(CredentialSource::Inline("admin:secret".to_string()))
+        .with_auth(CatalogAuth::bearer(CredentialSource::Inline(
+            "admin:secret".to_string(),
+        )))
         .with_warehouse("s3://lakehouse/warehouse");
 
     let committer = TableCommitter::with_catalog(
@@ -126,6 +127,6 @@ fn test_committer_config_accessible() {
 
     let retrieved_config = committer.catalog_config().unwrap();
     assert_eq!(retrieved_config.uri, config.uri);
-    assert_eq!(retrieved_config.credential, config.credential);
+    assert!(matches!(retrieved_config.auth, CatalogAuth::Bearer { .. }));
     assert_eq!(retrieved_config.warehouse, config.warehouse);
 }

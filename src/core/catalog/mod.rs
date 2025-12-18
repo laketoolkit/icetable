@@ -20,12 +20,12 @@ mod rest;
 
 pub use committer::TableCommitter;
 pub use management::{
-    create_management_client, create_management_client_with_name, CatalogManagement,
-    CreateWarehouseRequest, StorageType, Warehouse, WarehouseType,
+    CatalogManagement, CreateWarehouseRequest, StorageType, Warehouse, WarehouseType,
+    create_management_client, create_management_client_with_name,
 };
 pub use rest::RestCatalogClient;
 
-// Re-export from core::config for backward compatibility
+// Re-export from core::config
 pub use super::config::{CatalogAuth, CatalogConfig, CatalogType};
 
 use crate::error::{Error, Result};

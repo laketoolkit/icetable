@@ -61,7 +61,11 @@ fn test_optimize_analyze_small_files() {
 
     // Should identify one group needing compaction
     assert_eq!(groups.len(), 1, "Should find one group to compact");
-    assert_eq!(groups[0].files.len(), 3, "Group should contain all 3 small files");
+    assert_eq!(
+        groups[0].files.len(),
+        3,
+        "Group should contain all 3 small files"
+    );
 }
 
 #[test]
@@ -168,18 +172,23 @@ fn test_vacuum_service_creation() {
     // Should accept custom config
 
     // Verify dry_run is respected
-    assert!(service_with_config.to_maintenance_result(&icetable::core::maintenance::VacuumResult {
-        deleted_count: 0,
-        deleted_bytes: 0,
-        errors: vec![],
-        dry_run: true,
-        analysis: icetable::core::maintenance::VacuumAnalysis {
-            orphan_files: vec![],
-            orphan_bytes: 0,
-            referenced_count: 10,
-            retention_hours: 24,
-        },
-    }).operation.contains("dry-run"));
+    assert!(
+        service_with_config
+            .to_maintenance_result(&icetable::core::maintenance::VacuumResult {
+                deleted_count: 0,
+                deleted_bytes: 0,
+                errors: vec![],
+                dry_run: true,
+                analysis: icetable::core::maintenance::VacuumAnalysis {
+                    orphan_files: vec![],
+                    orphan_bytes: 0,
+                    referenced_count: 10,
+                    retention_hours: 24,
+                },
+            })
+            .operation
+            .contains("dry-run")
+    );
 }
 
 // ============================================================================
@@ -196,7 +205,10 @@ fn test_maintenance_config_defaults() {
     assert!(config.max_size > 0, "Should have positive max size");
     assert!(config.parallelism > 0, "Should have positive parallelism");
     assert!(!config.dry_run, "Should not be dry-run by default");
-    assert!(config.partition_filter.is_none(), "No partition filter by default");
+    assert!(
+        config.partition_filter.is_none(),
+        "No partition filter by default"
+    );
     assert!(config.max_files.is_none(), "No max files limit by default");
     assert!(config.max_bytes.is_none(), "No max bytes limit by default");
 }
@@ -204,8 +216,8 @@ fn test_maintenance_config_defaults() {
 #[test]
 fn test_maintenance_config_custom() {
     let config = MaintenanceConfig {
-        target_size: 1024 * 1024 * 1024, // 1GB
-        min_size: 64 * 1024 * 1024, // 64MB
+        target_size: 1024 * 1024 * 1024,  // 1GB
+        min_size: 64 * 1024 * 1024,       // 64MB
         max_size: 2 * 1024 * 1024 * 1024, // 2GB
         dry_run: true,
         parallelism: 8,
@@ -219,7 +231,10 @@ fn test_maintenance_config_custom() {
     assert_eq!(config.max_size, 2 * 1024 * 1024 * 1024);
     assert!(config.dry_run);
     assert_eq!(config.parallelism, 8);
-    assert_eq!(config.partition_filter, Some("date>=2024-01-01".to_string()));
+    assert_eq!(
+        config.partition_filter,
+        Some("date>=2024-01-01".to_string())
+    );
     assert_eq!(config.max_files, Some(100));
     assert_eq!(config.max_bytes, Some(10 * 1024 * 1024 * 1024));
 }
@@ -272,7 +287,11 @@ fn test_manifest_config_defaults() {
 
     let config = ManifestConfig::default();
 
-    assert_eq!(config.target_size, 8 * 1024 * 1024, "Default target size should be 8MB");
+    assert_eq!(
+        config.target_size,
+        8 * 1024 * 1024,
+        "Default target size should be 8MB"
+    );
     assert_eq!(config.min_manifests, 3, "Default min manifests should be 3");
     assert!(!config.dry_run, "Should not be dry-run by default");
     assert!(config.branch.is_none(), "No branch by default");
@@ -517,7 +536,10 @@ fn test_file_group_needs_compaction() {
         record_count: 100,
         partition: std::collections::HashMap::new(),
     });
-    assert!(!group.needs_compaction(10000), "Single file shouldn't need compaction");
+    assert!(
+        !group.needs_compaction(10000),
+        "Single file shouldn't need compaction"
+    );
 
     // Two small files - compaction needed
     group.add(DataFileInfo {
@@ -526,7 +548,10 @@ fn test_file_group_needs_compaction() {
         record_count: 200,
         partition: std::collections::HashMap::new(),
     });
-    assert!(group.needs_compaction(10000), "Two small files should need compaction");
+    assert!(
+        group.needs_compaction(10000),
+        "Two small files should need compaction"
+    );
 }
 
 #[test]

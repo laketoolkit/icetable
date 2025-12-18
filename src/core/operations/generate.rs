@@ -7,8 +7,8 @@
 //! Supports both creating new tables and appending data to existing tables.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use arrow::array::{
     ArrayRef, BooleanBuilder, Float64Builder, Int32Builder, Int64Builder, StringBuilder,
@@ -19,7 +19,6 @@ use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use futures::stream::{self, StreamExt};
 use iceberg::Catalog;
-use rayon::prelude::*;
 use iceberg::arrow::FieldMatchMode;
 use iceberg::io::FileIO;
 use iceberg::spec::{DataFileFormat, TableMetadata};
@@ -34,9 +33,11 @@ use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use rayon::prelude::*;
 
 use crate::core::metadata::{
-    DataFileChanges, DataFileInfo, IcebergMetadataService, TableServiceReader, TableServiceWriter, OperationType,
+    DataFileChanges, DataFileInfo, IcebergMetadataService, OperationType, TableServiceReader,
+    TableServiceWriter,
 };
 use crate::core::storage::{ObjectStoreExt, create_object_store, to_path};
 use crate::error::{Error, Result};
@@ -228,12 +229,16 @@ impl GenerateOperation {
                 .collect();
 
             // Generate batches in parallel and send through channel
-            file_configs.into_par_iter().for_each(|(file_idx, file_rows, file_seed)| {
-                if let Ok(batch) = Self::generate_batch(&schema_for_producer, file_rows, file_seed) {
-                    // blocking_send waits if channel is full (backpressure)
-                    let _ = tx.blocking_send((file_idx, batch));
-                }
-            });
+            file_configs
+                .into_par_iter()
+                .for_each(|(file_idx, file_rows, file_seed)| {
+                    if let Ok(batch) =
+                        Self::generate_batch(&schema_for_producer, file_rows, file_seed)
+                    {
+                        // blocking_send waits if channel is full (backpressure)
+                        let _ = tx.blocking_send((file_idx, batch));
+                    }
+                });
             // tx is dropped here, closing the channel
         });
 
@@ -365,17 +370,19 @@ impl GenerateOperation {
             file_name_gen,
         );
 
-        let mut writer =
-            DataFileWriterBuilder::new(parquet_writer, None, ctx.partition_spec_id)
-                .build()
-                .await
-                .map_err(|e| Error::Serialization {
-                    message: format!("Failed to build data file writer: {}", e),
-                })?;
+        let mut writer = DataFileWriterBuilder::new(parquet_writer, None, ctx.partition_spec_id)
+            .build()
+            .await
+            .map_err(|e| Error::Serialization {
+                message: format!("Failed to build data file writer: {}", e),
+            })?;
 
-        writer.write(batch).await.map_err(|e| Error::Serialization {
-            message: format!("Failed to write batch: {}", e),
-        })?;
+        writer
+            .write(batch)
+            .await
+            .map_err(|e| Error::Serialization {
+                message: format!("Failed to write batch: {}", e),
+            })?;
 
         let data_files = writer.close().await.map_err(|e| Error::Serialization {
             message: format!("Failed to close writer: {}", e),

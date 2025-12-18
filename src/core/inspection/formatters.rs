@@ -5,11 +5,6 @@ use std::path::Path;
 // Re-export format_bytes from central location
 pub use crate::utils::core::format_bytes;
 
-/// Alias for format_bytes (backwards compatibility)
-pub fn format_size(bytes: u64) -> String {
-    format_bytes(bytes)
-}
-
 /// Format number with thousands separators
 pub fn format_number(n: i64) -> String {
     let s = n.to_string();

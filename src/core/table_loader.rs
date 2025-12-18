@@ -256,20 +256,33 @@ impl TableLoader {
         find_latest_metadata(path, &storage).await
     }
 
-    /// Create a new Iceberg table
+    /// Create a new Iceberg table (NOT IMPLEMENTED)
     ///
-    /// Uses iceberg's TableCreation API instead of custom metadata building
+    /// # Why this is not supported
+    ///
+    /// Static tables (tables without a catalog) cannot be created through this API because:
+    /// - They require a catalog namespace for proper table identification
+    /// - Iceberg's TableCreation API needs a catalog context
+    /// - Without a catalog, there's no way to register the table for discovery
+    ///
+    /// # Recommended approach
+    ///
+    /// Use a REST catalog (Polaris, Nessie, etc.) to create tables:
+    /// ```bash
+    /// icetable admin table create <catalog>.<namespace>.<table> --schema schema.json
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// Always returns `Error::UnsupportedFeature`
     pub async fn create_table(
         _path: &str,
         _schema: iceberg::spec::Schema,
         _partition_spec: Option<iceberg::spec::PartitionSpec>,
         _properties: std::collections::HashMap<String, String>,
     ) -> Result<Arc<Table>> {
-        // Use iceberg's TableCreation API
-        // Note: Table creation for static tables is complex - we'd need a name
-        // For now, just return an error
         Err(Error::UnsupportedFeature {
-            feature: "Table creation for static tables. Use catalog tables instead.".to_string(),
+            feature: "Table creation for static tables. Use a REST catalog (Polaris, Nessie) to create tables.".to_string(),
         })
     }
 }

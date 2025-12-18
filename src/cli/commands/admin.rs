@@ -6,21 +6,19 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use colored::Colorize;
-use comfy_table::{Cell, CellAlignment};
 
-use super::common::print_json;
-use crate::cli::output::create_styled_table;
+use super::ConfigCommand;
+use crate::cli::output::{AdminFormatter, AuthStatusInfo, WarehouseInfo};
 use crate::cli::parser::{
     AdminArgs, AdminCommands, AuthArgs, AuthCommands, AuthLoginArgs, AuthLogoutArgs,
     AuthStatusArgs, CatalogContext, WarehouseArgs, WarehouseCommands, WarehouseCreateArgs,
     WarehouseDeleteArgs, WarehouseLsArgs,
 };
-use super::ConfigCommand;
 use crate::config::{
     AuthService, CatalogAuth, CatalogProvider, Config, CredentialSource, LogoutResult,
 };
 use crate::core::catalog::{
-    create_management_client_with_name, CatalogManagement, CreateWarehouseRequest,
+    CatalogManagement, CreateWarehouseRequest, create_management_client_with_name,
 };
 use crate::error::{Error, Result};
 
@@ -62,17 +60,14 @@ impl AdminCommand {
         // Delegate business logic to service
         let result = service.login(&catalog_name, auth)?;
 
-        // Format output (CLI responsibility)
+        // Format output using formatter
         println!(
-            "{} Logged in to {} ({})",
-            "✓".green(),
-            result.catalog_name.cyan().bold(),
-            result.auth_type
-        );
-        println!(
-            "  {} {}",
-            "Credentials saved to:".dimmed(),
-            result.credentials_path.display()
+            "{}",
+            AdminFormatter::format_login_success(
+                &result.catalog_name,
+                result.auth_type,
+                &result.credentials_path.display().to_string()
+            )
         );
 
         Ok(())
@@ -107,8 +102,9 @@ impl AdminCommand {
                 CredentialSource::File(path.clone())
             } else {
                 return Err(Error::Configuration {
-                    message: "OAuth2 login requires --client-secret, --secret-env, or --secret-file"
-                        .to_string(),
+                    message:
+                        "OAuth2 login requires --client-secret, --secret-env, or --secret-file"
+                            .to_string(),
                 });
             };
 
@@ -132,30 +128,17 @@ impl AdminCommand {
         let mut service = AuthService::new()?;
         let result = service.logout(ctx.catalog.as_deref(), args.all)?;
 
-        // Format output based on result variant
-        match result {
-            LogoutResult::All { count } => {
-                println!(
-                    "{} Logged out from {} catalog(s)",
-                    "✓".green(),
-                    count.to_string().cyan()
-                );
-            }
+        // Format output using formatter
+        let output = match result {
+            LogoutResult::All { count } => AdminFormatter::format_logout_all(count),
             LogoutResult::Single { catalog_name } => {
-                println!(
-                    "{} Logged out from {}",
-                    "✓".green(),
-                    catalog_name.cyan().bold()
-                );
+                AdminFormatter::format_logout_single(&catalog_name)
             }
             LogoutResult::NotFound { catalog_name } => {
-                println!(
-                    "{} No stored credentials for {}",
-                    "!".yellow(),
-                    catalog_name.cyan()
-                );
+                AdminFormatter::format_logout_not_found(&catalog_name)
             }
-        }
+        };
+        println!("{}", output);
 
         Ok(())
     }
@@ -169,92 +152,64 @@ impl AdminCommand {
             // Get status for all catalogs from service
             let statuses = service.status_all();
 
+            // Convert to formatter types
+            let formatter_statuses: Vec<AuthStatusInfo> = statuses
+                .iter()
+                .map(|s| AuthStatusInfo {
+                    catalog_name: s.catalog_name.clone(),
+                    auth_type: s.auth.as_ref().map(|a| a.describe().to_string()),
+                    catalog_exists: s.catalog_exists,
+                    auth_details: None,
+                })
+                .collect();
+
             if args.output == "json" {
-                let json_status: Vec<_> = statuses
-                    .iter()
-                    .map(|s| {
-                        serde_json::json!({
-                            "catalog": s.catalog_name,
-                            "auth_type": s.auth.as_ref().map(|a| a.describe()),
-                            "configured": s.catalog_exists,
-                        })
-                    })
-                    .collect();
-                print_json(&serde_json::json!({ "catalogs": json_status }))?;
-            } else if !service.has_any_credentials() {
-                println!("{}", "No stored credentials".dimmed());
+                let json_str = AdminFormatter::format_auth_status_json(&formatter_statuses)
+                    .map_err(|e| crate::error::Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+                println!("{}", json_str);
             } else {
-                println!("{}", "Stored credentials:".dimmed());
-                println!();
-
-                let mut table = create_styled_table();
-                table.set_header(vec![
-                    Cell::new("Catalog".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Auth Type".cyan().to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new("Status".cyan().to_string()).set_alignment(CellAlignment::Left),
-                ]);
-
-                for status in &statuses {
-                    let config_status = if status.catalog_exists {
-                        "configured".green().to_string()
-                    } else {
-                        "orphaned".yellow().to_string()
-                    };
-                    table.add_row(vec![
-                        Cell::new(&status.catalog_name).set_alignment(CellAlignment::Left),
-                        Cell::new(status.auth.as_ref().map(|a| a.describe()).unwrap_or("none"))
-                            .set_alignment(CellAlignment::Left),
-                        Cell::new(config_status).set_alignment(CellAlignment::Left),
-                    ]);
-                }
-
-                println!("{}", table);
+                println!(
+                    "{}",
+                    AdminFormatter::format_auth_status_table(&formatter_statuses)
+                );
             }
         } else {
             // Get status for specific catalog
             let catalog_name = service.resolve_catalog_name(ctx.catalog.as_deref())?;
             let status = service.status(&catalog_name);
 
+            // Build auth details for formatter
+            let auth_details = status.auth.as_ref().map(Self::get_auth_details);
+
+            let formatter_status = AuthStatusInfo {
+                catalog_name: status.catalog_name.clone(),
+                auth_type: status.auth.as_ref().map(|a| a.describe().to_string()),
+                catalog_exists: status.catalog_exists,
+                auth_details,
+            };
+
             if args.output == "json" {
-                print_json(&serde_json::json!({
-                    "catalog": status.catalog_name,
-                    "configured": status.catalog_exists,
-                    "authenticated": status.has_credentials,
-                    "auth_type": status.auth.as_ref().map(|a| a.describe()),
-                }))?;
+                let json_str = AdminFormatter::format_auth_status_single_json(&formatter_status)
+                    .map_err(|e| crate::error::Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+                println!("{}", json_str);
             } else {
                 println!(
-                    "{} {}",
-                    "Catalog:".dimmed(),
-                    status.catalog_name.cyan().bold()
+                    "{}",
+                    AdminFormatter::format_auth_status_single(&formatter_status)
                 );
-
-                if !status.catalog_exists {
-                    println!(
-                        "  {} Catalog not found in config",
-                        "Warning:".yellow()
-                    );
-                }
-
-                if let Some(auth) = &status.auth {
-                    println!("  {} {}", "Auth type:".dimmed(), auth.describe().green());
-                    // Show additional info based on auth type (output formatting stays in CLI)
-                    Self::print_auth_details(auth);
-                } else {
-                    println!(
-                        "  {} {}",
-                        "Status:".dimmed(),
-                        "not authenticated".yellow()
-                    );
-                }
             }
         }
 
         Ok(())
     }
 
-    /// Print auth details for status display (output formatting helper)
-    fn print_auth_details(auth: &CatalogAuth) {
+    /// Extract auth details as key-value pairs for formatter
+    fn get_auth_details(auth: &CatalogAuth) -> Vec<(String, String)> {
+        let mut details = Vec::new();
         match auth {
             CatalogAuth::OAuth2 {
                 client_id,
@@ -262,26 +217,27 @@ impl AdminCommand {
                 scope,
                 ..
             } => {
-                println!("  {} {}", "Client ID:".dimmed(), client_id);
+                details.push(("Client ID:".to_string(), client_id.clone()));
                 if let Some(endpoint) = token_endpoint {
-                    println!("  {} {}", "Token endpoint:".dimmed(), endpoint);
+                    details.push(("Token endpoint:".to_string(), endpoint.clone()));
                 }
                 if let Some(s) = scope {
-                    println!("  {} {}", "Scope:".dimmed(), s);
+                    details.push(("Scope:".to_string(), s.clone()));
                 }
             }
             CatalogAuth::Bearer { token } => {
-                println!("  {} {}", "Token source:".dimmed(), token.describe());
+                details.push(("Token source:".to_string(), token.describe().to_string()));
             }
             CatalogAuth::SigV4 {
                 region,
                 signing_name,
             } => {
-                println!("  {} {}", "Region:".dimmed(), region);
-                println!("  {} {}", "Signing name:".dimmed(), signing_name);
+                details.push(("Region:".to_string(), region.clone()));
+                details.push(("Signing name:".to_string(), signing_name.clone()));
             }
             CatalogAuth::None => {}
         }
+        details
     }
 
     // =========================================================================
@@ -312,47 +268,29 @@ impl AdminCommand {
 
         let warehouses = client.list_warehouses().await?;
 
+        // Convert to formatter types
+        let formatter_warehouses: Vec<WarehouseInfo> = warehouses
+            .iter()
+            .map(|wh| WarehouseInfo {
+                name: wh.name.clone(),
+                warehouse_type: wh.warehouse_type.to_string(),
+                storage_type: wh.storage_type.to_string(),
+                location: wh.default_base_location.clone(),
+            })
+            .collect();
+
         if args.output == "json" {
-            let json = serde_json::json!({
-                "catalog": catalog_name,
-                "warehouses": warehouses,
-            });
-            print_json(&json)?;
-        } else if warehouses.is_empty() {
-            println!(
-                "{} {}",
-                "No warehouses in".dimmed(),
-                catalog_name.cyan().bold()
-            );
-            println!();
-            println!("See: icetable admin warehouse create --help");
+            let json_str =
+                AdminFormatter::format_warehouse_list_json(&catalog_name, &formatter_warehouses)
+                    .map_err(|e| crate::error::Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+            println!("{}", json_str);
         } else {
             println!(
-                "{} {}",
-                "Warehouses in".dimmed(),
-                catalog_name.cyan().bold()
+                "{}",
+                AdminFormatter::format_warehouse_list_table(&catalog_name, &formatter_warehouses)
             );
-            println!();
-
-            let mut table = create_styled_table();
-
-            table.set_header(vec![
-                Cell::new("Name".cyan().to_string()).set_alignment(CellAlignment::Left),
-                Cell::new("Type".cyan().to_string()).set_alignment(CellAlignment::Left),
-                Cell::new("Storage".cyan().to_string()).set_alignment(CellAlignment::Left),
-                Cell::new("Location".cyan().to_string()).set_alignment(CellAlignment::Left),
-            ]);
-
-            for wh in &warehouses {
-                table.add_row(vec![
-                    Cell::new(&wh.name).set_alignment(CellAlignment::Left),
-                    Cell::new(wh.warehouse_type.to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new(wh.storage_type.to_string()).set_alignment(CellAlignment::Left),
-                    Cell::new(&wh.default_base_location).set_alignment(CellAlignment::Left),
-                ]);
-            }
-
-            println!("{}", table);
         }
 
         Ok(())
@@ -363,7 +301,10 @@ impl AdminCommand {
         // Handle --examples flag
         if args.examples {
             let provider = Self::get_current_provider(ctx)?;
-            Self::print_warehouse_examples(provider);
+            println!(
+                "{}",
+                AdminFormatter::format_warehouse_examples(&provider.to_string().to_lowercase())
+            );
             return Ok(());
         }
 
@@ -390,28 +331,18 @@ impl AdminCommand {
         let storage_config = Self::parse_storage_config(&args.config, &args.config_set)?;
 
         // Build request (storage type is inferred from location if not in config)
-        let request = CreateWarehouseRequest::new(name, location)
-            .with_storage_config_map(storage_config);
+        let request =
+            CreateWarehouseRequest::new(name, location).with_storage_config_map(storage_config);
 
         let warehouse = client.create_warehouse(request).await?;
 
         println!(
-            "{} Created warehouse '{}' in {}",
-            "✓".green(),
-            warehouse.name.cyan(),
-            catalog_name.cyan()
-        );
-        println!(
-            "  {} {}",
-            "Location:".dimmed(),
-            warehouse.default_base_location
-        );
-        println!();
-        println!(
-            "{} icetable admin config use {} -w {}",
-            "Activate:".dimmed(),
-            catalog_name,
-            warehouse.name
+            "{}",
+            AdminFormatter::format_warehouse_create_success(
+                &warehouse.name,
+                &catalog_name,
+                &warehouse.default_base_location
+            )
         );
 
         Ok(())
@@ -437,11 +368,11 @@ impl AdminCommand {
 
             if config_str.starts_with('{') {
                 // Inline JSON - preserve original types
-                let parsed: HashMap<String, serde_json::Value> =
-                    serde_json::from_str(config_str).map_err(|e| Error::Parse {
-                        message: format!("Invalid JSON in --config: {}", e),
-                        source: Some(Box::new(e)),
-                    })?;
+                let parsed: HashMap<String, serde_json::Value> = serde_json::from_str(config_str)
+                    .map_err(|e| Error::Parse {
+                    message: format!("Invalid JSON in --config: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
                 result = parsed;
             } else {
                 // File path
@@ -451,8 +382,8 @@ impl AdminCommand {
                     source: Some(Box::new(e)),
                 })?;
 
-                let parsed: HashMap<String, serde_json::Value> =
-                    serde_json::from_str(&content).map_err(|e| Error::Parse {
+                let parsed: HashMap<String, serde_json::Value> = serde_json::from_str(&content)
+                    .map_err(|e| Error::Parse {
                         message: format!("Invalid JSON in config file '{}': {}", config_str, e),
                         source: Some(Box::new(e)),
                     })?;
@@ -490,10 +421,8 @@ impl AdminCommand {
         client.delete_warehouse(&args.name).await?;
 
         println!(
-            "{} Deleted warehouse '{}' from {}",
-            "✓".green(),
-            args.name.cyan(),
-            catalog_name.cyan()
+            "{}",
+            AdminFormatter::format_warehouse_delete_success(&args.name, &catalog_name)
         );
 
         Ok(())
@@ -509,13 +438,14 @@ impl AdminCommand {
 
         // Load config and create a catalog client with the warehouse
         let config = Config::load()?;
-        let mut catalog_config = config
-            .catalogs
-            .get(catalog_name)
-            .cloned()
-            .ok_or_else(|| Error::CatalogNotFound {
-                name: catalog_name.to_string(),
-            })?;
+        let mut catalog_config =
+            config
+                .catalogs
+                .get(catalog_name)
+                .cloned()
+                .ok_or_else(|| Error::CatalogNotFound {
+                    name: catalog_name.to_string(),
+                })?;
         catalog_config.warehouse = Some(warehouse_name.to_string());
 
         let rest_client = RestCatalogClient::with_name(&catalog_config, Some(catalog_name)).await?;
@@ -571,65 +501,6 @@ impl AdminCommand {
                 })?;
 
         Ok(catalog_config.provider())
-    }
-
-    /// Print example commands for creating warehouses with different storage backends
-    fn print_warehouse_examples(provider: CatalogProvider) {
-        println!("Examples for {}:\n", provider);
-
-        match provider {
-            CatalogProvider::Polaris => {
-                println!("# MinIO (local development)");
-                println!("# Key: skipCredentialSubscopingIndirection=true disables STS");
-                println!("icetable admin warehouse create mywarehouse \\");
-                println!("  --location s3://bucket/warehouse \\");
-                println!("  --config '{{\"endpoint\":\"http://localhost:9000\",\"pathStyleAccess\":true,\"skipCredentialSubscopingIndirection\":true,\"s3.credentials.catalog.accessKeyId\":\"minioadmin\",\"s3.credentials.catalog.secretAccessKey\":\"minioadmin\"}}'");
-                println!();
-                println!("# Or use a config file (recommended for readability):");
-                println!("icetable admin warehouse create mywarehouse \\");
-                println!("  --location s3://bucket/warehouse \\");
-                println!("  --config ./minio-storage.json");
-                println!();
-
-                println!("# AWS S3 (with IAM role)");
-                println!("icetable admin warehouse create mywarehouse \\");
-                println!("  --location s3://bucket/warehouse \\");
-                println!("  --config-set region=eu-west-1 \\");
-                println!("  --config-set roleArn=arn:aws:iam::123456789:role/polaris-access");
-                println!();
-
-                println!("# GCS");
-                println!("icetable admin warehouse create mywarehouse \\");
-                println!("  --location gs://bucket/warehouse");
-                println!();
-
-                println!("# Azure (ADLS Gen2)");
-                println!("icetable admin warehouse create mywarehouse \\");
-                println!("  --location abfss://container@account.dfs.core.windows.net/warehouse");
-            }
-            CatalogProvider::Nessie => {
-                println!("# Nessie does not require warehouse creation.");
-                println!("# Tables are organized by branches and namespaces.");
-                println!();
-                println!("# List branches:");
-                println!("icetable branch list");
-            }
-            CatalogProvider::Tabular => {
-                println!("# Tabular warehouses are managed via the Tabular UI.");
-                println!("# See: https://tabular.io/docs");
-            }
-            CatalogProvider::Unity => {
-                println!("# Unity Catalog warehouses are managed via Databricks.");
-                println!("# See: https://docs.databricks.com/en/data-governance/unity-catalog");
-            }
-            CatalogProvider::Generic => {
-                println!("# Generic REST catalog - check your provider's documentation.");
-                println!();
-                println!("# Common pattern:");
-                println!("icetable admin warehouse create mywarehouse \\");
-                println!("  --location s3://bucket/warehouse");
-            }
-        }
     }
 
     /// Get management client using global catalog option or current context

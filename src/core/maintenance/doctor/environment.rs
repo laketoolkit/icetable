@@ -1,7 +1,8 @@
 //! Environment health checks
 //!
-//! Checks for credentials, endpoints, and storage connectivity.
+//! Checks for credentials, endpoints, storage connectivity, and configuration.
 
+use crate::config::Config;
 use crate::core::storage::create_object_store;
 use crate::core::{CatalogConfig, CatalogType};
 use crate::error::{Error, Result};
@@ -169,5 +170,175 @@ pub async fn test_catalog_connectivity(name: &str, catalog: &CatalogConfig) -> R
             catalog.catalog_type
         );
         Ok(())
+    }
+}
+
+/// Check config file existence and validity
+pub fn check_config_file() -> CheckResult {
+    match Config::config_path() {
+        Ok(path) => {
+            if path.exists() {
+                match Config::load() {
+                    Ok(_) => CheckResult::ok("Config file", path.display().to_string()),
+                    Err(e) => CheckResult::warning(
+                        "Config file",
+                        format!("Parse error: {}", e),
+                        "Check config file syntax",
+                    ),
+                }
+            } else {
+                CheckResult::ok("Config file", "Not created yet (will use defaults)")
+            }
+        }
+        Err(e) => CheckResult::warning(
+            "Config file",
+            format!("Cannot determine path: {}", e),
+            "Check HOME environment variable",
+        ),
+    }
+}
+
+/// Check configuration (context, aliases, catalogs)
+pub async fn check_configuration(catalog_to_test: Option<&str>) -> Vec<CheckResult> {
+    let mut checks = Vec::new();
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return checks,
+    };
+
+    // Check current context - validate each part individually
+    if let Some(ctx) = config.parse_current_context() {
+        // Build context description
+        let mut parts = vec![ctx.catalog.clone()];
+        if let Some(ref wh) = ctx.warehouse {
+            parts.push(format!("@{}", wh));
+        }
+        if let Some(ref ns) = ctx.namespace {
+            parts.push(format!(".{}", ns));
+        }
+        if let Some(ref tbl) = ctx.table {
+            parts.push(format!(".{}", tbl));
+        }
+        let context_str = parts.join("");
+
+        // Check catalog exists
+        if config.catalogs.contains_key(&ctx.catalog) {
+            checks.push(CheckResult::ok(
+                "Current context",
+                format!("{} (catalog '{}' found)", context_str, ctx.catalog),
+            ));
+        } else {
+            checks.push(CheckResult::warning(
+                "Current context",
+                format!(
+                    "{} (catalog '{}' not found in config)",
+                    context_str, ctx.catalog
+                ),
+                "Run 'icetable config add-catalog' to add the catalog",
+            ));
+        }
+    } else if config.current_context.is_some() {
+        checks.push(CheckResult::warning(
+            "Current context",
+            "Invalid format",
+            "Run 'icetable config use <catalog[@warehouse][.namespace][.table]>' to set context",
+        ));
+    }
+
+    if !config.tables.is_empty() {
+        checks.push(CheckResult::ok(
+            "Table aliases",
+            format!("{} configured", config.tables.len()),
+        ));
+    }
+
+    if !config.catalogs.is_empty() {
+        checks.push(CheckResult::ok(
+            "Catalogs",
+            format!("{} configured", config.catalogs.len()),
+        ));
+    }
+
+    // Validate specific catalog if requested
+    if let Some(catalog_name) = catalog_to_test {
+        if let Some(catalog) = config.catalogs.get(catalog_name) {
+            checks.push(CheckResult::ok(
+                format!("Catalog '{}'", catalog_name),
+                "Found in config",
+            ));
+
+            match test_catalog_connectivity(catalog_name, catalog).await {
+                Ok(_) => {
+                    checks.push(CheckResult::ok(
+                        format!("Catalog '{}' connectivity", catalog_name),
+                        "Connected successfully",
+                    ));
+                }
+                Err(e) => {
+                    checks.push(CheckResult::error(
+                        format!("Catalog '{}' connectivity", catalog_name),
+                        format!("Connection failed: {}", e),
+                        "Check catalog URI and credentials",
+                    ));
+                }
+            }
+        } else {
+            checks.push(CheckResult::error(
+                format!("Catalog '{}'", catalog_name),
+                "Not found in config",
+                "Run 'icetable config add-catalog' to add it",
+            ));
+        }
+    }
+
+    checks
+}
+
+/// Detected storage types from configuration
+#[derive(Debug, Default)]
+pub struct ConfiguredStorageTypes {
+    /// Uses S3/S3a storage
+    pub uses_s3: bool,
+    /// Uses GCS storage
+    pub uses_gcs: bool,
+    /// Uses Azure storage
+    pub uses_azure: bool,
+}
+
+/// Detect which storage types are configured in tables and catalogs
+pub fn detect_configured_storage_types() -> ConfiguredStorageTypes {
+    let mut result = ConfiguredStorageTypes::default();
+
+    let config = match Config::load() {
+        Ok(c) => c,
+        Err(_) => return result,
+    };
+
+    // Check table aliases
+    for path in config.tables.values() {
+        update_storage_types_from_path(path, &mut result);
+    }
+
+    // Check catalog warehouse locations
+    for catalog in config.catalogs.values() {
+        if let Some(ref warehouse) = catalog.warehouse {
+            update_storage_types_from_path(warehouse, &mut result);
+        }
+    }
+
+    result
+}
+
+/// Update storage type flags based on a path
+fn update_storage_types_from_path(path: &str, types: &mut ConfiguredStorageTypes) {
+    if path.starts_with("s3://") || path.starts_with("s3a://") {
+        types.uses_s3 = true;
+    } else if path.starts_with("gs://") {
+        types.uses_gcs = true;
+    } else if path.starts_with("az://")
+        || path.starts_with("abfs://")
+        || path.starts_with("abfss://")
+    {
+        types.uses_azure = true;
     }
 }

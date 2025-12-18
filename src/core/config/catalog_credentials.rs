@@ -197,7 +197,9 @@ mod tests {
             CatalogAuth::OAuth2 {
                 client_id: "admin".to_string(),
                 client_secret: CredentialSource::EnvVar("POLARIS_SECRET".to_string()),
-                token_endpoint: Some("http://localhost:8181/api/catalog/v1/oauth/tokens".to_string()),
+                token_endpoint: Some(
+                    "http://localhost:8181/api/catalog/v1/oauth/tokens".to_string(),
+                ),
                 scope: Some("PRINCIPAL_ROLE:ALL".to_string()),
             },
         );

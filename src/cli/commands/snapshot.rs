@@ -5,11 +5,8 @@
 
 use colored::Colorize;
 
-use super::common::{
-    TableResolution, print_dry_run_header, print_json, resolve_table_from_context,
-};
-use crate::cli::output::{SnapshotFormatter, SnapshotInfo};
-use crate::cli::output::{create_header_cells, create_styled_table, format_timestamp_ms};
+use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
+use crate::cli::output::{LineageEntry, SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{CatalogContext, SnapshotArgs, SnapshotCommands};
 use crate::core::CatalogConfig;
 use crate::core::maintenance::{SnapshotConfig, SnapshotService};
@@ -211,8 +208,6 @@ impl SnapshotCommand {
     }
 
     async fn iceberg_expire(cfg: ExpireConfig<'_>) -> Result<()> {
-        use std::collections::HashSet;
-
         // Create metadata service using factory method - handles catalog vs path context automatically
         let metadata_service = cfg
             .resolution
@@ -273,17 +268,19 @@ impl SnapshotCommand {
 
         // Show snapshots to expire (for non-JSON output) - reuse loaded snapshots
         if cfg.output != "json" {
-            let expire_set: HashSet<i64> = result.expired_ids.iter().cloned().collect();
+            let expire_set: std::collections::HashSet<i64> =
+                result.expired_ids.iter().cloned().collect();
 
-            println!();
-            println!("Snapshots to expire: {}", result.expired_count);
-            for snap in snapshots
+            let (ids, timestamps): (Vec<i64>, Vec<i64>) = snapshots
                 .iter()
                 .filter(|s| expire_set.contains(&s.snapshot_id()))
-            {
-                let ts = format_timestamp_ms(snap.timestamp_ms());
-                println!("  - {} ({})", snap.snapshot_id(), ts);
-            }
+                .map(|s| (s.snapshot_id(), s.timestamp_ms()))
+                .unzip();
+
+            println!(
+                "{}",
+                SnapshotFormatter::format_expire_preview(&ids, &timestamps)
+            );
         }
 
         if result.dry_run {
@@ -379,107 +376,33 @@ impl SnapshotCommand {
             .get_lineage(&metadata_service, snapshot_id)
             .await?;
 
-        let total_count = result.total_count;
-        let max_items = limit.unwrap_or(usize::MAX);
-        let is_truncated = total_count > max_items && limit.is_some();
+        // Convert to LineageEntry for formatting
+        let entries: Vec<LineageEntry> = result
+            .entries
+            .iter()
+            .map(|e| LineageEntry {
+                snapshot_id: e.snapshot_id,
+                parent_id: e.parent_id,
+                timestamp_ms: e.timestamp_ms,
+                operation: e.operation.clone(),
+                is_current: e.is_current,
+                is_root: e.is_root,
+            })
+            .collect();
 
         if output == "json" {
-            let json_lineage: Vec<serde_json::Value> = result
-                .entries
-                .iter()
-                .map(|entry| {
-                    serde_json::json!({
-                        "snapshot_id": entry.snapshot_id,
-                        "parent_id": entry.parent_id,
-                        "timestamp": chrono::DateTime::from_timestamp_millis(entry.timestamp_ms)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default(),
-                        "operation": entry.operation,
-                        "is_current": entry.is_current,
-                    })
-                })
-                .collect();
-
-            let json = serde_json::json!({
-                "table": path,
-                "lineage": json_lineage,
-                "total": total_count,
-            });
-            print_json(&json)?;
+            let json_str =
+                SnapshotFormatter::format_lineage_json(path, &entries, result.total_count)
+                    .map_err(|e| Error::Serialization {
+                        message: e.to_string(),
+                    })?;
+            println!("{}", json_str);
         } else {
-            use comfy_table::{Cell, CellAlignment};
-
             println!("{} snapshot lineage at {}", "Showing".green(), path);
             println!();
-
-            let mut table = create_styled_table();
-            table.set_header(create_header_cells(&[
-                "Snapshot",
-                "Operation",
-                "Timestamp",
-                "Status",
-            ]));
-
-            // Show items up to limit
-            let display_count = if is_truncated {
-                max_items - 1
-            } else {
-                total_count
-            };
-
-            for entry in result.entries.iter().take(display_count) {
-                let ts_str = format_timestamp_ms(entry.timestamp_ms);
-
-                let status = if entry.is_current {
-                    "● current".green().to_string()
-                } else if entry.is_root && !is_truncated {
-                    "● root".green().to_string()
-                } else {
-                    "".to_string()
-                };
-
-                table.add_row(vec![
-                    Cell::new(entry.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
-                    Cell::new(&entry.operation),
-                    Cell::new(ts_str),
-                    Cell::new(status),
-                ]);
-            }
-
-            println!("{}", table);
-
-            // Show truncation indicator and root outside the table
-            if is_truncated {
-                let skipped = total_count - max_items;
-                println!(
-                    "         {} ({})",
-                    "...".dimmed(),
-                    format!("{} more", skipped).dimmed()
-                );
-
-                // Show root in a separate mini-table
-                if let Some(root) = result.entries.last() {
-                    let ts_str = format_timestamp_ms(root.timestamp_ms);
-
-                    let mut root_table = create_styled_table();
-                    root_table.set_header(create_header_cells(&[
-                        "Snapshot",
-                        "Operation",
-                        "Timestamp",
-                        "Status",
-                    ]));
-                    root_table.add_row(vec![
-                        Cell::new(root.snapshot_id.to_string()).set_alignment(CellAlignment::Right),
-                        Cell::new(&root.operation),
-                        Cell::new(ts_str),
-                        Cell::new("● root".green().to_string()),
-                    ]);
-                    println!("{}", root_table);
-                }
-            }
-
-            println!();
-            println!("{}", format!("{} snapshots total", total_count).dimmed());
+            let table_str =
+                SnapshotFormatter::format_lineage_table(&entries, result.total_count, limit);
+            println!("{}", table_str);
         }
 
         Ok(())

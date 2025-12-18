@@ -7,23 +7,12 @@
 //! 2. Table integrity check (with --table): Validates Iceberg table structure
 
 use colored::Colorize;
-use comfy_table::{Cell, Color};
 
-use super::common::print_json;
-use crate::cli::output::create_styled_table;
+use crate::cli::output::DoctorFormatter;
 use crate::cli::parser::DoctorArgs;
-use crate::core::maintenance::{
-    CheckResult, CheckStatus, CheckSummary, DoctorConfig, DoctorService,
-};
+use crate::core::maintenance::{CheckResult, DoctorConfig, DoctorService};
 use crate::error::Result;
 use crate::utils::with_resource_limits;
-
-/// Detected storage types from configuration
-struct ConfiguredStorageTypes {
-    uses_s3: bool,
-    uses_gcs: bool,
-    uses_azure: bool,
-}
 
 /// Handler for doctor command
 pub struct DoctorCommand;
@@ -76,13 +65,13 @@ impl DoctorCommand {
 
         let mut checks = Vec::new();
 
-        // Run basic checks
+        // Run basic checks - delegated to DoctorService
         checks.push(DoctorService::check_version());
-        checks.push(Self::check_config_file());
-        checks.extend(Self::check_configuration(args).await);
+        checks.push(DoctorService::check_config_file());
+        checks.extend(DoctorService::check_configuration(args.catalog.as_deref()).await);
 
         // Determine which storage types are in use from config
-        let storage_types = Self::detect_configured_storage_types();
+        let storage_types = DoctorService::detect_configured_storage_types();
 
         // Only check credentials for storage types actually in use
         if storage_types.uses_s3 {
@@ -97,14 +86,18 @@ impl DoctorCommand {
         }
 
         // If no cloud storage configured, note that
-        if !storage_types.uses_s3 && !storage_types.uses_gcs && !storage_types.uses_azure
+        if !storage_types.uses_s3
+            && !storage_types.uses_gcs
+            && !storage_types.uses_azure
             && let Ok(config) = Config::load()
-                && config.tables.is_empty() && config.catalogs.is_empty() {
-                    checks.push(CheckResult::ok(
-                        "Cloud credentials",
-                        "No cloud storage configured (local paths only)",
-                    ));
-                }
+            && config.tables.is_empty()
+            && config.catalogs.is_empty()
+        {
+            checks.push(CheckResult::ok(
+                "Cloud credentials",
+                "No cloud storage configured (local paths only)",
+            ));
+        }
 
         if args.storage {
             checks.push(DoctorService::check_storage_connectivity().await);
@@ -112,50 +105,6 @@ impl DoctorCommand {
 
         Self::output_results(&checks, &args.output);
         Ok(())
-    }
-
-    /// Detect which storage types are configured in tables and catalogs
-    fn detect_configured_storage_types() -> ConfiguredStorageTypes {
-        use crate::config::Config;
-
-        let mut result = ConfiguredStorageTypes {
-            uses_s3: false,
-            uses_gcs: false,
-            uses_azure: false,
-        };
-
-        let config = match Config::load() {
-            Ok(c) => c,
-            Err(_) => return result,
-        };
-
-        // Check table aliases
-        for path in config.tables.values() {
-            Self::update_storage_types_from_path(path, &mut result);
-        }
-
-        // Check catalog warehouse locations
-        for catalog in config.catalogs.values() {
-            if let Some(ref warehouse) = catalog.warehouse {
-                Self::update_storage_types_from_path(warehouse, &mut result);
-            }
-        }
-
-        result
-    }
-
-    /// Update storage type flags based on a path
-    fn update_storage_types_from_path(path: &str, types: &mut ConfiguredStorageTypes) {
-        if path.starts_with("s3://") || path.starts_with("s3a://") {
-            types.uses_s3 = true;
-        } else if path.starts_with("gs://") {
-            types.uses_gcs = true;
-        } else if path.starts_with("az://")
-            || path.starts_with("abfs://")
-            || path.starts_with("abfss://")
-        {
-            types.uses_azure = true;
-        }
     }
 
     /// Run table integrity checks
@@ -184,277 +133,32 @@ impl DoctorCommand {
 
         // Additional summary for table checks
         if !is_json {
-            let summary = CheckSummary::from_checks(&checks);
             println!();
-            if summary.has_errors() {
-                println!(
-                    "{}",
-                    "Table integrity issues found. Review the errors above.".red()
-                );
-            } else if summary.has_warnings() {
-                println!(
-                    "{}",
-                    "Table appears healthy but has warnings worth reviewing.".yellow()
-                );
-            } else {
-                println!("{}", "Table integrity verified. No issues found.".green());
-            }
+            println!(
+                "{}",
+                DoctorFormatter::format_table_integrity_message(&checks)
+            );
         }
 
         Ok(())
     }
 
-    /// Check config file
-    fn check_config_file() -> CheckResult {
-        use crate::config::Config;
-
-        match Config::config_path() {
-            Ok(path) => {
-                if path.exists() {
-                    match Config::load() {
-                        Ok(_) => CheckResult::ok("Config file", path.display().to_string()),
-                        Err(e) => CheckResult::warning(
-                            "Config file",
-                            format!("Parse error: {}", e),
-                            "Check config file syntax",
-                        ),
-                    }
-                } else {
-                    CheckResult::ok("Config file", "Not created yet (will use defaults)")
-                }
-            }
-            Err(e) => CheckResult::warning(
-                "Config file",
-                format!("Cannot determine path: {}", e),
-                "Check HOME environment variable",
-            ),
-        }
-    }
-
-    /// Check configuration (context, aliases, catalogs)
-    async fn check_configuration(args: &DoctorArgs) -> Vec<CheckResult> {
-        use crate::config::Config;
-
-        let mut checks = Vec::new();
-        let config = match Config::load() {
-            Ok(cfg) => cfg,
-            Err(_) => return checks,
-        };
-
-        // Check current context - validate each part individually
-        if let Some(ctx) = config.parse_current_context() {
-            // Build context description
-            let mut parts = vec![ctx.catalog.clone()];
-            if let Some(ref wh) = ctx.warehouse {
-                parts.push(format!("@{}", wh));
-            }
-            if let Some(ref ns) = ctx.namespace {
-                parts.push(format!(".{}", ns));
-            }
-            if let Some(ref tbl) = ctx.table {
-                parts.push(format!(".{}", tbl));
-            }
-            let context_str = parts.join("");
-
-            // Check catalog exists
-            if config.catalogs.contains_key(&ctx.catalog) {
-                checks.push(CheckResult::ok(
-                    "Current context",
-                    format!("{} (catalog '{}' found)", context_str, ctx.catalog),
-                ));
-            } else {
-                checks.push(CheckResult::warning(
-                    "Current context",
-                    format!("{} (catalog '{}' not found in config)", context_str, ctx.catalog),
-                    "Run 'icetable config add-catalog' to add the catalog",
-                ));
-            }
-        } else if config.current_context.is_some() {
-            checks.push(CheckResult::warning(
-                "Current context",
-                "Invalid format",
-                "Run 'icetable config use <catalog[@warehouse][.namespace][.table]>' to set context",
-            ));
-        }
-
-        if !config.tables.is_empty() {
-            checks.push(CheckResult::ok(
-                "Table aliases",
-                format!("{} configured", config.tables.len()),
-            ));
-        }
-
-        if !config.catalogs.is_empty() {
-            checks.push(CheckResult::ok(
-                "Catalogs",
-                format!("{} configured", config.catalogs.len()),
-            ));
-        }
-
-        // Validate specific catalog if requested
-        if let Some(catalog_name) = &args.catalog {
-            if let Some(catalog) = config.catalogs.get(catalog_name) {
-                checks.push(CheckResult::ok(
-                    format!("Catalog '{}'", catalog_name),
-                    "Found in config",
-                ));
-
-                match DoctorService::test_catalog_connectivity(catalog_name, catalog).await {
-                    Ok(_) => {
-                        checks.push(CheckResult::ok(
-                            format!("Catalog '{}' connectivity", catalog_name),
-                            "Connected successfully",
-                        ));
-                    }
-                    Err(e) => {
-                        checks.push(CheckResult::error(
-                            format!("Catalog '{}' connectivity", catalog_name),
-                            format!("Connection failed: {}", e),
-                            "Check catalog URI and credentials",
-                        ));
-                    }
-                }
-            } else {
-                checks.push(CheckResult::error(
-                    format!("Catalog '{}'", catalog_name),
-                    "Not found in config",
-                    "Run 'icetable config add-catalog' to add it",
-                ));
-            }
-        }
-
-        checks
-    }
-
     /// Output results in appropriate format
     fn output_results(checks: &[CheckResult], output_format: &str) {
         if output_format == "json" {
-            Self::display_json(checks);
+            match DoctorFormatter::format_json(checks) {
+                Ok(json) => println!("{}", json),
+                Err(e) => eprintln!("Error serializing JSON: {}", e),
+            }
         } else {
-            Self::display_table(checks);
-        }
-
-        let summary = CheckSummary::from_checks(checks);
-        if output_format != "json" {
+            println!("{}", DoctorFormatter::format_table(checks));
             println!();
-            println!(
-                "{}: {} passed, {} warnings, {} errors",
-                "Summary".bold(),
-                summary.ok_count.to_string().green(),
-                summary.warning_count.to_string().yellow(),
-                summary.error_count.to_string().red()
-            );
+            println!("{}", DoctorFormatter::format_summary(checks));
 
-            if summary.has_errors() {
+            if let Some(msg) = DoctorFormatter::format_status_message(checks) {
                 println!();
-                println!(
-                    "{}",
-                    "Some checks failed. Review the suggestions above to fix issues.".yellow()
-                );
+                println!("{}", msg);
             }
-        }
-    }
-
-    /// Display results as a table
-    fn display_table(checks: &[CheckResult]) {
-        let mut table = create_styled_table();
-
-        table.set_header(vec![
-            Cell::new("Status")
-                .fg(Color::Cyan)
-                .set_alignment(comfy_table::CellAlignment::Center),
-            Cell::new("Check")
-                .fg(Color::Cyan)
-                .set_alignment(comfy_table::CellAlignment::Center),
-            Cell::new("Result")
-                .fg(Color::Cyan)
-                .set_alignment(comfy_table::CellAlignment::Center),
-        ]);
-
-        for check in checks {
-            let (symbol, color) = match check.status {
-                CheckStatus::Ok => (
-                    "✓".green().to_string(),
-                    Color::Rgb {
-                        r: 80,
-                        g: 200,
-                        b: 120,
-                    },
-                ),
-                CheckStatus::Warning => (
-                    "⚠".yellow().to_string(),
-                    Color::Rgb {
-                        r: 220,
-                        g: 180,
-                        b: 60,
-                    },
-                ),
-                CheckStatus::Error => (
-                    "✗".red().to_string(),
-                    Color::Rgb {
-                        r: 220,
-                        g: 90,
-                        b: 90,
-                    },
-                ),
-            };
-
-            table.add_row(vec![
-                Cell::new(symbol).set_alignment(comfy_table::CellAlignment::Center),
-                Cell::new(&check.name),
-                Cell::new(&check.message).fg(color),
-            ]);
-        }
-
-        println!("{}", table);
-
-        // Print suggestions for issues
-        let issues: Vec<_> = checks
-            .iter()
-            .filter(|c| c.suggestion.is_some() && c.status != CheckStatus::Ok)
-            .collect();
-
-        if !issues.is_empty() {
-            println!();
-            println!("{}", "Suggestions:".bold());
-            for check in issues {
-                if let Some(ref suggestion) = check.suggestion {
-                    println!("  {} {}: {}", "->".dimmed(), check.name.cyan(), suggestion);
-                }
-            }
-        }
-    }
-
-    /// Display results as JSON
-    fn display_json(checks: &[CheckResult]) {
-        let json_checks: Vec<_> = checks
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "name": c.name,
-                    "status": match c.status {
-                        CheckStatus::Ok => "ok",
-                        CheckStatus::Warning => "warning",
-                        CheckStatus::Error => "error",
-                    },
-                    "message": c.message,
-                    "suggestion": c.suggestion,
-                })
-            })
-            .collect();
-
-        let summary = CheckSummary::from_checks(checks);
-        let json = serde_json::json!({
-            "checks": json_checks,
-            "summary": {
-                "ok": summary.ok_count,
-                "warnings": summary.warning_count,
-                "errors": summary.error_count,
-            }
-        });
-
-        if let Err(e) = print_json(&json) {
-            eprintln!("Error serializing JSON: {}", e);
         }
     }
 }

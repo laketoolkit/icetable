@@ -31,8 +31,8 @@ mod refs_scanner;
 
 // Export types from traits (but not the reader::MetadataReader to avoid collision)
 pub use traits::{
-    DataFileChanges, DataFileInfo, MaintenanceResult, MetadataServiceReader,
-    MetadataServiceWriter, OperationType, SnapshotInfo, TableServiceReader, TableServiceWriter,
+    DataFileChanges, DataFileInfo, MaintenanceResult, MetadataServiceReader, MetadataServiceWriter,
+    OperationType, SnapshotInfo, TableServiceReader, TableServiceWriter,
 };
 
 // Primary exports

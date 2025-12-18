@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use colored::Colorize;
 
-use super::common::{create_progress_bar, no_namespace_error, no_table_error, print_json, resolve_catalog};
+use super::common::{
+    create_progress_bar, no_namespace_error, no_table_error, print_json, resolve_catalog,
+};
 use crate::cli::parser::{CatalogContext, GenerateArgs, SchemaTemplate as CliSchemaTemplate};
 use crate::core::format_bytes;
 use crate::core::operations::generate::{
@@ -267,7 +269,11 @@ impl GenerateCommand {
                 eprintln!("Error serializing JSON: {}", e);
             }
         } else {
-            let action = if result.appended { "Appended" } else { "Generated" };
+            let action = if result.appended {
+                "Appended"
+            } else {
+                "Generated"
+            };
             println!(
                 "\n{} {} {} rows in {} files ({}, snapshot {})",
                 "✓".green().bold(),

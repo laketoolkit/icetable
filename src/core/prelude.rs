@@ -26,8 +26,8 @@ pub use super::resolution::{
 
 // Metadata services
 pub use super::metadata::{
-    DataFileChanges, DataFileInfo, IcebergMetadataService, MaintenanceResult,
-    OperationType, TableServiceReader, TableServiceWriter,
+    DataFileChanges, DataFileInfo, IcebergMetadataService, MaintenanceResult, OperationType,
+    TableServiceReader, TableServiceWriter,
 };
 
 // Table loading
@@ -38,9 +38,8 @@ pub use super::storage::{ObjectStoreExt, Storage, create_object_store};
 
 // Formatting utilities
 pub use super::inspection::formatters::{
-    extract_filename, format_count, format_number, format_percentage, format_size,
+    extract_filename, format_bytes, format_count, format_number, format_percentage,
 };
-pub use super::utils::format_bytes;
 
 // Maintenance services
 pub use super::maintenance::{

@@ -14,10 +14,9 @@
 //! - `crate::core::progress::ProgressReporter` trait for progress reporting
 //! - `crate::core::utils::*` for shared utilities
 //!
-//! # Re-exports for Backward Compatibility
+//! # Re-exports
 //!
-//! This module re-exports `crate::core::utils::*` for backward compatibility.
-//! New code should import directly from `crate::core::utils` instead.
+//! This module re-exports `crate::core::utils::*` for convenience.
 
 // CLI utilities
 pub mod box_frame;
@@ -39,7 +38,7 @@ pub use cancellation::{
 };
 pub use logging::{LogLevel, init_logger};
 
-// Re-export CredentialSource from core::config for backward compatibility
+// Re-export CredentialSource from core::config
 pub use crate::core::config::CredentialSource;
 pub use progress::{ProgressTracker, create_progress_bar, create_spinner};
 pub use resources::{
@@ -51,7 +50,7 @@ pub use text::{strip_ansi_codes, visual_width, wrap_line};
 pub use time::{parse_relative_duration, parse_timestamp};
 pub use types::parse_data_type;
 
-// Core re-exports (from crate::core::utils for backward compatibility)
+// Core re-exports
 pub use crate::core::utils as core;
 pub use crate::core::utils::{
     ExpirationConfig, ScannedFile, SnapshotItem, TableFormat, WriteMetadataResult, detect_format,

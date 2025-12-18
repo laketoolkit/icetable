@@ -18,7 +18,10 @@ use iceberg::spec::{DataFile, Summary, TableMetadata};
 use iceberg::table::StaticTable;
 use object_store::ObjectStore;
 
-use super::traits::{DataFileChanges, DataFileInfo, MetadataServiceReader, MetadataServiceWriter, TableServiceReader, TableServiceWriter, OperationType, SnapshotInfo};
+use super::traits::{
+    DataFileChanges, DataFileInfo, MetadataServiceReader, MetadataServiceWriter, OperationType,
+    SnapshotInfo, TableServiceReader, TableServiceWriter,
+};
 use crate::core::catalog::TableCommitter;
 use crate::core::storage::{ObjectStoreExt, Storage, create_file_io, create_object_store};
 use crate::error::{Error, Result};
@@ -29,6 +32,47 @@ use super::iceberg_partition;
 use super::refs::{self, RefInfo};
 use super::refs_scanner;
 use super::writer::SnapshotWriter;
+
+// =============================================================================
+// Summary Builder - extracted for clarity and reusability
+// =============================================================================
+
+/// Build a complete Iceberg summary with standard metrics
+fn build_snapshot_summary(
+    base_summary: HashMap<String, String>,
+    all_files: &[DataFile],
+    changes: &DataFileChanges,
+) -> HashMap<String, String> {
+    let total_records: u64 = all_files.iter().map(|f| f.record_count()).sum();
+    let total_files_size: u64 = all_files.iter().map(|f| f.file_size_in_bytes()).sum();
+
+    let mut full_summary = base_summary;
+    full_summary.insert("total-records".to_string(), total_records.to_string());
+    full_summary.insert("total-data-files".to_string(), all_files.len().to_string());
+    full_summary.insert("total-files-size".to_string(), total_files_size.to_string());
+
+    // Add change metrics
+    let added_files = changes.added.len();
+    let removed_files = changes.removed.len();
+
+    if added_files > 0 {
+        let added_size: u64 = changes.added.iter().map(|f| f.size).sum();
+        let added_records: u64 = changes.added.iter().map(|f| f.record_count).sum();
+        full_summary.insert("added-data-files".to_string(), added_files.to_string());
+        full_summary.insert("added-files-size".to_string(), added_size.to_string());
+        full_summary.insert("added-records".to_string(), added_records.to_string());
+    }
+
+    if removed_files > 0 {
+        let removed_size: u64 = changes.removed.iter().map(|f| f.size).sum();
+        let removed_records: u64 = changes.removed.iter().map(|f| f.record_count).sum();
+        full_summary.insert("deleted-data-files".to_string(), removed_files.to_string());
+        full_summary.insert("removed-files-size".to_string(), removed_size.to_string());
+        full_summary.insert("deleted-records".to_string(), removed_records.to_string());
+    }
+
+    full_summary
+}
 
 /// Iceberg metadata service for transactional operations
 pub struct IcebergMetadataService {
@@ -533,31 +577,7 @@ impl TableServiceWriter for IcebergMetadataService {
             .await?;
 
         // Build summary with all standard Iceberg fields
-        let total_records: u64 = all_files.iter().map(|f| f.record_count()).sum();
-        let total_files_size: u64 = all_files.iter().map(|f| f.file_size_in_bytes()).sum();
-        let mut full_summary = summary.clone();
-        full_summary.insert("total-records".to_string(), total_records.to_string());
-        full_summary.insert("total-data-files".to_string(), all_files.len().to_string());
-        full_summary.insert("total-files-size".to_string(), total_files_size.to_string());
-
-        // Add change metrics
-        let added_files = changes.added.len();
-        let removed_files = changes.removed.len();
-        let added_size: u64 = changes.added.iter().map(|f| f.size).sum();
-        let removed_size: u64 = changes.removed.iter().map(|f| f.size).sum();
-        let added_records: u64 = changes.added.iter().map(|f| f.record_count).sum();
-        let removed_records: u64 = changes.removed.iter().map(|f| f.record_count).sum();
-
-        if added_files > 0 {
-            full_summary.insert("added-data-files".to_string(), added_files.to_string());
-            full_summary.insert("added-files-size".to_string(), added_size.to_string());
-            full_summary.insert("added-records".to_string(), added_records.to_string());
-        }
-        if removed_files > 0 {
-            full_summary.insert("deleted-data-files".to_string(), removed_files.to_string());
-            full_summary.insert("removed-files-size".to_string(), removed_size.to_string());
-            full_summary.insert("deleted-records".to_string(), removed_records.to_string());
-        }
+        let full_summary = build_snapshot_summary(summary.clone(), &all_files, &changes);
 
         let iceberg_summary = Summary {
             operation: iceberg_operations::to_iceberg_operation(operation),
@@ -630,3 +650,220 @@ impl MetadataServiceWriter for IcebergMetadataService {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::metadata::DataFileInfo;
+
+    // =========================================================================
+    // build_snapshot_summary Tests
+    // =========================================================================
+
+    #[test]
+    fn test_build_snapshot_summary_empty_changes() {
+        let base_summary = HashMap::new();
+        let all_files: Vec<DataFile> = vec![];
+        let changes = DataFileChanges {
+            added: vec![],
+            removed: vec![],
+        };
+
+        let result = build_snapshot_summary(base_summary, &all_files, &changes);
+
+        assert_eq!(result.get("total-records"), Some(&"0".to_string()));
+        assert_eq!(result.get("total-data-files"), Some(&"0".to_string()));
+        assert_eq!(result.get("total-files-size"), Some(&"0".to_string()));
+        // No added/removed entries when empty
+        assert!(result.get("added-data-files").is_none());
+        assert!(result.get("deleted-data-files").is_none());
+    }
+
+    #[test]
+    fn test_build_snapshot_summary_with_added_files() {
+        let base_summary = HashMap::new();
+        let all_files: Vec<DataFile> = vec![];
+        let changes = DataFileChanges {
+            added: vec![
+                DataFileInfo {
+                    path: "s3://bucket/data/file1.parquet".to_string(),
+                    size: 1000,
+                    record_count: 100,
+                    partition: HashMap::new(),
+                },
+                DataFileInfo {
+                    path: "s3://bucket/data/file2.parquet".to_string(),
+                    size: 2000,
+                    record_count: 200,
+                    partition: HashMap::new(),
+                },
+            ],
+            removed: vec![],
+        };
+
+        let result = build_snapshot_summary(base_summary, &all_files, &changes);
+
+        assert_eq!(result.get("added-data-files"), Some(&"2".to_string()));
+        assert_eq!(result.get("added-files-size"), Some(&"3000".to_string()));
+        assert_eq!(result.get("added-records"), Some(&"300".to_string()));
+        assert!(result.get("deleted-data-files").is_none());
+    }
+
+    #[test]
+    fn test_build_snapshot_summary_with_removed_files() {
+        let base_summary = HashMap::new();
+        let all_files: Vec<DataFile> = vec![];
+        let changes = DataFileChanges {
+            added: vec![],
+            removed: vec![DataFileInfo {
+                path: "s3://bucket/data/old1.parquet".to_string(),
+                size: 500,
+                record_count: 50,
+                partition: HashMap::new(),
+            }],
+        };
+
+        let result = build_snapshot_summary(base_summary, &all_files, &changes);
+
+        assert_eq!(result.get("deleted-data-files"), Some(&"1".to_string()));
+        assert_eq!(result.get("removed-files-size"), Some(&"500".to_string()));
+        assert_eq!(result.get("deleted-records"), Some(&"50".to_string()));
+        assert!(result.get("added-data-files").is_none());
+    }
+
+    #[test]
+    fn test_build_snapshot_summary_preserves_base_summary() {
+        let mut base_summary = HashMap::new();
+        base_summary.insert("custom-key".to_string(), "custom-value".to_string());
+        base_summary.insert("spark.app.id".to_string(), "app-123".to_string());
+
+        let all_files: Vec<DataFile> = vec![];
+        let changes = DataFileChanges {
+            added: vec![],
+            removed: vec![],
+        };
+
+        let result = build_snapshot_summary(base_summary, &all_files, &changes);
+
+        // Original keys preserved
+        assert_eq!(result.get("custom-key"), Some(&"custom-value".to_string()));
+        assert_eq!(result.get("spark.app.id"), Some(&"app-123".to_string()));
+        // Standard keys also present
+        assert_eq!(result.get("total-records"), Some(&"0".to_string()));
+    }
+
+    #[test]
+    fn test_build_snapshot_summary_with_both_added_and_removed() {
+        let base_summary = HashMap::new();
+        let all_files: Vec<DataFile> = vec![];
+        let changes = DataFileChanges {
+            added: vec![DataFileInfo {
+                path: "s3://bucket/data/new.parquet".to_string(),
+                size: 1000,
+                record_count: 100,
+                partition: HashMap::new(),
+            }],
+            removed: vec![DataFileInfo {
+                path: "s3://bucket/data/old.parquet".to_string(),
+                size: 800,
+                record_count: 80,
+                partition: HashMap::new(),
+            }],
+        };
+
+        let result = build_snapshot_summary(base_summary, &all_files, &changes);
+
+        // Both added and removed present
+        assert_eq!(result.get("added-data-files"), Some(&"1".to_string()));
+        assert_eq!(result.get("added-files-size"), Some(&"1000".to_string()));
+        assert_eq!(result.get("added-records"), Some(&"100".to_string()));
+        assert_eq!(result.get("deleted-data-files"), Some(&"1".to_string()));
+        assert_eq!(result.get("removed-files-size"), Some(&"800".to_string()));
+        assert_eq!(result.get("deleted-records"), Some(&"80".to_string()));
+    }
+
+    // =========================================================================
+    // branch_name_or_default Tests
+    // =========================================================================
+
+    #[test]
+    fn test_branch_name_or_default_none() {
+        assert_eq!(IcebergMetadataService::branch_name_or_default(None), "main");
+    }
+
+    #[test]
+    fn test_branch_name_or_default_some() {
+        assert_eq!(
+            IcebergMetadataService::branch_name_or_default(Some("develop")),
+            "develop"
+        );
+    }
+
+    #[test]
+    fn test_branch_name_or_default_main() {
+        assert_eq!(
+            IcebergMetadataService::branch_name_or_default(Some("main")),
+            "main"
+        );
+    }
+
+    // =========================================================================
+    // DataFileChanges Tests
+    // =========================================================================
+
+    #[test]
+    fn test_data_file_changes_empty() {
+        let changes = DataFileChanges {
+            added: vec![],
+            removed: vec![],
+        };
+        assert!(changes.added.is_empty());
+        assert!(changes.removed.is_empty());
+    }
+
+    #[test]
+    fn test_data_file_info_creation() {
+        let mut partition = HashMap::new();
+        partition.insert("date".to_string(), "2024-01-01".to_string());
+
+        let file = DataFileInfo {
+            path: "s3://bucket/data/file.parquet".to_string(),
+            size: 12345,
+            record_count: 1000,
+            partition: partition.clone(),
+        };
+        assert_eq!(file.path, "s3://bucket/data/file.parquet");
+        assert_eq!(file.size, 12345);
+        assert_eq!(file.record_count, 1000);
+        assert_eq!(file.partition.get("date"), Some(&"2024-01-01".to_string()));
+    }
+
+    #[test]
+    fn test_data_file_info_no_partition() {
+        let file = DataFileInfo {
+            path: "s3://bucket/data/file.parquet".to_string(),
+            size: 1000,
+            record_count: 100,
+            partition: HashMap::new(),
+        };
+        assert!(file.partition.is_empty());
+    }
+
+    #[test]
+    fn test_data_file_info_multiple_partitions() {
+        let mut partition = HashMap::new();
+        partition.insert("year".to_string(), "2024".to_string());
+        partition.insert("month".to_string(), "01".to_string());
+        partition.insert("day".to_string(), "15".to_string());
+
+        let file = DataFileInfo {
+            path: "s3://bucket/data/file.parquet".to_string(),
+            size: 5000,
+            record_count: 500,
+            partition,
+        };
+        assert_eq!(file.partition.len(), 3);
+        assert_eq!(file.partition.get("year"), Some(&"2024".to_string()));
+        assert_eq!(file.partition.get("month"), Some(&"01".to_string()));
+        assert_eq!(file.partition.get("day"), Some(&"15".to_string()));
+    }
+}

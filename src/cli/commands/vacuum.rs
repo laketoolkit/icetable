@@ -5,12 +5,11 @@
 use colored::Colorize;
 use std::io;
 
-use super::common::{TableResolution, create_spinner, print_json, resolve_table_from_context};
+use super::common::{TableResolution, create_spinner, resolve_table_from_context};
+use crate::cli::output::{OrphanFileInfo, VacuumFormatter};
 use crate::cli::parser::{CatalogContext, VacuumArgs};
-use crate::core::extract_filename;
-use crate::core::format_bytes;
 use crate::core::maintenance::{VacuumConfig, VacuumResult, VacuumService};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
 /// Handler for vacuum command
@@ -37,7 +36,10 @@ impl VacuumCommand {
         resolution: &TableResolution,
     ) -> Result<()> {
         // Print header
-        Self::print_header(table_path, args);
+        println!(
+            "{}",
+            VacuumFormatter::format_header(table_path, args.dry_run, args.branch.as_deref())
+        );
 
         // Handle confirmation for destructive operations
         if !Self::confirm_operation(args)? {
@@ -65,30 +67,6 @@ impl VacuumCommand {
 
         // Output results
         Self::output_result(&result, args)
-    }
-
-    /// Print header message
-    fn print_header(table_path: &str, args: &VacuumArgs) {
-        let action = if args.dry_run {
-            "Analyzing"
-        } else {
-            "Vacuuming"
-        };
-
-        if let Some(ref branch) = args.branch {
-            println!(
-                "{} Iceberg table at {} (branch: {})",
-                action,
-                table_path,
-                branch.cyan()
-            );
-            println!(
-                "{}",
-                "Note: Vacuum always considers all snapshots for safety".dimmed()
-            );
-        } else {
-            println!("{} Iceberg table at {}", action, table_path);
-        }
     }
 
     /// Handle confirmation for destructive operations
@@ -139,121 +117,90 @@ impl VacuumCommand {
     fn output_result(result: &VacuumResult, args: &VacuumArgs) -> Result<()> {
         let analysis = &result.analysis;
 
-        // Output analysis summary
-        println!();
+        // Output analysis summary using formatter
         println!(
-            "Referenced files: {}",
-            analysis.referenced_count.to_string().cyan()
-        );
-        println!(
-            "Files to delete:  {} ({})",
-            analysis.orphan_files.len().to_string().cyan(),
-            format_bytes(analysis.orphan_bytes)
-        );
-        println!(
-            "Retention:        {} hours",
-            analysis.retention_hours.to_string().cyan()
+            "{}",
+            VacuumFormatter::format_summary(
+                analysis.referenced_count,
+                analysis.orphan_files.len(),
+                analysis.orphan_bytes,
+                analysis.retention_hours,
+            )
         );
 
         if analysis.orphan_files.is_empty() {
-            println!();
-            println!("{}", "No orphan files to delete".yellow());
+            println!("{}", VacuumFormatter::format_no_orphans());
             return Ok(());
         }
 
+        // Convert to formatter types
+        let orphan_files: Vec<OrphanFileInfo> = analysis
+            .orphan_files
+            .iter()
+            .map(|f| OrphanFileInfo {
+                path: f.path.clone(),
+                size: f.size,
+            })
+            .collect();
+
         if result.dry_run {
-            Self::output_dry_run(result, args)
+            Self::output_dry_run(
+                &orphan_files,
+                analysis.orphan_bytes,
+                analysis.retention_hours,
+                args,
+            )
         } else {
             Self::output_execution(result, args)
         }
     }
 
     /// Output dry-run results
-    fn output_dry_run(result: &VacuumResult, args: &VacuumArgs) -> Result<()> {
-        let analysis = &result.analysis;
-
-        println!();
-        println!("{}", "DRY RUN - No files will be deleted".yellow().bold());
-
+    fn output_dry_run(
+        files: &[OrphanFileInfo],
+        total_bytes: u64,
+        retention_hours: u64,
+        args: &VacuumArgs,
+    ) -> Result<()> {
         if args.output == "json" {
-            let files: Vec<&str> = analysis
-                .orphan_files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect();
-            let json = serde_json::json!({
-                "dry_run": true,
-                "files_to_delete": files,
-                "files_count": analysis.orphan_files.len(),
-                "bytes_to_free": analysis.orphan_bytes,
-                "retention_hours": analysis.retention_hours,
-            });
-            print_json(&json)?;
+            let json_str =
+                VacuumFormatter::format_dry_run_json(files, total_bytes, retention_hours).map_err(
+                    |e| Error::Serialization {
+                        message: e.to_string(),
+                    },
+                )?;
+            println!("{}", json_str);
         } else {
-            println!();
-            println!("{}", "Would delete the following files:".cyan());
-
-            // Show first 10 files, then summary if more
-            let show_count = 10;
-            for file in analysis.orphan_files.iter().take(show_count) {
-                let name = extract_filename(&file.path);
-                println!("  - {} ({})", name, format_bytes(file.size));
-            }
-
-            if analysis.orphan_files.len() > show_count {
-                println!(
-                    "  {} {} more files...",
-                    "...and".dimmed(),
-                    (analysis.orphan_files.len() - show_count)
-                        .to_string()
-                        .dimmed()
-                );
-            }
-
-            println!();
-            println!(
-                "Total: {} files, {} to free",
-                analysis.orphan_files.len().to_string().yellow(),
-                format_bytes(analysis.orphan_bytes).yellow()
-            );
-            println!();
             println!(
                 "{}",
-                "Run without --dry-run to delete these files.".dimmed()
+                VacuumFormatter::format_dry_run_table(files, total_bytes)
             );
         }
-
         Ok(())
     }
 
     /// Output execution results
     fn output_execution(result: &VacuumResult, args: &VacuumArgs) -> Result<()> {
         if args.output == "json" {
-            let json = serde_json::json!({
-                "files_deleted": result.deleted_count,
-                "bytes_freed": result.deleted_bytes,
-                "errors": result.errors.len(),
-            });
-            print_json(&json)?;
-        } else {
-            println!();
-            println!(
-                "{} {} files, freed {}",
-                "Deleted".green().bold(),
+            let json_str = VacuumFormatter::format_execution_json(
                 result.deleted_count,
-                format_bytes(result.deleted_bytes)
+                result.deleted_bytes,
+                result.errors.len(),
+            )
+            .map_err(|e| Error::Serialization {
+                message: e.to_string(),
+            })?;
+            println!("{}", json_str);
+        } else {
+            println!(
+                "{}",
+                VacuumFormatter::format_execution_table(
+                    result.deleted_count,
+                    result.deleted_bytes,
+                    &result.errors,
+                )
             );
-            if !result.errors.is_empty() {
-                println!("{} errors occurred:", result.errors.len().to_string().red());
-                for err in result.errors.iter().take(5) {
-                    println!("  - {}", err);
-                }
-                if result.errors.len() > 5 {
-                    println!("  ... and {} more", result.errors.len() - 5);
-                }
-            }
         }
-
         Ok(())
     }
 }

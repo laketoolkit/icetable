@@ -305,9 +305,9 @@ impl AnalyzeService {
         let table = service.table();
         let metadata = table.metadata();
 
-        // Helper to normalize paths - extract just the filename for consistent comparison
+        // Helper to extract filename for consistent comparison
         // This handles different path formats: s3://bucket/table/data/xxx.parquet vs data/xxx.parquet
-        let normalize_path = |path: &str| -> String {
+        let extract_filename = |path: &str| -> String {
             // Extract just the filename - this is guaranteed to be unique per file
             path.rsplit('/').next().unwrap_or(path).to_string()
         };
@@ -338,7 +338,7 @@ impl AnalyzeService {
                     for entry in manifest.entries() {
                         if entry.status() != ManifestStatus::Deleted {
                             let path = entry.data_file().file_path().to_string();
-                            referenced.insert(normalize_path(&path));
+                            referenced.insert(extract_filename(&path));
                         }
                     }
                 }
@@ -368,7 +368,8 @@ impl AnalyzeService {
 
                 for task in tasks {
                     let path = task.data_file_path().to_string();
-                    referenced.insert(normalize_path(&path));
+                    // Paths from Iceberg scan are trusted - extract filename for comparison
+                    referenced.insert(extract_filename(&path));
                 }
             }
         }
@@ -383,14 +384,19 @@ impl AnalyzeService {
         let on_storage: Vec<DataFileInfo> = all_objects
             .iter()
             .filter(|obj| obj.location.to_string().ends_with(".parquet"))
-            .map(|obj| {
+            .filter_map(|obj| {
                 let path = obj.location.to_string();
-                DataFileInfo {
-                    path: normalize_path(&path),
+                // Skip paths with potential traversal attacks
+                if path.contains("..") || path.contains('\0') {
+                    return None;
+                }
+                // Extract filename for consistent comparison with referenced files
+                Some(DataFileInfo {
+                    path: extract_filename(&path),
                     size: obj.size,
                     record_count: 0,
                     partition: HashMap::new(),
-                }
+                })
             })
             .collect();
 

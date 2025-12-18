@@ -30,9 +30,9 @@
 //! reporter.finish();
 //! ```
 
-use std::sync::Arc;
-use indicatif::ProgressBar;
 use crate::core::progress::ProgressReporter;
+use indicatif::ProgressBar;
+use std::sync::Arc;
 
 // Progress indicators (direct indicatif usage - prefer IndicatifReporter for core services)
 pub use crate::utils::{ProgressTracker, create_progress_bar, create_spinner};

@@ -11,7 +11,9 @@
 use colored::Colorize;
 
 use super::common::resolve_catalog;
-use crate::cli::parser::{CatalogContext, CreateArgs, CreateCommands, NamespaceCreateArgs, TableCreateArgs};
+use crate::cli::parser::{
+    CatalogContext, CreateArgs, CreateCommands, NamespaceCreateArgs, TableCreateArgs,
+};
 use crate::core::operations::{InitConfig, InitService};
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
@@ -85,11 +87,7 @@ impl CreateCommand {
         let result = InitService::create_table(config).await?;
 
         // Output result
-        println!(
-            "{} Created Iceberg table at {}",
-            "✓".green(),
-            args.name
-        );
+        println!("{} Created Iceberg table at {}", "✓".green(), args.name);
         println!("  UUID:     {}", result.table_uuid);
         println!("  Metadata: {}", result.metadata_path);
 
@@ -101,7 +99,8 @@ impl CreateCommand {
         // Schema is required for catalog tables
         let schema_path = args.schema.ok_or_else(|| Error::MissingArgument {
             argument: "--schema".to_string(),
-            description: "Schema file required for catalog tables. Use --schema <file.json>".to_string(),
+            description: "Schema file required for catalog tables. Use --schema <file.json>"
+                .to_string(),
         })?;
 
         // Create a modified context with the table from args
@@ -128,15 +127,14 @@ impl CreateCommand {
         }
 
         // Read and parse schema file
-        let schema_content =
-            std::fs::read_to_string(&schema_path).map_err(|e| Error::Parse {
-                message: format!(
-                    "Failed to read schema file '{}': {}",
-                    schema_path.display(),
-                    e
-                ),
-                source: None,
-            })?;
+        let schema_content = std::fs::read_to_string(&schema_path).map_err(|e| Error::Parse {
+            message: format!(
+                "Failed to read schema file '{}': {}",
+                schema_path.display(),
+                e
+            ),
+            source: None,
+        })?;
 
         let iceberg_schema: iceberg::spec::Schema =
             serde_json::from_str(&schema_content).map_err(|e| Error::Parse {

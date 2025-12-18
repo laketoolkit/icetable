@@ -232,9 +232,11 @@ pub async fn create_warehouse(
         })?;
 
     if !response.status().is_success() {
-        return Err(
-            parse_error_response(response, &format!("create warehouse '{}'", request.name)).await,
-        );
+        return Err(parse_error_response(
+            response,
+            &format!("create warehouse '{}'", request.name),
+        )
+        .await);
     }
 
     // Polaris returns the created catalog in the response
@@ -261,9 +263,7 @@ pub async fn delete_warehouse(client: &PolarisManagement, name: &str) -> Result<
         })?;
 
     if !response.status().is_success() {
-        return Err(
-            parse_error_response(response, &format!("delete warehouse '{}'", name)).await,
-        );
+        return Err(parse_error_response(response, &format!("delete warehouse '{}'", name)).await);
     }
 
     Ok(())
@@ -321,7 +321,9 @@ async fn parse_error_response(response: reqwest::Response, operation: &str) -> E
         404 => {
             // If clean_message already contains "not found", don't double prefix
             if clean_message.contains("not found") {
-                Error::CatalogOperation { message: clean_message }
+                Error::CatalogOperation {
+                    message: clean_message,
+                }
             } else {
                 Error::CatalogOperation {
                     message: format!("not found: {}", clean_message),
@@ -329,7 +331,9 @@ async fn parse_error_response(response: reqwest::Response, operation: &str) -> E
             }
         }
         409 => Error::Conflict(clean_message),
-        _ => Error::CatalogOperation { message: clean_message },
+        _ => Error::CatalogOperation {
+            message: clean_message,
+        },
     }
 }
 
@@ -339,32 +343,38 @@ fn clean_polaris_message(msg: &str) -> String {
     let msg_lower = msg.to_lowercase();
 
     // Pattern: "Catalog 'X' cannot be dropped, it is not empty"
-    if msg_lower.contains("cannot be dropped") && msg_lower.contains("not empty")
-        && let Some(name) = extract_quoted_name(msg) {
-            return format!("warehouse '{}' is not empty", name);
-        }
+    if msg_lower.contains("cannot be dropped")
+        && msg_lower.contains("not empty")
+        && let Some(name) = extract_quoted_name(msg)
+    {
+        return format!("warehouse '{}' is not empty", name);
+    }
 
     // Pattern: "Cannot create Catalog X. Catalog already exists"
     if msg_lower.contains("already exists")
-        && let Some(name) = extract_catalog_name(msg) {
-            return format!("warehouse '{}' already exists", name);
-        }
+        && let Some(name) = extract_catalog_name(msg)
+    {
+        return format!("warehouse '{}' already exists", name);
+    }
 
     // Pattern: "TopLevelEntity of type CATALOG does not exist: X"
     // Must come BEFORE generic "does not exist" check
-    if msg_lower.contains("toplevelentity") && msg_lower.contains("does not exist")
-        && let Some(pos) = msg.rfind(": ") {
-            let name = msg[pos + 2..].trim();
-            if !name.is_empty() {
-                return format!("warehouse '{}' not found", name);
-            }
+    if msg_lower.contains("toplevelentity")
+        && msg_lower.contains("does not exist")
+        && let Some(pos) = msg.rfind(": ")
+    {
+        let name = msg[pos + 2..].trim();
+        if !name.is_empty() {
+            return format!("warehouse '{}' not found", name);
         }
+    }
 
     // Pattern: "Unable to find warehouse 'X'" or "does not exist"
     if (msg_lower.contains("unable to find") || msg_lower.contains("does not exist"))
-        && let Some(name) = extract_catalog_name(msg) {
-            return format!("warehouse '{}' not found", name);
-        }
+        && let Some(name) = extract_catalog_name(msg)
+    {
+        return format!("warehouse '{}' not found", name);
+    }
 
     // Default: just lowercase first letter for consistency
     let mut chars = msg.chars();

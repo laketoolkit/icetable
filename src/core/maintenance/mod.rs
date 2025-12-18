@@ -64,10 +64,7 @@ pub struct DirectWriteResult {
 /// ```ignore
 /// let new_version = write_metadata_direct(table_path, &new_metadata).await?;
 /// ```
-pub async fn write_metadata_direct(
-    table_path: &str,
-    metadata: &TableMetadata,
-) -> Result<i64> {
+pub async fn write_metadata_direct(table_path: &str, metadata: &TableMetadata) -> Result<i64> {
     let storage = create_object_store(table_path).await?;
     write_metadata_with_storage(table_path, metadata, &storage).await
 }
