@@ -1,0 +1,15 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: clean_output
+---
+Comparing current (base: previous)
+
+REF                  SNAPSHOT             TIMESTAMP            MANIFESTS
+---------------------------------------------------------------------------
+previous             1234567890           2023-12-18 16:00:00 UTC 2
+current              1234567899           2023-12-19 16:00:00 UTC 3
+
+Changes:
+  + manifest-001.avro
+
+Summary: 1 added, 0 removed

@@ -45,14 +45,22 @@ use crate::error::{Error, Result};
 /// let merged = merge_batches(batches, schema)?;
 /// ```
 pub fn merge_batches(batches: Vec<RecordBatch>, schema: Arc<Schema>) -> Result<RecordBatch> {
-    if batches.is_empty() {
-        Ok(RecordBatch::new_empty(schema))
-    } else if batches.len() == 1 {
-        // SAFETY: We just checked that batches.len() == 1
-        Ok(batches.into_iter().next().expect("batch exists"))
-    } else {
-        let batch_schema = batches[0].schema();
-        compute::concat_batches(&batch_schema, &batches).map_err(Error::Arrow)
+    match batches.len() {
+        0 => Ok(RecordBatch::new_empty(schema)),
+        1 => {
+            // Single batch - use into_iter().next() which returns Option
+            // This is safe because we matched on len() == 1
+            batches
+                .into_iter()
+                .next()
+                .ok_or_else(|| Error::InvalidFormat {
+                    message: "Expected single batch but got none".to_string(),
+                })
+        }
+        _ => {
+            let batch_schema = batches[0].schema();
+            compute::concat_batches(&batch_schema, &batches).map_err(Error::Arrow)
+        }
     }
 }
 

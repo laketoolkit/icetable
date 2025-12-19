@@ -187,7 +187,7 @@ impl GenerateOperation {
         // Generate unique prefix for file names using timestamp
         let timestamp_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time is after UNIX epoch")
+            .unwrap_or_default()
             .as_nanos();
         let unique_prefix = format!("{:016x}", timestamp_nanos as u64);
 
@@ -270,7 +270,11 @@ impl GenerateOperation {
             .await;
 
         // Wait for producer to finish
-        producer.join().expect("Producer thread panicked");
+        producer
+            .join()
+            .map_err(|_| Error::Configuration {
+                message: "Data generation producer thread panicked unexpectedly".to_string(),
+            })?;
 
         // Collect results
         let mut total_bytes = 0u64;
@@ -420,7 +424,7 @@ impl GenerateOperation {
         // Use timestamp for unique file names to avoid conflicts with existing files
         let timestamp_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time is after UNIX epoch")
+            .unwrap_or_default()
             .as_nanos() as u64;
 
         // Determine concurrency based on file count

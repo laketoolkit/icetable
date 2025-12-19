@@ -54,20 +54,19 @@ impl TableRef {
         if catalog_config.is_some() {
             // Catalog mode: parse as namespace.table
             let parts: Vec<&str> = s.split('.').collect();
-            if parts.len() >= 2 {
-                // Safe: we checked len >= 2, so last() always exists
-                let name = parts.last().expect("checked len >= 2").to_string();
-                let namespace = parts[..parts.len() - 1]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                TableRef::Catalog { namespace, name }
-            } else {
-                // Single name, use default namespace
-                TableRef::Catalog {
-                    namespace: vec!["default".to_string()],
-                    name: s.to_string(),
+            if let Some((name, namespace_parts)) = parts.split_last() {
+                if !namespace_parts.is_empty() {
+                    let namespace = namespace_parts.iter().map(|s| s.to_string()).collect();
+                    return TableRef::Catalog {
+                        namespace,
+                        name: name.to_string(),
+                    };
                 }
+            }
+            // Single name or empty - use default namespace
+            TableRef::Catalog {
+                namespace: vec!["default".to_string()],
+                name: s.to_string(),
             }
         } else {
             // Direct path mode

@@ -1,0 +1,14 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: clean_output
+---
+● 1702987654321012345 - append (2023-12-19 12:00:00 UTC)
+  added-data-files: 5, added-records: 50000
+
+○ 1702987654321012344 - overwrite (2023-12-18 12:00:00 UTC)
+  added-data-files: 3, deleted-data-files: 10
+
+○ 1702987654321012343 - append (2023-12-17 12:00:00 UTC)
+  added-data-files: 10, added-records: 100000
+
+3 snapshots

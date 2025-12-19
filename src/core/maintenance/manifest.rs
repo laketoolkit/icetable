@@ -402,7 +402,7 @@ impl ManifestService {
                 "{:x}-m{}.avro",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .expect("system time is after UNIX epoch")
+                    .unwrap_or_default()
                     .as_nanos() as u64
                     ^ (idx as u64),
                 idx
@@ -461,7 +461,7 @@ impl ManifestService {
             new_snapshot_id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time is after UNIX epoch")
+                .unwrap_or_default()
                 .as_nanos() as u64
         );
         let manifest_list_path = format!("{}/{}", metadata_dir, manifest_list_filename);

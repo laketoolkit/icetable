@@ -1,0 +1,9 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: clean_output
+---
+my-catalog.analytics (4)
+├── events
+├── users
+├── transactions
+└── sessions

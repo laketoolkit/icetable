@@ -1,0 +1,8 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: parsed
+---
+catalog: catalog
+namespaces:
+  - prod
+  - staging

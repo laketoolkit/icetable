@@ -1,0 +1,9 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: parsed
+---
+catalog: catalog
+namespace: namespace
+tables:
+  - table1
+  - table2

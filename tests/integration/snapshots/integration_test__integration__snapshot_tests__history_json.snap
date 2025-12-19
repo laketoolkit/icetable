@@ -1,0 +1,25 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: parsed
+---
+- details:
+    - "added-data-files: 5"
+    - "added-records: 50000"
+  is_current: true
+  operation: append
+  snapshot_id: 1702987654321012345
+  timestamp: "2023-12-19T12:00:00+00:00"
+- details:
+    - "added-data-files: 3"
+    - "deleted-data-files: 10"
+  is_current: false
+  operation: overwrite
+  snapshot_id: 1702987654321012344
+  timestamp: "2023-12-18T12:00:00+00:00"
+- details:
+    - "added-data-files: 10"
+    - "added-records: 100000"
+  is_current: false
+  operation: append
+  snapshot_id: 1702987654321012343
+  timestamp: "2023-12-17T12:00:00+00:00"

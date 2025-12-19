@@ -597,7 +597,9 @@ impl TableServiceWriter for IcebergMetadataService {
         // Commit via catalog (required - validated at function entry)
         self.committer
             .as_ref()
-            .expect("catalog required - validated at entry")
+            .ok_or_else(|| Error::CatalogRequiredForWrite {
+                operation: format!("{:?}", operation).to_lowercase(),
+            })?
             .commit_add_snapshot(&metadata, snapshot, target_branch)
             .await?;
 

@@ -174,20 +174,26 @@ pub async fn setup_signal_handlers() -> CancellationTokenSource {
     #[cfg(unix)]
     {
         tokio::spawn(async move {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to setup SIGTERM handler");
+            let sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
+            let sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
 
-            let mut sigint =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                    .expect("Failed to setup SIGINT handler");
-
-            tokio::select! {
-                _ = sigterm.recv() => {
-                    request_cancellation();
+            // If signal handlers fail to setup, gracefully continue without them
+            match (sigterm, sigint) {
+                (Ok(mut sigterm), Ok(mut sigint)) => {
+                    tokio::select! {
+                        _ = sigterm.recv() => {
+                            request_cancellation();
+                        }
+                        _ = sigint.recv() => {
+                            request_cancellation();
+                        }
+                    }
                 }
-                _ = sigint.recv() => {
-                    request_cancellation();
+                _ => {
+                    // Signal handlers failed - continue without graceful shutdown support
+                    // This is not critical for CLI operation
                 }
             }
         });

@@ -34,7 +34,8 @@ fn test_committer_catalog_mode() {
         config.clone(),
         vec!["analytics".to_string()],
         "orders".to_string(),
-    );
+    )
+    .expect("Failed to create committer");
 
     assert!(
         committer.uses_catalog(),
@@ -66,7 +67,8 @@ fn test_committer_multi_level_namespace() {
             "data".to_string(),
         ],
         "events".to_string(),
-    );
+    )
+    .expect("Failed to create committer");
 
     let ident = committer.table_ident().unwrap();
     assert_eq!(ident.name(), "events");
@@ -103,7 +105,8 @@ fn test_committer_single_level_namespace() {
     let config = CatalogConfig::rest("http://localhost:19120/api/v2");
 
     let committer =
-        TableCommitter::with_catalog(config, vec!["default".to_string()], "my_table".to_string());
+        TableCommitter::with_catalog(config, vec!["default".to_string()], "my_table".to_string())
+            .expect("Failed to create committer");
 
     let ident = committer.table_ident().unwrap();
     assert_eq!(ident.name(), "my_table");
@@ -123,7 +126,8 @@ fn test_committer_config_accessible() {
         config.clone(),
         vec!["prod".to_string()],
         "events".to_string(),
-    );
+    )
+    .expect("Failed to create committer");
 
     let retrieved_config = committer.catalog_config().unwrap();
     assert_eq!(retrieved_config.uri, config.uri);

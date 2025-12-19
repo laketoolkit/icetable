@@ -128,7 +128,7 @@ This separation provides:
 Resolution context for CLI operations:
 
 ```rust
-// Context for table/catalog resolution (src/core/resolution.rs)
+// Context for table/catalog resolution (src/core/resolution/)
 pub struct CatalogContext {
     pub table: Option<String>,
     pub namespace: Option<String>,
@@ -239,7 +239,12 @@ core/
 │       ├── pipeline.rs # Transform pipeline
 │       ├── filter.rs   # Row filtering
 │       └── project.rs  # Column projection
-├── resolution.rs       # TableResolution, CatalogResolution
+├── resolution/         # Table and catalog resolution
+│   ├── mod.rs          # Re-exports and docs
+│   ├── context.rs      # CatalogContext
+│   ├── table.rs        # TableResolution, resolve_table()
+│   ├── catalog.rs      # CatalogResolution, resolve_catalog_from_context()
+│   └── errors.rs       # Resolution error helpers
 ├── storage/
 │   ├── traits.rs       # StorageBackend trait
 │   ├── local.rs        # Local filesystem
@@ -276,7 +281,7 @@ utils/
 
 ## Table Resolution
 
-The resolution system (`core/resolution.rs`) provides a unified way to resolve table references
+The resolution system (`core/resolution/`) provides a unified way to resolve table references
 from various sources. This is central to the "Thin CLI, Fat Core" principle.
 
 ### Resolution Types

@@ -13,11 +13,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 /// Use this when you don't know the total count upfront.
 pub fn create_spinner(message: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!("{{spinner:.cyan}} {}...", message))
-            .expect("hardcoded progress template is valid"),
-    );
+    if let Ok(style) = ProgressStyle::default_spinner()
+        .template(&format!("{{spinner:.cyan}} {}...", message))
+    {
+        pb.set_style(style);
+    }
     pb.enable_steady_tick(Duration::from_millis(100));
     pb
 }
@@ -27,15 +27,14 @@ pub fn create_spinner(message: &str) -> ProgressBar {
 /// Use this when you know how many items will be processed.
 pub fn create_progress_bar(total: u64, action: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(&format!(
-                "{{spinner:.green}} {} {{bar:30.cyan/blue}} {{percent}}% {{msg}}",
-                action
-            ))
-            .expect("hardcoded progress template is valid")
-            .progress_chars("━━╺"),
-    );
+    if let Ok(style) = ProgressStyle::default_bar()
+        .template(&format!(
+            "{{spinner:.green}} {} {{bar:30.cyan/blue}} {{percent}}% {{msg}}",
+            action
+        ))
+    {
+        pb.set_style(style.progress_chars("━━╺"));
+    }
     pb.enable_steady_tick(Duration::from_millis(100));
     pb
 }
@@ -69,35 +68,34 @@ impl ProgressTracker {
             DisplayMode::Silent => Self { bar: None },
             DisplayMode::Spinner => {
                 let bar = ProgressBar::new_spinner();
-                bar.set_style(
-                    ProgressStyle::default_spinner()
-                        .template("{spinner:.cyan} {msg}")
-                        .expect("Invalid spinner template")
-                        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-                );
+                if let Ok(style) = ProgressStyle::default_spinner()
+                    .template("{spinner:.cyan} {msg}")
+                {
+                    bar.set_style(
+                        style.tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+                    );
+                }
                 bar.set_message(message.to_string());
                 bar.enable_steady_tick(std::time::Duration::from_millis(80));
                 Self { bar: Some(bar) }
             }
             DisplayMode::Bar => {
                 let bar = ProgressBar::new(total.unwrap_or(0));
-                bar.set_style(
-                    ProgressStyle::default_bar()
-                        .template("[{bar:40.cyan/blue}] {percent}% ({eta})")
-                        .expect("Invalid progress bar template")
-                        .progress_chars("█▓▒░ "),
-                );
+                if let Ok(style) = ProgressStyle::default_bar()
+                    .template("[{bar:40.cyan/blue}] {percent}% ({eta})")
+                {
+                    bar.set_style(style.progress_chars("█▓▒░ "));
+                }
                 bar.set_message(message.to_string());
                 Self { bar: Some(bar) }
             }
             DisplayMode::BarWithThroughput => {
                 let bar = ProgressBar::new(total.unwrap_or(0));
-                bar.set_style(
-                    ProgressStyle::default_bar()
-                        .template("[{bar:40.cyan/blue}] {human_pos}/{human_len} ({per_sec}) {eta}")
-                        .expect("Invalid progress bar template")
-                        .progress_chars("█▓▒░ "),
-                );
+                if let Ok(style) = ProgressStyle::default_bar()
+                    .template("[{bar:40.cyan/blue}] {human_pos}/{human_len} ({per_sec}) {eta}")
+                {
+                    bar.set_style(style.progress_chars("█▓▒░ "));
+                }
                 bar.set_message(message.to_string());
                 Self { bar: Some(bar) }
             }

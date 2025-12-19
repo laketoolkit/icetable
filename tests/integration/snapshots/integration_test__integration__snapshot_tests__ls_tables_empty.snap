@@ -1,0 +1,6 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: clean_output
+---
+catalog.empty-ns (0)
+└── (empty)

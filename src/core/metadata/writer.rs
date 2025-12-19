@@ -98,7 +98,7 @@ impl SnapshotWriter {
 
         let timestamp_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time is after UNIX epoch")
+            .unwrap_or_default()
             .as_nanos();
 
         // Convert DataFileInfo to Iceberg DataFile

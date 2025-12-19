@@ -81,20 +81,31 @@ impl TableCommitter {
 
     /// Create a committer that uses a REST catalog for commits (multi-writer safe)
     ///
-    /// # Panics
-    /// Panics if namespace is empty - callers must validate namespace before calling.
-    pub fn with_catalog(config: CatalogConfig, namespace: Vec<String>, table_name: String) -> Self {
-        assert!(!namespace.is_empty(), "Namespace cannot be empty");
-        let ns_ident = NamespaceIdent::from_vec(namespace)
-            .expect("Invalid namespace - validated non-empty above");
+    /// Creates a new committer with catalog configuration.
+    ///
+    /// # Errors
+    /// Returns error if namespace is empty or invalid.
+    pub fn with_catalog(
+        config: CatalogConfig,
+        namespace: Vec<String>,
+        table_name: String,
+    ) -> Result<Self> {
+        if namespace.is_empty() {
+            return Err(Error::Configuration {
+                message: "Namespace cannot be empty for catalog operations".to_string(),
+            });
+        }
+        let ns_ident = NamespaceIdent::from_vec(namespace).map_err(|e| Error::Configuration {
+            message: format!("Invalid namespace: {}", e),
+        })?;
         let table_ident = TableIdent::new(ns_ident, table_name);
 
-        Self {
+        Ok(Self {
             catalog_config: Some(config),
             table_ident: Some(table_ident),
             http_client: reqwest::Client::new(),
             max_retries: DEFAULT_MAX_RETRIES,
-        }
+        })
     }
 
     /// Check if this committer uses a catalog

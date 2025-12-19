@@ -18,7 +18,7 @@
 //! ┌─────────────────────────────────────────────────────────────────────────┐
 //! │                              Core Layer                                 │
 //! │                                                                         │
-//! │  resolution.rs     - Table/catalog resolution (CatalogContext,          │
+//! │  resolution/       - Table/catalog resolution (CatalogContext,          │
 //! │                      TableResolution, CatalogResolution)                │
 //! │                                                                         │
 //! │  ┌─────────────────────────────────────────────────────────────────┐   │
@@ -73,7 +73,7 @@
 //!
 //! # Key Abstractions
 //!
-//! ## Resolution (`resolution.rs`)
+//! ## Resolution (`resolution/`)
 //!
 //! - [`CatalogContext`] - CLI options for table/catalog resolution
 //! - [`TableResolution`] - Resolved table (path or catalog reference)

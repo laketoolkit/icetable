@@ -138,8 +138,8 @@ where
 
         if sorted.len() <= retain {
             // Return a timestamp in the distant past so nothing is expired
-            // Safe: timestamp 0 (Unix epoch) is always valid
-            return Ok(DateTime::from_timestamp(0, 0).expect("Unix epoch is a valid timestamp"));
+            // Unix epoch (0, 0) is always a valid timestamp
+            return Ok(DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now));
         }
 
         // Get timestamp of the (retain)th newest item

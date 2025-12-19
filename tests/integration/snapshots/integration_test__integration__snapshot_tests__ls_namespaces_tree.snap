@@ -1,0 +1,10 @@
+---
+source: tests/integration/snapshot_tests.rs
+expression: clean_output
+---
+my-catalog (5)
+├── production
+├── production.analytics
+├── production.ml
+├── staging
+└── development
