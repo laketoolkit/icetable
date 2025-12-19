@@ -204,9 +204,16 @@ pub enum Commands {
     /// Delete namespace or table
     Delete(DeleteArgs),
 
-    /// Show table info (schema, stats, health)
-    #[command(visible_alias = "d")]
-    Describe(DescribeArgs),
+    /// Inspect table metadata and schema
+    #[command(visible_alias = "i")]
+    Inspect(InspectArgs),
+
+    /// Analyze table health and get recommendations
+    #[command(visible_alias = "a")]
+    Analyze(AnalyzeArgs),
+
+    /// Compute partition statistics
+    Stats(StatsArgs),
 
     /// Validate file integrity
     Validate(ValidateArgs),
@@ -265,21 +272,6 @@ pub enum Commands {
 
     /// Print all global options
     Options,
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Hidden (deprecated)
-    // ─────────────────────────────────────────────────────────────────────────
-    /// Analyze table health
-    #[command(hide = true)]
-    Analyze(AnalyzeArgs),
-
-    /// Inspect table metadata
-    #[command(visible_alias = "i", hide = true)]
-    Inspect(InspectArgs),
-
-    /// Compute statistics
-    #[command(hide = true)]
-    Stats(StatsArgs),
 
     /// Interactive Terminal UI
     #[cfg(feature = "tui")]

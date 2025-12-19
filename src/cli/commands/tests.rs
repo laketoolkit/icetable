@@ -150,7 +150,7 @@ mod cli_parse_tests {
 
     #[test]
     fn test_cli_parse_global_table_option() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "describe"]).unwrap();
+        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "inspect"]).unwrap();
 
         assert_eq!(cli.table, Some("my_table".to_string()));
     }
@@ -163,7 +163,7 @@ mod cli_parse_tests {
             "my_namespace",
             "-t",
             "my_table",
-            "describe",
+            "inspect",
         ])
         .unwrap();
 
@@ -181,7 +181,7 @@ mod cli_parse_tests {
             "analytics",
             "-t",
             "events",
-            "describe",
+            "inspect",
         ])
         .unwrap();
 
@@ -209,7 +209,7 @@ mod cli_parse_tests {
             "prod",
             "--warehouse",
             "us-east",
-            "describe",
+            "inspect",
         ])
         .unwrap();
 
@@ -229,7 +229,7 @@ mod cli_parse_tests {
             "my_namespace",
             "-t",
             "my_table",
-            "describe",
+            "inspect",
         ])
         .unwrap();
 
@@ -263,77 +263,6 @@ mod cli_parse_tests {
 
         let config = cli.catalog_config();
         assert!(config.is_none());
-    }
-}
-
-#[cfg(test)]
-mod describe_args_tests {
-    use crate::cli::parser::{Cli, Commands};
-    use clap::Parser;
-
-    #[test]
-    fn test_describe_default_args() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "describe"]).unwrap();
-
-        if let Commands::Describe(args) = cli.command {
-            assert!(!args.schema);
-            assert!(!args.stats);
-            assert!(!args.health);
-            assert_eq!(args.output, "text");
-        } else {
-            panic!("Expected Describe command");
-        }
-    }
-
-    #[test]
-    fn test_describe_schema_flag() {
-        let cli =
-            Cli::try_parse_from(["icetable", "-t", "my_table", "describe", "--schema"]).unwrap();
-
-        if let Commands::Describe(args) = cli.command {
-            assert!(args.schema);
-        } else {
-            panic!("Expected Describe command");
-        }
-    }
-
-    #[test]
-    fn test_describe_json_output() {
-        let cli =
-            Cli::try_parse_from(["icetable", "-t", "my_table", "describe", "--output", "json"])
-                .unwrap();
-
-        if let Commands::Describe(args) = cli.command {
-            assert_eq!(args.output, "json");
-        } else {
-            panic!("Expected Describe command");
-        }
-    }
-
-    #[test]
-    fn test_describe_alias_d() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "d"]).unwrap();
-
-        assert!(matches!(cli.command, Commands::Describe(_)));
-    }
-
-    #[test]
-    fn test_describe_with_snapshot() {
-        let cli = Cli::try_parse_from([
-            "icetable",
-            "-t",
-            "my_table",
-            "describe",
-            "--snapshot",
-            "12345",
-        ])
-        .unwrap();
-
-        if let Commands::Describe(args) = cli.command {
-            assert_eq!(args.snapshot, Some(12345));
-        } else {
-            panic!("Expected Describe command");
-        }
     }
 }
 

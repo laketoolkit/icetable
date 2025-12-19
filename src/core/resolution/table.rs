@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::config::{ResolveTableRef, ResolvedTable};
 use crate::core::metadata::IcebergMetadataService;
-use crate::core::{CatalogClient, CatalogConfig, IcebergTable, TableCommitter, TableLoader, TableRef};
+use crate::core::{CatalogConfig, IcebergTable, TableCommitter, TableLoader, TableRef};
 use crate::error::{Error, Result};
 
 /// Resolved table that can be either a direct path or a catalog table
@@ -187,7 +187,8 @@ pub async fn resolve_table(
                     .to_string(),
         })?;
 
-        return resolve_from_catalog(table_input, catalog).await;
+        // Ad-hoc catalog - no name for credentials lookup
+        return resolve_from_catalog(table_input, catalog, None).await;
     }
 
     // Priority 2: Resolve from config
@@ -196,18 +197,37 @@ pub async fn resolve_table(
     match resolved {
         ResolvedTable::Path(path) => Ok(TableResolution::Path(path)),
         ResolvedTable::Catalog {
+            catalog_name,
             catalog_config,
             table_name,
-            ..
-        } => resolve_from_catalog(&table_name, &catalog_config).await,
+        } => resolve_from_catalog(&table_name, &catalog_config, Some(&catalog_name)).await,
     }
 }
 
+/// Resolve a table with explicit catalog name (for credentials lookup)
+///
+/// Used by CLI commands that resolve catalog from config context.
+pub async fn resolve_table_with_catalog(
+    table_ref: &str,
+    catalog_config: &CatalogConfig,
+    catalog_name: &str,
+) -> Result<TableResolution> {
+    resolve_from_catalog(table_ref, catalog_config, Some(catalog_name)).await
+}
+
 /// Resolve a table from a catalog
+///
+/// # Arguments
+/// * `table_input` - Table reference (namespace.table format)
+/// * `catalog` - Catalog configuration
+/// * `catalog_name` - Optional catalog name for credentials lookup
 async fn resolve_from_catalog(
     table_input: &str,
     catalog: &CatalogConfig,
+    catalog_name: Option<&str>,
 ) -> Result<TableResolution> {
+    use crate::core::catalog::RestCatalogClient;
+
     // Parse namespace.table
     let table_ref = TableRef::parse(table_input, Some(catalog));
 
@@ -221,15 +241,24 @@ async fn resolve_from_catalog(
         }
     };
 
-    // Load table from catalog
-    let client = CatalogClient::new(Some(catalog.clone())).await?;
-    let table = client.load_table(&table_ref).await?;
+    // Load table from catalog - use with_name to get credentials from credentials.yaml
+    let client = RestCatalogClient::with_name(catalog, catalog_name).await?;
+    let table = client.load_table(&namespace, &name).await?;
+
+    // Build catalog config with effective auth for later use (e.g., commits)
+    // This ensures the committer uses credentials from credentials.yaml
+    let mut effective_config = catalog.clone();
+    if let Some(name) = catalog_name {
+        if let Ok(auth) = catalog.effective_auth(name) {
+            effective_config.auth = auth;
+        }
+    }
 
     Ok(TableResolution::CatalogTable {
         table: Box::new(table),
         namespace,
         name,
-        catalog_config: Box::new(catalog.clone()),
+        catalog_config: Box::new(effective_config),
     })
 }
 

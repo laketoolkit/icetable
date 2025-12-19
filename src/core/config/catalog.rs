@@ -323,6 +323,7 @@ impl CatalogConfig {
     /// Get all properties with effective auth (checking credentials.yaml first)
     ///
     /// This is the recommended method to use when building catalog clients.
+    /// For OAuth2 auth without explicit token_endpoint, derives it from the catalog URI.
     pub fn to_catalog_properties_with_credentials(
         &self,
         catalog_name: &str,
@@ -333,11 +334,31 @@ impl CatalogConfig {
         let auth = self.effective_auth(catalog_name)?;
         props.extend(auth.to_properties()?);
 
+        // For OAuth2 without explicit token_endpoint, derive from catalog URI
+        if let CatalogAuth::OAuth2 { token_endpoint, .. } = &auth {
+            if token_endpoint.is_none() && !props.contains_key("oauth2-server-uri") {
+                // Derive OAuth2 endpoint from catalog URI
+                // e.g., http://localhost:8181/api/catalog -> http://localhost:8181/api/catalog/v1/oauth/tokens
+                let oauth_uri = derive_oauth2_endpoint(&self.uri);
+                props.insert("oauth2-server-uri".to_string(), oauth_uri);
+            }
+        }
+
         // Add custom properties
         props.extend(self.properties.clone());
 
         Ok(props)
     }
+}
+
+/// Derive OAuth2 token endpoint from catalog URI
+///
+/// Follows Polaris/Iceberg REST convention:
+/// - `http://host/api/catalog` -> `http://host/api/catalog/v1/oauth/tokens`
+/// - `http://host/iceberg` -> `http://host/iceberg/v1/oauth/tokens`
+fn derive_oauth2_endpoint(catalog_uri: &str) -> String {
+    let base = catalog_uri.trim_end_matches('/');
+    format!("{}/v1/oauth/tokens", base)
 }
 
 #[cfg(test)]

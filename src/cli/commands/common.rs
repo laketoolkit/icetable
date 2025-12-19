@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 pub use crate::core::resolution::{
     CatalogContext, CatalogResolution, TableResolution, no_catalog_error, no_namespace_error,
     no_table_error, resolve_catalog_from_context, resolve_table, resolve_table_path,
+    resolve_table_with_catalog,
 };
 
 /// Resolve catalog context from CLI context
@@ -20,9 +21,61 @@ pub async fn resolve_catalog(ctx: &CatalogContext) -> crate::error::Result<Catal
 /// This is the primary entry point for resolving tables from CLI commands.
 /// Uses the global `-t/--table` and `-n/--namespace` options along with
 /// catalog configuration.
+///
+/// Resolution priority:
+/// 1. If `--catalog-uri` is provided, use ad-hoc catalog
+/// 2. If `-c/--catalog` is provided, use named catalog from config
+/// 3. If current catalog context is set in config, use it
+/// 4. Fall back to path/alias resolution
 pub async fn resolve_table_from_context(ctx: &CatalogContext) -> Result<TableResolution> {
+    // Priority 1: Ad-hoc catalog config (--catalog-uri)
+    if ctx.catalog_config.is_some() {
+        let table_ref = ctx.table_ref();
+        return resolve_table(&table_ref, ctx.catalog_config.as_ref()).await;
+    }
+
+    // Priority 2 & 3: Named catalog (-c) or config context
+    // Build fully qualified reference: catalog.namespace.table
+    let config = crate::config::Config::load()?;
+    let catalog_name = ctx
+        .catalog
+        .as_deref()
+        .or_else(|| config.get_current_catalog());
+
+    if let Some(catalog_name) = catalog_name {
+        if let Some(base_config) = config.catalogs.get(catalog_name) {
+            // Clone config to apply warehouse override
+            let mut catalog_config = base_config.clone();
+
+            // Apply warehouse: -w > config context
+            let warehouse = ctx
+                .warehouse
+                .clone()
+                .or_else(|| config.get_current_warehouse());
+            if let Some(wh) = warehouse {
+                catalog_config.warehouse = Some(wh);
+            }
+
+            // Get namespace from -n or config context
+            let config_ns = config.get_current_namespace();
+            let namespace = ctx.namespace.as_deref().or(config_ns.as_deref());
+
+            // Get table from -t or config context
+            let config_table = config.get_current_table();
+            let table = ctx.table.as_deref().or(config_table.as_deref());
+
+            if let (Some(ns), Some(tbl)) = (namespace, table) {
+                // Full catalog.namespace.table resolution with credentials
+                let full_table_name = format!("{}.{}", ns, tbl);
+                return resolve_table_with_catalog(&full_table_name, &catalog_config, catalog_name)
+                    .await;
+            }
+        }
+    }
+
+    // Priority 4: Fall back to path/alias resolution
     let table_ref = ctx.table_ref();
-    resolve_table(&table_ref, ctx.catalog_config.as_ref()).await
+    resolve_table(&table_ref, None).await
 }
 
 /// Print JSON to stdout, converting serialization errors to our Error type
