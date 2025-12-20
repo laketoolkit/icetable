@@ -35,7 +35,7 @@ fn clean_iceberg_error(error: &iceberg::Error) -> String {
 
     // Check for HTTP status codes in the message and provide clearer messages
     if msg.contains("status: 401") || msg.contains("Unauthorized") {
-        return "Authentication required - run 'icetable admin auth login'".to_string();
+        return "Authentication required - run 'icetable auth login'".to_string();
     }
     if msg.contains("status: 403") || msg.contains("Forbidden") {
         return "Access denied - check your credentials and permissions".to_string();
@@ -93,8 +93,8 @@ fn format_warehouse_not_found_error(msg: &str) -> String {
     format!(
         "Warehouse '{}' not found\n\n\
          Hint:\n  \
-         - List warehouses: icetable admin warehouse ls\n  \
-         - Create warehouse: icetable admin warehouse create <name> --location s3://...\n  \
+         - List warehouses: icetable warehouse ls\n  \
+         - Create warehouse: icetable warehouse create <name> --location s3://...\n  \
          - Use different: icetable -w <warehouse> ls",
         wh_display
     )
@@ -271,13 +271,12 @@ impl RestCatalogClient {
         self.catalog
             .load_table(&table_ident)
             .await
-            .map_err(|e| Error::TableNotFound {
+            .map_err(|_| Error::TableNotFound {
                 path: format!(
-                    "'{}' in namespace '{}' (catalog '{}') - {}",
+                    "'{}' in namespace '{}'. Verify the table exists: icetable ls tables -n {}",
                     name,
                     namespace.join("."),
-                    self.name,
-                    clean_iceberg_error(&e)
+                    namespace.join(".")
                 ),
             })
     }

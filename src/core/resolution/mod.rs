@@ -62,12 +62,16 @@
 mod catalog;
 mod context;
 mod errors;
+mod management;
 mod table;
 
 // Re-export all public items
 pub use catalog::{resolve_catalog_from_context, CatalogResolution};
 pub use context::CatalogContext;
 pub use errors::{no_catalog_error, no_namespace_error, no_table_error};
+pub use management::{
+    get_catalog_provider_from_context, resolve_management_from_context, ManagementResolution,
+};
 pub use table::{resolve_table, resolve_table_path, resolve_table_with_catalog, TableResolution};
 
 #[cfg(test)]

@@ -2,4 +2,4 @@
 source: tests/integration/snapshot_tests.rs
 expression: clean_output
 ---
-References point to the same snapshot
+No changes between snapshots

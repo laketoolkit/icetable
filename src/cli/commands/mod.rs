@@ -1,7 +1,7 @@
 //! CLI command implementations
 
-pub mod admin;
 pub mod analyze;
+pub mod auth;
 pub mod common;
 pub mod config;
 pub mod constants;
@@ -10,7 +10,6 @@ pub mod delete;
 pub mod diff;
 pub mod doctor;
 pub mod generate;
-pub mod history;
 pub mod import;
 pub mod init;
 pub mod inspect;
@@ -22,6 +21,7 @@ pub mod snapshot;
 pub mod stats;
 pub mod vacuum;
 pub mod validate;
+pub mod warehouse;
 
 #[cfg(feature = "tui")]
 pub mod tui;
@@ -30,15 +30,14 @@ pub mod tui;
 mod tests;
 
 // Re-export command handlers
-pub use admin::AdminCommand;
 pub use analyze::AnalyzeCommand;
+pub use auth::AuthCommand;
 pub use config::ConfigCommand;
 pub use create::CreateCommand;
 pub use delete::DeleteCommand;
 pub use diff::DiffCommand;
 pub use doctor::DoctorCommand;
 pub use generate::GenerateCommand;
-pub use history::HistoryCommand;
 pub use import::ImportCommand;
 pub use init::InitCommand;
 pub use inspect::InspectCommand;
@@ -50,6 +49,7 @@ pub use snapshot::SnapshotCommand;
 pub use stats::StatsCommand;
 pub use vacuum::VacuumCommand;
 pub use validate::ValidateCommand;
+pub use warehouse::WarehouseCommand;
 
 #[cfg(feature = "tui")]
 pub use tui::TuiCommand;

@@ -127,7 +127,6 @@ async fn async_main(cli: Cli) -> i32 {
         Commands::Validate(args) => ValidateCommand::execute(args, &ctx).await,
         Commands::Diff(args) => DiffCommand::execute(args, &ctx).await,
         Commands::Stats(args) => StatsCommand::execute(args, &ctx).await,
-        Commands::History(args) => HistoryCommand::execute(args, &ctx).await,
         Commands::Optimize(args) => OptimizeCommand::execute(args, &ctx).await,
         Commands::Snapshot(args) => SnapshotCommand::execute(args, &ctx).await,
         Commands::Repair(args) => RepairCommand::execute(args, &ctx).await,
@@ -143,7 +142,10 @@ async fn async_main(cli: Cli) -> i32 {
             Ok(())
         }
         Commands::Doctor(args) => DoctorCommand::execute(args).await,
-        Commands::Admin(args) => AdminCommand::execute(args, &ctx).await,
+        // Config, Auth, Warehouse promoted to root level
+        Commands::Config(args) => ConfigCommand::execute(args).await,
+        Commands::Auth(args) => AuthCommand::execute(args, &ctx).await,
+        Commands::Warehouse(args) => WarehouseCommand::execute(args, &ctx).await,
         Commands::Options => {
             print_global_options();
             Ok(())

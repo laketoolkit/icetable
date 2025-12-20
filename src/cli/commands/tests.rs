@@ -323,33 +323,34 @@ mod optimize_args_tests {
     use clap::Parser;
 
     #[test]
-    fn test_optimize_data_default() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "optimize", "data"]).unwrap();
+    fn test_optimize_compact_default() {
+        let cli =
+            Cli::try_parse_from(["icetable", "-t", "my_table", "optimize", "compact"]).unwrap();
 
-        if let Commands::Optimize(OptimizeCommands::Data(args)) = cli.command {
+        if let Commands::Optimize(OptimizeCommands::Compact(args)) = cli.command {
             assert!(!args.dry_run); // dry_run defaults to false
             assert_eq!(args.target_size, 268435456); // 256MB default
         } else {
-            panic!("Expected Optimize Data command");
+            panic!("Expected Optimize Compact command");
         }
     }
 
     #[test]
-    fn test_optimize_data_dry_run() {
+    fn test_optimize_compact_dry_run() {
         let cli = Cli::try_parse_from([
             "icetable",
             "-t",
             "my_table",
             "optimize",
-            "data",
+            "compact",
             "--dry-run",
         ])
         .unwrap();
 
-        if let Commands::Optimize(OptimizeCommands::Data(args)) = cli.command {
+        if let Commands::Optimize(OptimizeCommands::Compact(args)) = cli.command {
             assert!(args.dry_run);
         } else {
-            panic!("Expected Optimize Data command");
+            panic!("Expected Optimize Compact command");
         }
     }
 
@@ -388,7 +389,7 @@ mod optimize_args_tests {
 
     #[test]
     fn test_optimize_alias_o() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "o", "data"]).unwrap();
+        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "o", "compact"]).unwrap();
 
         assert!(matches!(cli.command, Commands::Optimize(_)));
     }
@@ -442,42 +443,6 @@ mod snapshot_args_tests {
 }
 
 #[cfg(test)]
-mod history_args_tests {
-    use crate::cli::parser::{Cli, Commands};
-    use clap::Parser;
-
-    #[test]
-    fn test_history_default() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "history"]).unwrap();
-
-        if let Commands::History(args) = cli.command {
-            assert_eq!(args.limit, 10); // Default limit
-        } else {
-            panic!("Expected History command");
-        }
-    }
-
-    #[test]
-    fn test_history_with_limit() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "history", "--limit", "50"])
-            .unwrap();
-
-        if let Commands::History(args) = cli.command {
-            assert_eq!(args.limit, 50);
-        } else {
-            panic!("Expected History command");
-        }
-    }
-
-    #[test]
-    fn test_history_alias_h() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "h"]).unwrap();
-
-        assert!(matches!(cli.command, Commands::History(_)));
-    }
-}
-
-#[cfg(test)]
 mod branch_tag_args_tests {
     use crate::cli::parser::{Cli, Commands};
     use clap::Parser;
@@ -509,12 +474,12 @@ mod repair_args_tests {
     use clap::Parser;
 
     #[test]
-    fn test_repair_sync_metadata() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "repair", "--sync-metadata"])
-            .unwrap();
+    fn test_repair_all() {
+        let cli =
+            Cli::try_parse_from(["icetable", "-t", "my_table", "repair", "--all"]).unwrap();
 
         if let Commands::Repair(args) = cli.command {
-            assert!(args.sync_metadata);
+            assert!(args.all);
             assert!(!args.dry_run); // dry_run defaults to false
         } else {
             panic!("Expected Repair command");
@@ -528,7 +493,7 @@ mod repair_args_tests {
             "-t",
             "my_table",
             "repair",
-            "--sync-metadata",
+            "--all",
             "--dry-run",
         ])
         .unwrap();
@@ -553,12 +518,12 @@ mod repair_args_tests {
     }
 
     #[test]
-    fn test_repair_remove_missing() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "repair", "--remove-missing"])
-            .unwrap();
+    fn test_repair_prune() {
+        let cli =
+            Cli::try_parse_from(["icetable", "-t", "my_table", "repair", "--prune"]).unwrap();
 
         if let Commands::Repair(args) = cli.command {
-            assert!(args.remove_missing);
+            assert!(args.prune);
         } else {
             panic!("Expected Repair command");
         }
@@ -683,25 +648,34 @@ mod diff_args_tests {
     use clap::Parser;
 
     #[test]
-    fn test_diff_with_reference() {
-        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "diff", "123"]).unwrap();
+    fn test_diff_default() {
+        let cli = Cli::try_parse_from(["icetable", "-t", "my_table", "diff"]).unwrap();
 
         if let Commands::Diff(args) = cli.command {
-            assert_eq!(args.reference, Some("123".to_string()));
+            assert_eq!(args.from, None); // defaults to parent
+            assert_eq!(args.to, None); // defaults to current
         } else {
             panic!("Expected Diff command");
         }
     }
 
     #[test]
-    fn test_diff_with_base() {
-        let cli =
-            Cli::try_parse_from(["icetable", "-t", "my_table", "diff", "456", "--base", "123"])
-                .unwrap();
+    fn test_diff_with_from_and_to() {
+        let cli = Cli::try_parse_from([
+            "icetable",
+            "-t",
+            "my_table",
+            "diff",
+            "--from",
+            "123",
+            "--to",
+            "456",
+        ])
+        .unwrap();
 
         if let Commands::Diff(args) = cli.command {
-            assert_eq!(args.reference, Some("456".to_string()));
-            assert_eq!(args.base, Some("123".to_string()));
+            assert_eq!(args.from, Some("123".to_string()));
+            assert_eq!(args.to, Some("456".to_string()));
         } else {
             panic!("Expected Diff command");
         }
@@ -827,38 +801,41 @@ mod import_args_tests {
 }
 
 #[cfg(test)]
-mod admin_args_tests {
+mod config_args_tests {
     use crate::cli::parser::{Cli, Commands};
     use clap::Parser;
 
     #[test]
-    fn test_admin_config_ls() {
-        let cli = Cli::try_parse_from([
-            "icetable", "admin", "config", "ls", // Config requires a subcommand
-        ])
-        .unwrap();
+    fn test_config_ls() {
+        let cli = Cli::try_parse_from(["icetable", "config", "ls"]).unwrap();
 
-        assert!(matches!(cli.command, Commands::Admin(_)));
+        assert!(matches!(cli.command, Commands::Config(_)));
     }
+}
+
+#[cfg(test)]
+mod warehouse_args_tests {
+    use crate::cli::parser::{Cli, Commands};
+    use clap::Parser;
 
     #[test]
-    fn test_admin_warehouse_ls() {
-        let cli = Cli::try_parse_from([
-            "icetable",
-            "admin",
-            "warehouse",
-            "ls", // Correct subcommand is 'ls'
-        ])
-        .unwrap();
+    fn test_warehouse_ls() {
+        let cli = Cli::try_parse_from(["icetable", "warehouse", "ls"]).unwrap();
 
-        assert!(matches!(cli.command, Commands::Admin(_)));
+        assert!(matches!(cli.command, Commands::Warehouse(_)));
     }
+}
+
+#[cfg(test)]
+mod auth_args_tests {
+    use crate::cli::parser::{Cli, Commands};
+    use clap::Parser;
 
     #[test]
-    fn test_admin_auth_status() {
-        let cli = Cli::try_parse_from(["icetable", "admin", "auth", "status"]).unwrap();
+    fn test_auth_status() {
+        let cli = Cli::try_parse_from(["icetable", "auth", "status"]).unwrap();
 
-        assert!(matches!(cli.command, Commands::Admin(_)));
+        assert!(matches!(cli.command, Commands::Auth(_)));
     }
 }
 

@@ -312,7 +312,7 @@ async fn parse_error_response(response: reqwest::Response, operation: &str) -> E
     match status.as_u16() {
         401 => Error::AuthenticationFailed {
             provider: "Polaris".to_string(),
-            message: format!("run 'icetable admin auth login' to {}", operation),
+            message: format!("run 'icetable auth login' to {}", operation),
         },
         403 => Error::AccessDenied {
             path: operation.to_string(),

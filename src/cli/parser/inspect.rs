@@ -65,12 +65,13 @@ pub struct ValidateArgs {
 /// Arguments for diff command
 #[derive(Parser, Debug)]
 pub struct DiffArgs {
-    /// Reference to compare (snapshot, branch, tag)
-    pub reference: Option<String>,
-
-    /// Base reference to compare against
+    /// From reference (snapshot ID, branch, tag)
     #[arg(long)]
-    pub base: Option<String>,
+    pub from: Option<String>,
+
+    /// To reference (snapshot ID, branch, tag)
+    #[arg(long)]
+    pub to: Option<String>,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]

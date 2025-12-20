@@ -2,11 +2,11 @@
 //!
 //! Thin wrapper that delegates to RepairService for Iceberg tables.
 
-use super::common::{TableResolution, resolve_table_from_context};
+use super::common::{TableResolution, confirm_destructive, resolve_table_from_context};
 use crate::cli::output::RepairFormatter;
 use crate::cli::parser::{CatalogContext, RepairArgs};
 use crate::core::CatalogConfig;
-use crate::core::maintenance::{MaintenanceConfig, RepairAnalysis, RepairService};
+use crate::core::maintenance::{MaintenanceConfig, RepairService};
 use crate::error::{Error, Result};
 use crate::utils::with_resource_limits;
 
@@ -43,17 +43,17 @@ impl RepairCommand {
         cli_catalog: Option<&crate::core::CatalogConfig>,
     ) -> Result<()> {
         // Validate at least one repair option is specified
-        if !args.sync_metadata && !args.remove_missing && !args.add_orphans {
+        if !args.all && !args.prune && !args.add_orphans {
             return Err(Error::MissingArgument {
                 argument: "repair option".to_string(),
-                description: "Must specify at least one of: --sync-metadata, --remove-missing, or --add-orphans".to_string(),
+                description: "Must specify at least one of: --all, --prune, or --add-orphans".to_string(),
             });
         }
 
         // Determine repair options
         let options = RepairOptions {
-            add_orphans: args.add_orphans || args.sync_metadata,
-            remove_missing: args.remove_missing || args.sync_metadata,
+            add_orphans: args.add_orphans || args.all,
+            remove_missing: args.prune || args.all,
         };
 
         // Create service configuration
@@ -94,9 +94,10 @@ impl RepairCommand {
 
         // First analyze to show what will be done
         let analysis = service.analyze(&metadata_service).await?;
-        Self::print_analysis(&analysis, args, options)?;
+        println!("{}", RepairFormatter::format_analysis_summary(&analysis));
 
         if !analysis.has_issues() {
+            println!("{}", RepairFormatter::format_healthy());
             return Ok(());
         }
 
@@ -104,55 +105,48 @@ impl RepairCommand {
         let has_work = (options.add_orphans && !analysis.orphan_files.is_empty())
             || (options.remove_missing && !analysis.missing_files.is_empty());
 
+        if args.dry_run {
+            // Dry-run: show what WILL be fixed
+            println!(
+                "{}",
+                RepairFormatter::format_issues_found(&analysis, options.add_orphans, options.remove_missing, false)
+            );
+            println!(
+                "{}",
+                RepairFormatter::format_dry_run_details(&analysis, options.add_orphans, options.remove_missing)
+            );
+            return Ok(());
+        }
+
         if !has_work {
+            println!(
+                "{}",
+                RepairFormatter::format_issues_found(&analysis, options.add_orphans, options.remove_missing, false)
+            );
             println!("{}", RepairFormatter::format_no_work());
             return Ok(());
         }
 
-        if args.dry_run {
+        // Confirm before destructive operation
+        if !confirm_destructive(
+            "This will modify table metadata.",
+            args.force,
+            args.dry_run,
+        ) {
             return Ok(());
         }
 
         // Execute the repair
         let result = service.execute(&metadata_service).await?;
+
+        // Show issues with [fixed] / [skipped] after completion
+        println!(
+            "{}",
+            RepairFormatter::format_issues_found(&analysis, options.add_orphans, options.remove_missing, true)
+        );
         println!("{}", RepairFormatter::format_result(&result));
 
         Ok(())
     }
 
-    /// Print analysis results
-    fn print_analysis(
-        analysis: &RepairAnalysis,
-        args: &RepairArgs,
-        options: RepairOptions,
-    ) -> Result<()> {
-        println!("{}", RepairFormatter::format_analysis_summary(analysis));
-
-        if !analysis.has_issues() {
-            println!("{}", RepairFormatter::format_healthy());
-            return Ok(());
-        }
-
-        println!(
-            "{}",
-            RepairFormatter::format_issues_found(
-                analysis,
-                options.add_orphans,
-                options.remove_missing
-            )
-        );
-
-        if args.dry_run {
-            println!(
-                "{}",
-                RepairFormatter::format_dry_run_details(
-                    analysis,
-                    options.add_orphans,
-                    options.remove_missing
-                )
-            );
-        }
-
-        Ok(())
-    }
 }

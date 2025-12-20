@@ -24,7 +24,7 @@ impl LsCommand {
             Some(LsCommands::Namespaces) => Self::list_namespaces(&catalog, &args.output).await,
             Some(LsCommands::Tables) => Self::list_tables(&catalog, &args.output).await,
             None => {
-                // Auto-detect from context (backwards compatible behavior)
+                // Auto-detect what to list based on context
                 Self::auto_detect(&catalog, &args.output).await
             }
         }

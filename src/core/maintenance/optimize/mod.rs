@@ -378,13 +378,18 @@ impl OptimizeService {
         let table_base = data_dir_str.trim_end_matches("/data").to_string();
 
         // Clean partition key: remove __subgroup_X suffix
-        let clean_partition_key = group
-            .partition_key
-            .split("/__subgroup_")
-            .next()
-            .unwrap_or("")
-            .trim_start_matches("__subgroup_")
-            .to_string();
+        // For unpartitioned tables, partition_key is "__subgroup_X" - should become empty
+        // For partitioned tables, partition_key is "year=2024/__subgroup_X" - should become "year=2024"
+        let clean_partition_key = if group.partition_key.starts_with("__subgroup_") {
+            String::new() // Unpartitioned table with subgroup - no folder needed
+        } else {
+            group
+                .partition_key
+                .split("/__subgroup_")
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
 
         // Parse partition from clean key (used for all output files)
         // Wrap in Arc for cheap cloning in async tasks

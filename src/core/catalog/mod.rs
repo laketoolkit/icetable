@@ -25,6 +25,9 @@ pub use management::{
 };
 pub use rest::RestCatalogClient;
 
+// Re-export WarehouseService from config for backwards compatibility
+pub use super::config::{DeleteProgress, WarehouseService};
+
 // Re-export from core::config
 pub use super::config::{CatalogAuth, CatalogConfig, CatalogType};
 

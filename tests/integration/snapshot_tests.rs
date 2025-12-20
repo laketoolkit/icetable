@@ -11,7 +11,7 @@ use insta::{assert_snapshot, assert_yaml_snapshot};
 use icetable::cli::output::{
     DiffFormatter, HistoryFormatter, LsFormatter, HistoryEntryInfo,
 };
-use icetable::core::operations::{SnapshotDiffResult, SnapshotRef};
+use icetable::core::operations::{DataFileDiff, SchemaDiff, SnapshotDiffResult, SnapshotRef};
 
 // =============================================================================
 // HISTORY FORMATTER SNAPSHOTS
@@ -89,23 +89,25 @@ fn test_history_format_empty() {
 
 fn create_sample_diff_result() -> SnapshotDiffResult {
     SnapshotDiffResult {
-        base: SnapshotRef {
+        from: SnapshotRef {
             label: "parent".to_string(),
             snapshot_id: 1234567890,
             timestamp_ms: 1702915200000,
-            manifest_count: 2,
         },
-        reference: SnapshotRef {
+        to: SnapshotRef {
             label: "current".to_string(),
             snapshot_id: 1234567899,
             timestamp_ms: 1703001600000,
-            manifest_count: 3,
         },
         is_identical: false,
-        manifests_added: vec![
-            "metadata/manifest-001.avro".to_string(),
-        ],
-        manifests_removed: vec![],
+        schema: SchemaDiff::default(),
+        partitions_modified: vec!["date=2024-01-15".to_string()],
+        data_files: DataFileDiff {
+            files_added: 3,
+            files_removed: 0,
+            bytes_added: 45_000_000,
+            bytes_removed: 0,
+        },
     }
 }
 
@@ -131,21 +133,20 @@ fn test_diff_format_json() {
 #[test]
 fn test_diff_format_identical() {
     let result = SnapshotDiffResult {
-        base: SnapshotRef {
+        from: SnapshotRef {
             label: "main".to_string(),
             snapshot_id: 1234567890,
             timestamp_ms: 1702915200000,
-            manifest_count: 2,
         },
-        reference: SnapshotRef {
+        to: SnapshotRef {
             label: "main".to_string(),
             snapshot_id: 1234567890,
             timestamp_ms: 1702915200000,
-            manifest_count: 2,
         },
         is_identical: true,
-        manifests_added: vec![],
-        manifests_removed: vec![],
+        schema: SchemaDiff::default(),
+        partitions_modified: Vec::new(),
+        data_files: DataFileDiff::default(),
     };
 
     let output = DiffFormatter::format_diff_text(&result, "current", "parent");

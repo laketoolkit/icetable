@@ -27,8 +27,8 @@ impl DiffCommand {
 
         // 2. Build config and delegate to service
         let config = DiffConfig {
-            reference: args.reference.clone(),
-            base: args.base.clone(),
+            from: args.from.clone(),
+            to: args.to.clone(),
         };
 
         let result = DiffService::compare_snapshots(&service, &config).await?;
@@ -46,11 +46,11 @@ impl DiffCommand {
                 })?;
             println!("{}", json_str);
         } else {
-            let ref_label = args.reference.as_deref().unwrap_or("current");
-            let base_label = args.base.as_deref().unwrap_or("parent");
+            let from_label = args.from.as_deref().unwrap_or("parent");
+            let to_label = args.to.as_deref().unwrap_or("current");
             println!(
                 "{}",
-                DiffFormatter::format_diff_text(result, ref_label, base_label)
+                DiffFormatter::format_diff_text(result, from_label, to_label)
             );
         }
         Ok(())

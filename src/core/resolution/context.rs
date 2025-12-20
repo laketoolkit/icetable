@@ -1,6 +1,8 @@
 //! CatalogContext - input from CLI options for resolution
 
+use crate::config::Config;
 use crate::core::CatalogConfig;
+use crate::error::{Error, Result};
 
 /// Context for catalog and table resolution operations
 ///
@@ -50,5 +52,34 @@ impl CatalogContext {
             (None, Some(t)) => Some(t.clone()),
             _ => None,
         }
+    }
+
+    /// Resolve catalog name from context or config
+    ///
+    /// Priority: -c CLI option > config context
+    pub fn resolve_catalog_name(&self, config: &Config) -> Result<String> {
+        self.catalog
+            .clone()
+            .or_else(|| config.get_current_catalog().map(String::from))
+            .ok_or(Error::NoCatalog)
+    }
+
+    /// Resolve catalog name and configuration
+    ///
+    /// Returns both the catalog name and its configuration.
+    /// Priority: -c CLI option > config context
+    pub fn resolve_catalog_config(&self, config: &Config) -> Result<(String, CatalogConfig)> {
+        let catalog_name = self.resolve_catalog_name(config)?;
+
+        let catalog_config =
+            config
+                .catalogs
+                .get(&catalog_name)
+                .cloned()
+                .ok_or_else(|| Error::CatalogNotFound {
+                    name: catalog_name.clone(),
+                })?;
+
+        Ok((catalog_name, catalog_config))
     }
 }

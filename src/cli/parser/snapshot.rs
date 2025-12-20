@@ -68,21 +68,29 @@ pub struct SnapshotExpireArgs {
     #[arg(short, long)]
     pub branch: Option<String>,
 
+    /// Expire all snapshots except current (or last N with --keep)
+    #[arg(long)]
+    pub all: bool,
+
+    /// Keep last N snapshots (use with --all, default: 1)
+    #[arg(long, default_value_if("all", "true", "1"))]
+    pub keep: Option<usize>,
+
     /// Expire older than (e.g., 7d, 24h, 2w)
     #[arg(long)]
     pub older_than: Option<String>,
 
-    /// Keep last N snapshots
-    #[arg(long)]
-    pub retain_last: Option<usize>,
-
-    /// Snapshot IDs to expire (comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    pub ids: Option<Vec<i64>>,
+    /// Snapshot IDs to expire (space or comma-separated)
+    #[arg(long, num_args = 1.., value_delimiter = ' ')]
+    pub id: Option<Vec<i64>>,
 
     /// Preview without expiring
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Skip confirmation prompt
+    #[arg(short, long)]
+    pub force: bool,
 
     /// Output format (text, json)
     #[arg(short, long, default_value = "text")]

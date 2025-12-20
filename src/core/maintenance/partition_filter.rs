@@ -216,10 +216,7 @@ impl PartitionFilter {
 pub fn matches_partition_filter(partition_key: &str, filter: &str) -> bool {
     match PartitionFilter::parse(filter) {
         Ok(f) => f.matches(partition_key),
-        Err(_) => {
-            // Fallback to exact match for backwards compatibility
-            partition_key == filter
-        }
+        Err(_) => false,
     }
 }
 
@@ -299,8 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backwards_compatibility() {
-        // Old exact match style should still work
+    fn test_exact_match_helper() {
         assert!(matches_partition_filter(
             "date=2024-01-01",
             "date=2024-01-01"

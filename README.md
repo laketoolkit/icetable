@@ -116,7 +116,7 @@ icetable config use polaris -n analytics -t events
 # Now commands use this context automatically
 icetable inspect
 icetable analyze
-icetable optimize data --dry-run
+icetable optimize compact --dry-run
 ```
 
 ### Catalog operations
@@ -170,12 +170,12 @@ Compact small files into larger ones.
 
 ```bash
 # Optimize data files
-icetable optimize data --dry-run
-icetable optimize data --all-partitions
-icetable optimize data --partition "date=2024-01-*"
-icetable optimize data --target-size 256mb
-icetable optimize data --max-files 1000          # Incremental
-icetable optimize data --max-bytes 10GB          # Limit by size
+icetable optimize compact --dry-run
+icetable optimize compact --all-partitions
+icetable optimize compact --partition "date=2024-01-*"
+icetable optimize compact --target-size 256mb
+icetable optimize compact --max-files 1000          # Incremental
+icetable optimize compact --max-bytes 10GB          # Limit by size
 
 # Optimize manifests
 icetable optimize manifests --dry-run
@@ -187,8 +187,9 @@ Remove orphan files not referenced by any snapshot.
 
 ```bash
 icetable vacuum --dry-run
-icetable vacuum
-icetable vacuum --older-than 7d         # Only files older than 7 days
+icetable vacuum                         # Asks for confirmation
+icetable vacuum -f                      # Skip confirmation (--force)
+icetable vacuum --retention-hours 168   # Only files older than 7 days
 ```
 
 ### snapshot
@@ -207,8 +208,9 @@ icetable snapshot lineage --all
 
 # Expire old snapshots
 icetable snapshot expire --older-than 7d --dry-run
-icetable snapshot expire --retain-last 10
-icetable snapshot expire --ids 123,456,789
+icetable snapshot expire --older-than 7d -f        # Skip confirmation
+icetable snapshot expire --all --keep 5            # Keep only last 5
+icetable snapshot expire --id 123 456 789          # Expire specific IDs
 
 # Time travel - set current snapshot
 icetable snapshot set --id 1234567890123
@@ -248,13 +250,15 @@ Fix table metadata issues.
 
 ```bash
 # Remove references to missing files
-icetable repair --remove-missing --dry-run
+icetable repair --prune --dry-run
+icetable repair --prune -f              # Skip confirmation
 
 # Add orphan parquet files to table
 icetable repair --add-orphans --dry-run
 
-# Full sync
-icetable repair --sync-metadata --dry-run
+# Fix all issues
+icetable repair --all --dry-run
+icetable repair --all -f                # Skip confirmation
 ```
 
 ### config
@@ -361,13 +365,13 @@ Control memory and concurrency for large operations:
 
 ```bash
 # Limit memory usage (useful for constrained environments)
-icetable --max-memory 2GB optimize data --all-partitions
+icetable --max-memory 2GB optimize compact --all-partitions
 
 # Set operation timeout
 icetable --timeout 3600 vacuum
 
 # Limit concurrency
-icetable --max-concurrency 4 optimize data --all-partitions
+icetable --max-concurrency 4 optimize compact --all-partitions
 ```
 
 ## Output Formats
@@ -405,14 +409,14 @@ icetable config use polaris -n analytics -t events
 icetable analyze
 
 # Compact if needed
-icetable optimize data --dry-run
-icetable optimize data --all-partitions
+icetable optimize compact --dry-run
+icetable optimize compact --all-partitions
 
 # Expire old snapshots
-icetable snapshot expire --older-than 7d --retain-last 5
+icetable snapshot expire --older-than 7d -f
 
 # Clean orphans
-icetable vacuum
+icetable vacuum -f
 ```
 
 ### Debug table issue
@@ -436,13 +440,13 @@ set -e
 icetable analyze --output json | jq -e '.health_score > 80'
 
 # Run incremental compaction
-icetable optimize data --max-bytes 10GB --all-partitions
+icetable optimize compact --max-bytes 10GB --all-partitions
 
 # Expire snapshots older than 30 days, keep at least 10
-icetable snapshot expire --older-than 30d --retain-last 10
+icetable snapshot expire --older-than 30d -f
 
 # Clean up orphans
-icetable vacuum --older-than 7d
+icetable vacuum -f
 ```
 
 ## License

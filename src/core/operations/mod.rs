@@ -18,7 +18,7 @@ pub mod validate;
 
 // Re-export operation types
 pub use convert::ConvertOperation;
-pub use diff::{DiffConfig, DiffService, SnapshotDiffResult, SnapshotRef};
+pub use diff::{DataFileDiff, DiffConfig, DiffService, SchemaDiff, SnapshotDiffResult, SnapshotRef};
 pub use generate::{
     GenerateConfig, GenerateOperation, GenerateResult, SchemaTemplate, parse_schema_string,
 };

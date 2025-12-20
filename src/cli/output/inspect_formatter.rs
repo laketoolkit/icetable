@@ -130,15 +130,6 @@ impl InspectionFormatter {
         output
     }
 
-    /// Format schema with tree structure (legacy)
-    pub fn format_schema(schema: &Schema) -> String {
-        Self::format_schema_content(schema)
-            .iter()
-            .map(|line| format!("  {}", line))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     /// Format DataType to readable string
     fn format_data_type(dtype: &DataType) -> String {
         match dtype {
@@ -206,51 +197,6 @@ impl InspectionFormatter {
         }
 
         output
-    }
-
-    /// Format metadata (legacy)
-    pub fn format_metadata(metadata: &FileMetadata) -> String {
-        let mut output = Vec::new();
-
-        if let Some(rows) = metadata.num_rows {
-            output.push(format!("  Rows: {}", rows.to_string().bright_white()));
-        }
-
-        if let Some(compressed) = metadata.compressed_size {
-            output.push(format!(
-                "  Compressed Size: {}",
-                format_bytes(compressed).bright_white()
-            ));
-        }
-
-        if let Some(uncompressed) = metadata.uncompressed_size {
-            output.push(format!(
-                "  Uncompressed Size: {}",
-                format_bytes(uncompressed).bright_white()
-            ));
-
-            if let Some(compressed) = metadata.compressed_size {
-                let ratio = (compressed as f64 / uncompressed as f64) * 100.0;
-                output.push(format!(
-                    "  Compression Ratio: {}",
-                    format!("{:.1}%", ratio).bright_white()
-                ));
-            }
-        }
-
-        if let Some(compression) = &metadata.compression {
-            output.push(format!("  Compression: {}", compression.bright_white()));
-        }
-
-        if let Some(version) = &metadata.format_version {
-            output.push(format!("  Format Version: {}", version.bright_white()));
-        }
-
-        for (key, value) in &metadata.metadata {
-            output.push(format!("  {}: {}", key, value.bright_white()));
-        }
-
-        output.join("\n")
     }
 
     /// Format column statistics as a table
@@ -851,7 +797,7 @@ mod tests {
     #[test]
     fn test_format_schema_empty() {
         let schema = Schema::empty();
-        let result = InspectionFormatter::format_schema(&schema);
+        let result = InspectionFormatter::format_schema_content(&schema);
         assert!(result.is_empty());
     }
 
@@ -861,11 +807,12 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, true),
         ]);
-        let result = InspectionFormatter::format_schema(&schema);
-        assert!(result.contains("id"));
-        assert!(result.contains("name"));
-        assert!(result.contains("int64"));
-        assert!(result.contains("string"));
+        let result = InspectionFormatter::format_schema_content(&schema);
+        let joined = result.join("\n");
+        assert!(joined.contains("id"));
+        assert!(joined.contains("name"));
+        assert!(joined.contains("int64"));
+        assert!(joined.contains("string"));
     }
 
     #[test]
@@ -879,10 +826,10 @@ mod tests {
             created_at: None,
             metadata: std::collections::HashMap::new(),
         };
-        let result = InspectionFormatter::format_metadata(&metadata);
-        assert!(result.contains("1000"));
-        assert!(result.contains("snappy"));
-        assert!(result.contains("Compression Ratio"));
+        let result = InspectionFormatter::format_metadata_content(&metadata);
+        let joined = result.join("\n");
+        assert!(joined.contains("snappy"));
+        assert!(joined.contains("50.0%")); // compression ratio
     }
 
     #[test]
@@ -896,7 +843,7 @@ mod tests {
             created_at: None,
             metadata: std::collections::HashMap::new(),
         };
-        let result = InspectionFormatter::format_metadata(&metadata);
+        let result = InspectionFormatter::format_metadata_content(&metadata);
         assert!(result.is_empty());
     }
 

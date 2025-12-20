@@ -173,23 +173,7 @@ impl CatalogResolution {
 /// * `Err` if no catalog is configured or catalog not found
 pub async fn resolve_catalog_from_context(ctx: &CatalogContext) -> Result<CatalogResolution> {
     let config = Config::load()?;
-
-    // Resolve catalog name: -c > config context
-    let catalog_name = ctx
-        .catalog
-        .clone()
-        .or_else(|| config.get_current_catalog().map(String::from))
-        .ok_or(Error::NoCatalog)?;
-
-    // Get catalog config
-    let mut catalog_config =
-        config
-            .catalogs
-            .get(&catalog_name)
-            .cloned()
-            .ok_or_else(|| Error::CatalogNotFound {
-                name: catalog_name.clone(),
-            })?;
+    let (catalog_name, mut catalog_config) = ctx.resolve_catalog_config(&config)?;
 
     // Resolve warehouse: -w > config context
     let warehouse = ctx
@@ -207,7 +191,7 @@ pub async fn resolve_catalog_from_context(ctx: &CatalogContext) -> Result<Catalo
             message: format!(
                 "Catalog '{}' requires a warehouse\n\n\
                  Hint:\n  \
-                 - List warehouses: icetable admin warehouse ls\n  \
+                 - List warehouses: icetable warehouse ls\n  \
                  - Use flag: icetable -w <warehouse> ls\n  \
                  - Set context: icetable config use {}@<warehouse>",
                 catalog_name, catalog_name

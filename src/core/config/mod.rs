@@ -14,6 +14,7 @@ mod catalog_credentials;
 mod credentials;
 mod manager;
 mod resolver;
+mod warehouse_service;
 
 pub use auth_service::{AuthService, AuthStatus, LoginResult, LogoutResult};
 pub use catalog::{CatalogAuth, CatalogConfig, CatalogProvider, CatalogType};
@@ -21,6 +22,7 @@ pub use catalog_credentials::{CatalogCredentials, OAuth2LoginRequest};
 pub use credentials::CredentialSource;
 pub use manager::Config;
 pub use resolver::{ResolvePath, ResolveTableRef, ResolvedTable};
+pub use warehouse_service::{DeleteProgress, WarehouseService};
 
 /// Check if a string looks like a direct path
 pub fn is_direct_path(s: &str) -> bool {

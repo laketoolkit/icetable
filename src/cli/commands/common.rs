@@ -130,6 +130,12 @@ pub fn extract_table_name(path: &str) -> &str {
         .unwrap_or("table")
 }
 
+// Re-export management resolution from core (logic belongs there)
+pub use crate::core::resolution::{
+    get_catalog_provider_from_context as get_catalog_provider,
+    resolve_management_from_context, ManagementResolution,
+};
+
 /// Output data in the specified format (json/yaml/text)
 ///
 /// Helper that reduces boilerplate for commands that output structured data.
@@ -161,4 +167,35 @@ where
             Ok(())
         }
     }
+}
+
+/// Ask for user confirmation before destructive operations
+///
+/// Returns `true` if the user confirms, `false` otherwise.
+/// Skipped if `force` is true or `dry_run` is true.
+pub fn confirm_destructive(message: &str, force: bool, dry_run: bool) -> bool {
+    use colored::Colorize;
+    use std::io::{self, Write};
+
+    // Skip confirmation in dry-run or force mode
+    if dry_run || force {
+        return true;
+    }
+
+    println!();
+    println!("{} {}", "⚠".yellow(), message.yellow().bold());
+    println!();
+
+    print!("Continue? [y/N] ");
+    io::stdout().flush().ok();
+
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err()
+        || !matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+    {
+        println!("{}", "Cancelled.".dimmed());
+        return false;
+    }
+    println!();
+    true
 }

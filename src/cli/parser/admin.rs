@@ -1,43 +1,18 @@
-//! Parser definitions for admin commands
+//! Parser definitions for warehouse and auth commands
 //!
 //! Commands:
-//! - `icetable admin config ls`
-//! - `icetable admin config use <catalog>`
-//! - `icetable admin config add <name> <uri>`
-//! - `icetable admin config delete <name>`
-//! - `icetable admin warehouse ls`
-//! - `icetable admin warehouse create <name> --location <loc>`
-//! - `icetable admin warehouse delete <name>`
-//! - `icetable admin auth login [--client-id <id>] [--client-secret <secret>]`
-//! - `icetable admin auth logout`
-//! - `icetable admin auth status`
+//! - `icetable warehouse ls`
+//! - `icetable warehouse create <name> --location <loc>`
+//! - `icetable warehouse delete <name>`
+//! - `icetable auth login [--client-id <id>] [--client-secret <secret>]`
+//! - `icetable auth logout`
+//! - `icetable auth status`
 //!
 //! Note: --catalog is a global option (use -c)
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-
-/// Arguments for admin command
-#[derive(Parser, Debug)]
-pub struct AdminArgs {
-    /// Admin subcommand
-    #[command(subcommand)]
-    pub command: AdminCommands,
-}
-
-/// Admin subcommands
-#[derive(Subcommand, Debug)]
-pub enum AdminCommands {
-    /// Manage local configuration (catalogs, tables, context)
-    Config(super::ConfigArgs),
-
-    /// Manage warehouses
-    Warehouse(WarehouseArgs),
-
-    /// Manage authentication
-    Auth(AuthArgs),
-}
 
 /// Arguments for warehouse subcommand
 #[derive(Parser, Debug)]

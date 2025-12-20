@@ -5,7 +5,9 @@
 
 use colored::Colorize;
 
-use super::common::{TableResolution, print_dry_run_header, resolve_table_from_context};
+use super::common::{
+    TableResolution, confirm_destructive, print_dry_run_header, resolve_table_from_context,
+};
 use crate::cli::output::{LineageEntry, SnapshotFormatter, SnapshotInfo};
 use crate::cli::parser::{CatalogContext, SnapshotArgs, SnapshotCommands};
 use crate::core::CatalogConfig;
@@ -17,8 +19,9 @@ use crate::utils::with_resource_limits;
 struct ExpireConfig<'a> {
     older_than: Option<String>,
     retain_last: Option<usize>,
-    ids: Option<Vec<i64>>,
+    id: Option<Vec<i64>>,
     dry_run: bool,
+    force: bool,
     branch: Option<&'a str>,
     output: &'a str,
     resolution: &'a TableResolution,
@@ -77,11 +80,15 @@ impl SnapshotCommand {
                 Self::iceberg_create(table_path, a.force, &a.output).await
             }
             SnapshotCommands::Expire(a) => {
+                // --all sets retain_last (defaults to 1, or use --keep N)
+                let retain_last = if a.all { a.keep } else { None };
+
                 let config = ExpireConfig {
                     older_than: a.older_than,
-                    retain_last: a.retain_last,
-                    ids: a.ids,
+                    retain_last,
+                    id: a.id,
                     dry_run: a.dry_run,
+                    force: a.force,
                     branch: a.branch.as_deref(),
                     output: &a.output,
                     resolution,
@@ -208,6 +215,15 @@ impl SnapshotCommand {
     }
 
     async fn iceberg_expire(cfg: ExpireConfig<'_>) -> Result<()> {
+        // Confirm before destructive operation
+        if !confirm_destructive(
+            "This will permanently expire snapshots.",
+            cfg.force,
+            cfg.dry_run,
+        ) {
+            return Ok(());
+        }
+
         // Create metadata service using factory method - handles catalog vs path context automatically
         let metadata_service = cfg
             .resolution
@@ -228,7 +244,7 @@ impl SnapshotCommand {
         let current_id = metadata.current_snapshot_id();
 
         // Validate explicit IDs and show warnings
-        if let Some(ref explicit_ids) = cfg.ids {
+        if let Some(ref explicit_ids) = cfg.id {
             for id in explicit_ids {
                 if Some(*id) == current_id {
                     eprintln!("{}", format!("Cannot expire current snapshot {}", id).red());
@@ -244,7 +260,7 @@ impl SnapshotCommand {
         let snapshot_service = SnapshotService::with_config(config);
 
         let result = snapshot_service
-            .expire_snapshots(&metadata_service, cfg.older_than, cfg.retain_last, cfg.ids)
+            .expire_snapshots(&metadata_service, cfg.older_than, cfg.retain_last, cfg.id)
             .await?;
 
         if result.expired_count == 0 {

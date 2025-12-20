@@ -238,10 +238,6 @@ pub enum Commands {
     // ─────────────────────────────────────────────────────────────────────────
     // Version Control
     // ─────────────────────────────────────────────────────────────────────────
-    /// View version history
-    #[command(visible_alias = "h")]
-    History(HistoryArgs),
-
     /// Manage snapshots
     #[command(visible_alias = "s")]
     Snapshot(SnapshotArgs),
@@ -253,10 +249,16 @@ pub enum Commands {
     Tag(TagArgs),
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Administration
+    // Configuration
     // ─────────────────────────────────────────────────────────────────────────
-    /// Administrative operations (config, warehouses, auth)
-    Admin(AdminArgs),
+    /// Manage local config (catalogs, aliases, context)
+    Config(ConfigArgs),
+
+    /// Manage authentication
+    Auth(AuthArgs),
+
+    /// Manage warehouses
+    Warehouse(WarehouseArgs),
 
     /// Diagnose environment health
     Doctor(DoctorArgs),

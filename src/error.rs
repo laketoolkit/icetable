@@ -281,7 +281,7 @@ pub enum Error {
     },
 
     /// Write requires catalog
-    #[error("write requires catalog\n  → icetable admin config add <name> --uri <URL>")]
+    #[error("write requires catalog\n  → icetable config add <name> --uri <URL>")]
     CatalogRequiredForWrite {
         /// Write operation
         operation: String,
@@ -367,7 +367,7 @@ pub enum Error {
     },
 
     /// No catalog specified
-    #[error("no catalog\n  → icetable admin config use <catalog>")]
+    #[error("No catalog configured. Run: icetable config use <catalog>@<warehouse>")]
     NoCatalog,
 
     /// Catalog not found
@@ -378,7 +378,7 @@ pub enum Error {
     },
 
     /// No namespace specified
-    #[error("no namespace\n  → use -n <namespace>")]
+    #[error("No namespace specified. Use -n <namespace> or include in context")]
     NoNamespace,
 
     /// Namespace not found
@@ -389,7 +389,7 @@ pub enum Error {
     },
 
     /// No table specified
-    #[error("no table\n  → use -t <table>")]
+    #[error("No table specified. Use -t <table> or include in context")]
     NoTable,
 
     /// Invalid namespace

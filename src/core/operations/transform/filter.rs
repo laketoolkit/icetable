@@ -77,13 +77,6 @@ fn evaluate_filter_expression_with_depth(
     evaluate_simple_comparison(batch, expr)
 }
 
-/// Evaluate a simple filter expression and return a boolean array
-/// Note: This is kept for backwards compatibility but uses the depth-limited version internally
-#[allow(dead_code)]
-fn evaluate_filter_expression(batch: &RecordBatch, expr: &str) -> Result<BooleanArray> {
-    evaluate_filter_expression_with_depth(batch, expr, 0)
-}
-
 /// Evaluate a simple comparison expression
 fn evaluate_simple_comparison(batch: &RecordBatch, expr: &str) -> Result<BooleanArray> {
     // Find the operator

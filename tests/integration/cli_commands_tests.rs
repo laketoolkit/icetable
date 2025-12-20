@@ -387,8 +387,8 @@ async fn test_diff_command_current_vs_parent() {
 
     // Diff with no parent (first snapshot)
     let diff_config = DiffConfig {
-        reference: None, // current
-        base: None,      // parent
+        from: None, // parent
+        to: None,   // current
     };
 
     let result = DiffService::compare_snapshots(&service, &diff_config).await;
@@ -398,7 +398,7 @@ async fn test_diff_command_current_vs_parent() {
     match result {
         Ok(diff) => {
             // First snapshot has no parent - check we got valid result
-            assert!(diff.reference.snapshot_id > 0, "Should have valid reference snapshot");
+            assert!(diff.to.snapshot_id > 0, "Should have valid to snapshot");
         }
         Err(e) => {
             // It's acceptable to error when there's no parent

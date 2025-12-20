@@ -113,7 +113,7 @@ impl CreateCommand {
         let namespace = catalog.namespace().ok_or_else(|| Error::MissingArgument {
             argument: "-n/--namespace".to_string(),
             description:
-                "Namespace required to create table. Use -n or set context with 'icetable admin config use'"
+                "Namespace required to create table. Use -n or set context with 'icetable config use'"
                     .to_string(),
         })?;
 

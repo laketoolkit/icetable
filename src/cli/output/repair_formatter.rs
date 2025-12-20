@@ -41,10 +41,13 @@ impl RepairFormatter {
     }
 
     /// Format issues found summary
+    ///
+    /// `completed` indicates if repair has already run (changes tense of status)
     pub fn format_issues_found(
         analysis: &RepairAnalysis,
         add_orphans: bool,
         remove_missing: bool,
+        completed: bool,
     ) -> String {
         let mut output = Vec::new();
         output.push(String::new());
@@ -52,7 +55,7 @@ impl RepairFormatter {
 
         if !analysis.missing_files.is_empty() {
             let status = if remove_missing {
-                "will fix".green()
+                if completed { "fixed".green() } else { "will fix".green() }
             } else {
                 "skipped".dimmed()
             };
@@ -66,7 +69,7 @@ impl RepairFormatter {
 
         if !analysis.orphan_files.is_empty() {
             let status = if add_orphans {
-                "will fix".green()
+                if completed { "fixed".green() } else { "will fix".green() }
             } else {
                 "skipped".dimmed()
             };
@@ -189,12 +192,21 @@ mod tests {
     }
 
     #[test]
-    fn test_format_issues_found() {
+    fn test_format_issues_found_will_fix() {
         let analysis = create_test_analysis();
-        let issues = RepairFormatter::format_issues_found(&analysis, true, true);
+        let issues = RepairFormatter::format_issues_found(&analysis, true, true, false);
         assert!(issues.contains("Missing files:"));
         assert!(issues.contains("Orphan files:"));
         assert!(issues.contains("will fix"));
+    }
+
+    #[test]
+    fn test_format_issues_found_fixed() {
+        let analysis = create_test_analysis();
+        let issues = RepairFormatter::format_issues_found(&analysis, true, true, true);
+        assert!(issues.contains("Missing files:"));
+        assert!(issues.contains("Orphan files:"));
+        assert!(issues.contains("fixed"));
     }
 
     #[test]

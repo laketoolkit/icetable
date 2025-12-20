@@ -312,8 +312,9 @@ impl AnalyzeService {
             path.rsplit('/').next().unwrap_or(path).to_string()
         };
 
-        // Collect all referenced files
-        let mut referenced: HashSet<String> = HashSet::new();
+        // Collect files referenced by ALL snapshots (for orphan detection)
+        // A file is only orphan if no snapshot references it
+        let mut all_referenced: HashSet<String> = HashSet::new();
 
         if self.config.all_snapshots {
             // --all-snapshots: Use manifest list loading for reliability across all snapshots
@@ -338,40 +339,46 @@ impl AnalyzeService {
                     for entry in manifest.entries() {
                         if entry.status() != ManifestStatus::Deleted {
                             let path = entry.data_file().file_path().to_string();
-                            referenced.insert(extract_filename(&path));
+                            all_referenced.insert(extract_filename(&path));
                         }
                     }
                 }
             }
-        } else {
-            // Default: Only check current snapshot using scan API (reliable for current)
-            if let Some(snapshot) = metadata.current_snapshot() {
-                let scan = table
-                    .scan()
-                    .snapshot_id(snapshot.snapshot_id())
-                    .build()
-                    .map_err(|e| Error::IcebergScan {
-                        source: Box::new(e),
-                    })?;
+        }
 
-                let tasks: Vec<_> = scan
-                    .plan_files()
-                    .await
-                    .map_err(|e| Error::IcebergScan {
-                        source: Box::new(e),
-                    })?
-                    .try_collect()
-                    .await
-                    .map_err(|e| Error::IcebergScan {
-                        source: Box::new(e),
-                    })?;
+        // Collect files referenced by CURRENT snapshot only (for missing detection)
+        // Files from old snapshots may have been legitimately vacuumed
+        let mut current_referenced: HashSet<String> = HashSet::new();
+        if let Some(snapshot) = metadata.current_snapshot() {
+            let scan = table
+                .scan()
+                .snapshot_id(snapshot.snapshot_id())
+                .build()
+                .map_err(|e| Error::IcebergScan {
+                    source: Box::new(e),
+                })?;
 
-                for task in tasks {
-                    let path = task.data_file_path().to_string();
-                    // Paths from Iceberg scan are trusted - extract filename for comparison
-                    referenced.insert(extract_filename(&path));
-                }
+            let tasks: Vec<_> = scan
+                .plan_files()
+                .await
+                .map_err(|e| Error::IcebergScan {
+                    source: Box::new(e),
+                })?
+                .try_collect()
+                .await
+                .map_err(|e| Error::IcebergScan {
+                    source: Box::new(e),
+                })?;
+
+            for task in tasks {
+                let path = task.data_file_path().to_string();
+                current_referenced.insert(extract_filename(&path));
             }
+        }
+
+        // If not checking all snapshots, use current for orphan detection too
+        if !self.config.all_snapshots {
+            all_referenced = current_referenced.clone();
         }
 
         // List files on storage
@@ -400,20 +407,22 @@ impl AnalyzeService {
             })
             .collect();
 
-        // Calculate orphans and missing
+        // Calculate orphans (using ALL snapshots) and missing (using CURRENT snapshot)
         let mut orphan_count = 0;
         let mut orphan_size = 0u64;
         let mut missing_count = 0;
 
+        // Orphans: files on storage not referenced by ANY snapshot
         for file in &on_storage {
-            if !referenced.contains(&file.path) {
+            if !all_referenced.contains(&file.path) {
                 orphan_count += 1;
                 orphan_size += file.size;
             }
         }
 
+        // Missing: files in CURRENT snapshot not on storage
         let storage_paths: HashSet<_> = on_storage.iter().map(|f| &f.path).collect();
-        for path in &referenced {
+        for path in &current_referenced {
             if !storage_paths.contains(path) {
                 missing_count += 1;
             }

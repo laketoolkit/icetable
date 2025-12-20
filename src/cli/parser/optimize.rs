@@ -8,7 +8,7 @@ use super::VacuumArgs;
 #[derive(Subcommand, Debug)]
 pub enum OptimizeCommands {
     /// Compact small data files
-    Data(OptimizeDataArgs),
+    Compact(CompactArgs),
 
     /// Rewrite manifest files
     Manifests(OptimizeManifestsArgs),
@@ -17,9 +17,9 @@ pub enum OptimizeCommands {
     Vacuum(VacuumArgs),
 }
 
-/// Arguments for optimize data command
+/// Arguments for compact command
 #[derive(Parser, Debug)]
-pub struct OptimizeDataArgs {
+pub struct CompactArgs {
     /// Branch to optimize
     #[arg(short, long)]
     pub branch: Option<String>,

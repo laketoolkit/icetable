@@ -34,17 +34,21 @@ pub struct RepairArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Sync metadata with files on disk
+    /// Fix all issues (add orphans + remove missing)
     #[arg(long)]
-    pub sync_metadata: bool,
+    pub all: bool,
 
     /// Remove refs to missing files
     #[arg(long)]
-    pub remove_missing: bool,
+    pub prune: bool,
 
     /// Add untracked parquet files
     #[arg(long)]
     pub add_orphans: bool,
+
+    /// Skip confirmation prompt
+    #[arg(short, long)]
+    pub force: bool,
 
     /// Output format (text, json)
     #[arg(short = 'o', long, default_value = "text")]

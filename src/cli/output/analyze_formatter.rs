@@ -75,9 +75,7 @@ impl AnalyzeFormatter {
 
         // Orphans row (if checked)
         if let Some(orphan) = orphan {
-            let orphan_status = if orphan.has_missing_files() {
-                "✗".red().to_string()
-            } else if orphan.has_orphan_files() {
+            let orphan_status = if orphan.has_orphan_files() {
                 "⚠".yellow().to_string()
             } else {
                 "✓".green().to_string()
@@ -88,6 +86,16 @@ impl AnalyzeFormatter {
                 Cell::new(format_bytes(orphan.orphan_size)).set_alignment(CellAlignment::Right),
                 Cell::new(orphan_status).set_alignment(CellAlignment::Center),
             ]);
+
+            // Missing files row (separate concern)
+            if orphan.has_missing_files() {
+                table.add_row(vec![
+                    Cell::new("Missing"),
+                    Cell::new(format_count(orphan.missing_count)).set_alignment(CellAlignment::Right),
+                    Cell::new("-").set_alignment(CellAlignment::Right),
+                    Cell::new("✗".red().to_string()).set_alignment(CellAlignment::Center),
+                ]);
+            }
         }
 
         output.push(table.to_string());
@@ -204,7 +212,7 @@ impl AnalyzeFormatter {
                 "Compact {} small files in {} partitions",
                 data.small_files, data.groups_needing_compaction
             );
-            recommendations.push((detail, "icetable optimize data --dry-run".to_string()));
+            recommendations.push((detail, "icetable optimize compact --dry-run".to_string()));
         }
 
         // Manifest compaction recommendation
@@ -240,10 +248,7 @@ impl AnalyzeFormatter {
             }
             if orphan.has_missing_files() {
                 let detail = format!("Repair {} missing file references", orphan.missing_count);
-                recommendations.push((
-                    detail,
-                    "icetable repair --remove-missing --dry-run".to_string(),
-                ));
+                recommendations.push((detail, "icetable repair --prune --dry-run".to_string()));
             }
         }
 
@@ -334,7 +339,7 @@ mod tests {
 
         let result = AnalyzeFormatter::format_table(&data, &manifest, &snapshot, None, false);
         assert!(result.contains("Recommendations"));
-        assert!(result.contains("icetable optimize data"));
+        assert!(result.contains("icetable optimize compact"));
         assert!(result.contains("icetable optimize manifests"));
         assert!(result.contains("icetable snapshot expire"));
     }

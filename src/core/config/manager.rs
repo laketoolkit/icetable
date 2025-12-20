@@ -26,16 +26,6 @@ pub struct ParsedContext {
 }
 
 impl ParsedContext {
-    /// Create a new ParsedContext with just a catalog
-    pub fn catalog_only(catalog: String) -> Self {
-        Self {
-            catalog,
-            warehouse: None,
-            namespace: None,
-            table: None,
-        }
-    }
-
     /// Create a new ParsedContext with all components
     pub fn new(
         catalog: String,
@@ -226,65 +216,45 @@ impl Config {
 
     /// Parse the current context into structured components
     ///
-    /// Context format: `catalog[@warehouse][.namespace][.table]`
+    /// # Format
+    ///
+    /// `catalog@warehouse[.namespace[.table]]`
     ///
     /// # Examples
     ///
-    /// - `polaris` → `ParsedContext { catalog: "polaris", .. }`
-    /// - `polaris@iceberg` → `ParsedContext { catalog: "polaris", warehouse: Some("iceberg"), .. }`
-    /// - `polaris@iceberg.demo` → includes namespace "demo"
-    /// - `polaris@iceberg.demo.events` → includes table "events"
-    /// - `polaris.demo.events` → legacy format without warehouse
+    /// - `polaris@dev` → catalog "polaris", warehouse "dev"
+    /// - `polaris@dev.analytics` → includes namespace "analytics"
+    /// - `polaris@dev.analytics.events` → includes table "events"
     pub fn parse_current_context(&self) -> Option<ParsedContext> {
         let context = self.current_context.as_ref()?;
 
-        // Split on '@' first to extract warehouse
-        if let Some(at_pos) = context.find('@') {
-            let catalog = context[..at_pos].to_string();
-            let after_at = &context[at_pos + 1..];
+        // Require '@' format: catalog@warehouse[.namespace[.table]]
+        let at_pos = context.find('@')?;
+        let catalog = context[..at_pos].to_string();
+        let after_at = &context[at_pos + 1..];
 
-            // Split the rest on '.' to get warehouse and namespace.table
-            let parts: Vec<&str> = after_at.splitn(3, '.').collect();
-            match parts.len() {
-                1 => Some(ParsedContext::new(
-                    catalog,
-                    Some(parts[0].to_string()),
-                    None,
-                    None,
-                )),
-                2 => Some(ParsedContext::new(
-                    catalog,
-                    Some(parts[0].to_string()),
-                    Some(parts[1].to_string()),
-                    None,
-                )),
-                3 => Some(ParsedContext::new(
-                    catalog,
-                    Some(parts[0].to_string()),
-                    Some(parts[1].to_string()),
-                    Some(parts[2].to_string()),
-                )),
-                _ => None,
-            }
-        } else {
-            // Legacy format without warehouse: catalog[.namespace][.table]
-            let parts: Vec<&str> = context.splitn(3, '.').collect();
-            match parts.len() {
-                1 => Some(ParsedContext::catalog_only(parts[0].to_string())),
-                2 => Some(ParsedContext::new(
-                    parts[0].to_string(),
-                    None,
-                    Some(parts[1].to_string()),
-                    None,
-                )),
-                3 => Some(ParsedContext::new(
-                    parts[0].to_string(),
-                    None,
-                    Some(parts[1].to_string()),
-                    Some(parts[2].to_string()),
-                )),
-                _ => None,
-            }
+        // Split the rest on '.' to get warehouse and namespace.table
+        let parts: Vec<&str> = after_at.splitn(3, '.').collect();
+        match parts.len() {
+            1 => Some(ParsedContext::new(
+                catalog,
+                Some(parts[0].to_string()),
+                None,
+                None,
+            )),
+            2 => Some(ParsedContext::new(
+                catalog,
+                Some(parts[0].to_string()),
+                Some(parts[1].to_string()),
+                None,
+            )),
+            3 => Some(ParsedContext::new(
+                catalog,
+                Some(parts[0].to_string()),
+                Some(parts[1].to_string()),
+                Some(parts[2].to_string()),
+            )),
+            _ => None,
         }
     }
 
@@ -369,7 +339,7 @@ impl Config {
         // 5. Not found
         Err(Error::TableNotFound {
             path: format!(
-                "{}. Use a direct path (s3://...), a configured table alias, or catalog.table format",
+                "'{}' - not a configured alias or recognized path format",
                 name_or_path
             ),
         })

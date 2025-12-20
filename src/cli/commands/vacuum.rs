@@ -3,9 +3,8 @@
 //! Thin wrapper that delegates to VacuumService in core.
 
 use colored::Colorize;
-use std::io;
 
-use super::common::{TableResolution, create_spinner, resolve_table_from_context};
+use super::common::{TableResolution, confirm_destructive, create_spinner, resolve_table_from_context};
 use crate::cli::output::{OrphanFileInfo, VacuumFormatter};
 use crate::cli::parser::{CatalogContext, VacuumArgs};
 use crate::core::maintenance::{VacuumConfig, VacuumResult, VacuumService};
@@ -42,7 +41,7 @@ impl VacuumCommand {
         );
 
         // Handle confirmation for destructive operations
-        if !Self::confirm_operation(args)? {
+        if !Self::confirm_operation(args) {
             return Ok(());
         }
 
@@ -70,29 +69,14 @@ impl VacuumCommand {
     }
 
     /// Handle confirmation for destructive operations
-    fn confirm_operation(args: &VacuumArgs) -> Result<bool> {
-        // Safety warning for vacuum without --dry-run or --force
-        if !args.dry_run && !args.force {
-            println!();
-            println!(
-                "{} {}",
-                "⚠".yellow(),
-                "This will permanently delete orphan files.".yellow().bold()
-            );
-            println!();
-
-            // Ask for confirmation
-            print!("Continue? [y/N] ");
-            io::Write::flush(&mut io::stdout()).ok();
-
-            let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_err()
-                || !matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
-            {
-                println!("{}", "Cancelled.".dimmed());
-                return Ok(false);
-            }
-            println!();
+    fn confirm_operation(args: &VacuumArgs) -> bool {
+        // Confirm destructive operation
+        if !confirm_destructive(
+            "This will permanently delete orphan files.",
+            args.force,
+            args.dry_run,
+        ) {
+            return false;
         }
 
         // Warning for low retention period
@@ -110,7 +94,7 @@ impl VacuumCommand {
             println!();
         }
 
-        Ok(true)
+        true
     }
 
     /// Output results based on format

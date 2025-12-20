@@ -2,19 +2,21 @@
 source: tests/integration/snapshot_tests.rs
 expression: parsed
 ---
-base:
-  manifest_count: 2
+files:
+  added: 3
+  bytes_added: 45000000
+  bytes_removed: 0
+  removed: 0
+from:
   ref: parent
   snapshot_id: 1234567890
   timestamp: "2023-12-18 16:00:00 UTC"
-diff:
-  added_paths:
-    - metadata/manifest-001.avro
-  manifests_added: 1
-  manifests_removed: 0
-  removed_paths: []
-reference:
-  manifest_count: 3
+partitions_modified:
+  - date=2024-01-15
+schema:
+  columns_added: []
+  columns_removed: []
+to:
   ref: current
   snapshot_id: 1234567899
   timestamp: "2023-12-19 16:00:00 UTC"

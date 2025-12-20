@@ -20,9 +20,6 @@ use crate::error::Result;
 /// Options for inspect operation
 #[derive(Debug, Clone)]
 pub struct InspectOptions {
-    /// Show only schema (no data) - deprecated, use show_data instead
-    pub schema_only: bool,
-
     /// Show schema
     pub show_schema: bool,
 
@@ -48,7 +45,6 @@ pub struct InspectOptions {
 impl Default for InspectOptions {
     fn default() -> Self {
         Self {
-            schema_only: false,
             show_schema: true,
             show_metadata: true,
             show_stats: false,
@@ -91,7 +87,7 @@ impl InspectOperation {
         };
 
         // Read sample data if requested
-        let sample_data = if options.show_data && !options.schema_only {
+        let sample_data = if options.show_data {
             let mut read_opts_builder = ReadOptions::builder()
                 .limit(options.num_rows)
                 .sample(options.sample)

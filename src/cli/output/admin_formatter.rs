@@ -192,7 +192,7 @@ impl AdminFormatter {
                 catalog_name.cyan().bold()
             ));
             output.push(String::new());
-            output.push("See: icetable admin warehouse create --help".to_string());
+            output.push("See: icetable warehouse create --help".to_string());
             return output.join("\n");
         }
 
@@ -241,7 +241,7 @@ impl AdminFormatter {
         output.push(format!("  {} {}", "Location:".dimmed(), location));
         output.push(String::new());
         output.push(format!(
-            "{} icetable admin config use {} -w {}",
+            "{} icetable config use {} -w {}",
             "Activate:".dimmed(),
             catalog_name,
             warehouse_name
@@ -270,17 +270,17 @@ impl AdminFormatter {
                 output.push(
                     "# Key: skipCredentialSubscopingIndirection=true disables STS".to_string(),
                 );
-                output.push("icetable admin warehouse create mywarehouse \\".to_string());
+                output.push("icetable warehouse create mywarehouse \\".to_string());
                 output.push("  --location s3://bucket/warehouse \\".to_string());
                 output.push("  --config '{\"endpoint\":\"http://localhost:9000\",\"pathStyleAccess\":true,\"skipCredentialSubscopingIndirection\":true,\"s3.credentials.catalog.accessKeyId\":\"minioadmin\",\"s3.credentials.catalog.secretAccessKey\":\"minioadmin\"}'".to_string());
                 output.push(String::new());
                 output.push("# Or use a config file (recommended for readability):".to_string());
-                output.push("icetable admin warehouse create mywarehouse \\".to_string());
+                output.push("icetable warehouse create mywarehouse \\".to_string());
                 output.push("  --location s3://bucket/warehouse \\".to_string());
                 output.push("  --config ./minio-storage.json".to_string());
                 output.push(String::new());
                 output.push("# AWS S3 (with IAM role)".to_string());
-                output.push("icetable admin warehouse create mywarehouse \\".to_string());
+                output.push("icetable warehouse create mywarehouse \\".to_string());
                 output.push("  --location s3://bucket/warehouse \\".to_string());
                 output.push("  --config-set region=eu-west-1 \\".to_string());
                 output.push(
@@ -311,7 +311,7 @@ impl AdminFormatter {
                 );
                 output.push(String::new());
                 output.push("# Common pattern:".to_string());
-                output.push("icetable admin warehouse create mywarehouse \\".to_string());
+                output.push("icetable warehouse create mywarehouse \\".to_string());
                 output.push("  --location s3://bucket/warehouse".to_string());
             }
         }

@@ -144,10 +144,10 @@ jobs:
       # =======================================================================
       # Test: Optimize dry-run
       # =======================================================================
-      - name: "Test: Optimize data (dry-run)"
+      - name: "Test: Optimize compact (dry-run)"
         run: |
-          echo "=== Optimize data dry-run ==="
-          ./target/debug/icetable optimize data -t $TEST_TABLE --all-partitions --dry-run
+          echo "=== Optimize compact dry-run ==="
+          ./target/debug/icetable optimize compact -t $TEST_TABLE --all-partitions --dry-run
 
       - name: "Test: Optimize manifests (dry-run)"
         run: |
@@ -262,7 +262,7 @@ jobs:
           echo "  - branch list/create"
           echo "  - tag list/create"
           echo "  - analyze"
-          echo "  - optimize data/manifests (dry-run)"
+          echo "  - optimize compact/manifests (dry-run)"
           echo "  - vacuum (dry-run)"
           echo "  - doctor"
           echo "  - validate"

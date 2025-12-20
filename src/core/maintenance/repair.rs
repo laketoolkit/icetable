@@ -70,19 +70,17 @@ impl RepairService {
         // (files missing from current but present in old snapshots are not "missing")
         let current_files = metadata_service.list_data_files().await?;
 
-        let mut storage_set: HashSet<String> = HashSet::new();
-        for f in &storage_files {
-            storage_set.insert(f.path.clone());
-            storage_set.insert(extract_filename(&f.path));
-        }
+        // Build storage set using ONLY filenames for consistent comparison
+        let storage_filenames: HashSet<String> = storage_files
+            .iter()
+            .map(|f| extract_filename(&f.path))
+            .collect();
 
         let missing_files: Vec<DataFileInfo> = current_files
             .iter()
             .filter(|f| {
-                let is_on_storage = storage_set
-                    .iter()
-                    .any(|stored| f.path.ends_with(stored) || f.path == *stored);
-                !is_on_storage
+                let filename = extract_filename(&f.path);
+                !storage_filenames.contains(&filename)
             })
             .cloned()
             .collect();

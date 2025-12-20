@@ -3,7 +3,7 @@
 //! Thin wrapper that delegates to core services.
 //!
 //! Subcommands:
-//! - `data`: Compact small data files into larger ones
+//! - `compact`: Compact small data files into larger ones
 //! - `manifests`: Rewrite and compact manifest files
 //! - `vacuum`: Clean up unreferenced files
 
@@ -11,7 +11,7 @@ use super::VacuumCommand;
 use super::common::{TableResolution, resolve_table_from_context};
 use crate::cli::output::OptimizeFormatter;
 use crate::cli::parser::{
-    CatalogContext, OptimizeCommands, OptimizeDataArgs, OptimizeManifestsArgs,
+    CatalogContext, CompactArgs, OptimizeCommands, OptimizeManifestsArgs,
 };
 use crate::cli::utils::IndicatifReporter;
 use crate::core::CatalogConfig;
@@ -30,14 +30,14 @@ impl OptimizeCommand {
     /// Execute optimize command
     pub async fn execute(cmd: OptimizeCommands, ctx: &CatalogContext) -> Result<()> {
         match cmd {
-            OptimizeCommands::Data(args) => Self::execute_data(args, ctx).await,
+            OptimizeCommands::Compact(args) => Self::execute_compact(args, ctx).await,
             OptimizeCommands::Manifests(args) => Self::execute_manifests(args, ctx).await,
             OptimizeCommands::Vacuum(args) => VacuumCommand::execute(args, ctx).await,
         }
     }
 
-    /// Execute optimize data subcommand
-    async fn execute_data(args: OptimizeDataArgs, ctx: &CatalogContext) -> Result<()> {
+    /// Execute compact subcommand (file compaction)
+    async fn execute_compact(args: CompactArgs, ctx: &CatalogContext) -> Result<()> {
         let resolution = resolve_table_from_context(ctx).await?;
         let table_path = resolution.location().to_string();
 
